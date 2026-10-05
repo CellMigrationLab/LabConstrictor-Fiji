@@ -248,6 +248,10 @@ List buildToolDialog(Map tool, List<String> openImages) {
     }
     tool.inputs.each { p ->
         def base = [label: p.label + (p.unit ? " (" + p.unit + ")" : ""), description: p.description, required: p.required]
+        if (p.nullable && p.type in ["string", "integer", "float", "choice"]) {   // optional with no default: "unset" must stay possible
+            addItem(info, "set_" + p.name, Boolean, [label: "Set " + p.label.toLowerCase(), required: false,
+                                                     default: hooks.overrides.containsKey("set_" + p.name) ? hooks.overrides["set_" + p.name] : false])
+        }
         def overridden = hooks.overrides.containsKey(p.name)
         def override = overridden ? hooks.overrides[p.name] : null
         switch (p.type) {
@@ -273,6 +277,8 @@ List buildToolDialog(Map tool, List<String> openImages) {
                 break
             case ["table", "file"]:
                 addItem(info, p.name, File, base + [default: override ? new File(override as String) : null]); break
+            case "folder":
+                addItem(info, p.name, File, base + [default: override ? new File(override as String) : null]).setWidgetStyle("directory"); break
             case "string":
                 addItem(info, p.name, String, base + [default: override ?: p.default ?: ""]); break
             case "boolean":
@@ -327,7 +333,14 @@ List exportInputs(Map tool, def module, File jobDir) {
             case ["table", "file"]:
                 if (value) inputs[p.name] = (value as File).path
                 break
+            case "folder":
+                if (value) {
+                    if (!(value as File).isDirectory()) throw new IllegalArgumentException("'" + p.label + "': folder not found: " + (value as File).path)
+                    inputs[p.name] = (value as File).path
+                }
+                break
             default:
+                if (p.nullable && !module.getInput("set_" + p.name)) break      // unset: the tool receives None
                 if (value != null) inputs[p.name] = value
         }
     }
