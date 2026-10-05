@@ -133,9 +133,12 @@ String untrustedReason(File entryFile, Map entry, boolean userDir) {
         def python = new File(entry.python).absoluteFile.toPath().normalize(), prefix = new File(entry.prefix).absoluteFile.toPath().normalize()
         if (!python.startsWith(prefix))
             return "interpreter " + entry.python + " is not inside the install prefix " + entry.prefix
-        if (userDir && !System.getProperty("os.name").toLowerCase().contains("win")) {
+        if (!System.getProperty("os.name").toLowerCase().contains("win")) {
             def path = entryFile.toPath()
-            if (java.nio.file.Files.getOwner(path).name != System.getProperty("user.name")) return "entry file is not owned by the current user"
+            def owner = java.nio.file.Files.getOwner(path).name
+            // per-user entries must be ours; entries in shared folders (LC_APPS_PATH, /etc) may also belong to root (the administrator)
+            if (owner != System.getProperty("user.name") && !(owner == "root" && !userDir))
+                return "entry file is not owned by the current user" + (userDir ? "" : " or root")
             def permissions = java.nio.file.Files.getPosixFilePermissions(path)
             if (permissions.contains(java.nio.file.attribute.PosixFilePermission.GROUP_WRITE) || permissions.contains(java.nio.file.attribute.PosixFilePermission.OTHERS_WRITE))
                 return "entry file is writable by other users"
@@ -155,6 +158,7 @@ Map discoverApps() {
             try {                                                            // one broken app must not hide the others
                 def entry = slurper.parseText(file.text)
                 name = entry.name
+                if (apps.containsKey(name) || skip.contains(name)) return          // the file name differs from the app name it claims: priority stays with the earlier directory
                 if (!new File(entry.python).exists()) { problems << (name + ": not available on this machine (interpreter " + entry.python + " is missing)"); skip << name; return }
                 def reason = untrustedReason(file, entry, index == 0)
                 if (reason) { problems << (name + ": ignored: " + reason); skip << name; return }
@@ -223,7 +227,7 @@ def harvest(MutableModuleInfo info, String title, Map links = [:]) {
 String pickOne(String title, String label, List<String> choices, String preferred) {
     if (choices.size() == 1) return choices[0]
     def info = newInfo(title)
-    addItem(info, "choice", String, [label: label, choices: choices, default: choices.contains(preferred) ? preferred : choices[0]])
+    addItem(info, "choice", String, [label: label, choices: choices, default: choices.find { it.equalsIgnoreCase(preferred ?: "") } ?: choices[0]])
     return harvest(info, title)?.getInput("choice")
 }
 
@@ -375,6 +379,27 @@ Map runTool(Map app, Map tool, Map inputs) {
             seconds: (System.currentTimeMillis() - started) / 1000.0]
 }
 
+/** One line saying the likely cause of a worker that died (same wording as labconstrictor_tools.log.hint_for_exit). */
+String crashHint(Map outcome) {
+    if (outcome.cancelRequested) return "The tool did not stop when Cancel was pressed, so its worker was stopped."
+    def exit = (outcome.error =~ /exit code (-?\d+)/).with { it.find() ? it.group(1) as Long : null }
+    def text = (outcome.error ?: "") + "\n" + (outcome.workerOutput ?: []).join("\n")
+    if (text.contains("ModuleNotFoundError") || text.contains("ImportError"))
+        return "A Python package is missing or broken in the app's environment (see the traceback below)."
+    if (exit in [-9L, 137L]) return "The worker was killed (out of memory? the OS OOM killer ends big image jobs this way)."
+    if (exit in [-11L, 139L, 3221225477L]) return "The worker crashed natively (segmentation fault in a compiled library)."
+    if (exit == 3L) return "The app's tool module failed to import (see the traceback below)."
+    return "The worker process stopped unexpectedly."
+}
+
+/** Text of the error dialog for a failed or crashed run: what happened, the worker's own output, where the details are. */
+String failureMessage(Map outcome, Map summary) {
+    def worker = (outcome.workerOutput ?: []).findAll { !it.startsWith("[SERVICE-0]") }       // protocol chatter is in the log, not for people
+    return (outcome.status == "CRASHED" ? crashHint(outcome) + "\n\n" : "") + (outcome.error ?: "failed") +
+           (worker ? "\n\nWorker output (last lines):\n" + worker.takeRight(8).join("\n") : "") +
+           "\n\nRun record: " + (summary.run_record ?: "(none)") + "\nLog file: " + new File(lcHome(), "logs/labconstrictor.log").path
+}
+
 /** After close(): wait for the worker to exit on its own, then kill it so no process is ever left behind. */
 void waitForExit(Service service, int timeoutMs) {
     def deadline = System.currentTimeMillis() + timeoutMs
@@ -502,6 +527,15 @@ def labConstrictorRun() {
         return hooks.finish(summary + [error: problem.message])
     }
     def (inputs, images) = exported
+    try {
+        runAndShow(app, tool, inputs, images, summary)
+    } finally {
+        jobDir.deleteDir()                                       // also when running or showing the results throws
+    }
+    hooks.finish(summary)
+}
+
+void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
     def outcome = runTool(app, tool, inputs)
     summary << [request: inputs, status: outcome.status, error: outcome.error, progress_events: outcome.progress,
                 worker_alive_after: outcome.workerAlive, cancel_requested: outcome.cancelRequested]
@@ -510,15 +544,12 @@ def labConstrictorRun() {
     if (outcome.complete) {
         summary.interpreter = outcome.outputs.diagnostics
         summary << showResults(app, outcome.outputs.results, images)
-    } else if (outcome.status == "FAILED" && hooks.interactive) {
-        IJ.error("LabConstrictor: " + app.display_name, (outcome.error ?: "failed") +
-                 (outcome.workerOutput ? "\n\nWorker output (last lines):\n" + outcome.workerOutput.takeRight(8).join("\n") : "") +
-                 "\n\nRun record: " + (summary.run_record ?: "(none)") + "\nLog file: " + new File(lcHome(), "logs/labconstrictor.log").path)
+    } else if (outcome.status in ["FAILED", "CRASHED"] && !outcome.cancelRequested) {
+        summary.failure_message = failureMessage(outcome, summary)
+        if (hooks.interactive) IJ.error("LabConstrictor: " + app.display_name, summary.failure_message)
     } else {
         IJ.showStatus("LabConstrictor: " + outcome.status.toLowerCase())
     }
-    jobDir.deleteDir()
-    hooks.finish(summary)
 }
 /** Entry point: anything unexpected is logged with its stack trace and shown with the log's location. */
 def labConstrictorMain() {

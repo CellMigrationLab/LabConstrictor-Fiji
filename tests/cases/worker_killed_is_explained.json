@@ -1,0 +1,23 @@
+{
+ "app": "crashy",
+ "register": [
+  {
+   "name": "crashy",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/crashy_app"
+   ]
+  }
+ ],
+ "tool": "Killed by the OS",
+ "expect": {
+  "status": "CRASHED",
+  "match": {
+   "failure_message": "killed"
+  },
+  "log_contains": [
+   "fiji: task CRASHED tool=killed"
+  ]
+ }
+}

@@ -12,6 +12,7 @@ LC_FIJI_MODE=jar builds the jar (mvn) and tests the menu command instead of the 
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -155,9 +156,22 @@ def run_case(path):
         *launch,
     ]
     try:
-        finished = subprocess.run(command, env=env, timeout=TIMEOUT_S, capture_output=True)
-    except subprocess.TimeoutExpired as timeout:
-        return name, ["timed out after %d s%s" % (TIMEOUT_S, _tail(timeout))], {}
+        # own process group: on a timeout the whole tree (xvfb-run, Xvfb, Fiji, its workers) is killed, not just xvfb-run
+        process = subprocess.Popen(
+            command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=os.name == "posix"
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+            stdout, stderr = process.communicate()
+            return name, ["timed out after %d s%s" % (TIMEOUT_S, _tail(subprocess.CompletedProcess(command, -9, stdout, stderr)))], {}
+        finished = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    except OSError as problem:
+        return name, ["could not start Fiji: %s" % problem], {}
     report_path = case_dir / "report.json"
     if not report_path.exists():
         return name, ["no report written (script crashed or blocked)" + _tail(finished)], {}
