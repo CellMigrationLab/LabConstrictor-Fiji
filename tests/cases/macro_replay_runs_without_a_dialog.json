@@ -1,0 +1,22 @@
+{
+ "app": "synthetic",
+ "tool": "Kitchen sink",
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "sample.tif",
+   "pixel_size": 0.5
+  }
+ ],
+ "macro": "app=synthetic tool=[Kitchen sink] required_string=hello image=sample.tif count=4 scale=1.25 mode=gamma flag=true",
+ "expect": {
+  "status": "COMPLETE",
+  "equals": {
+   "replayed_from_macro": true
+  },
+  "match": {
+   "request.mode": "gamma",
+   "request.required_string": "hello"
+  }
+ }
+}

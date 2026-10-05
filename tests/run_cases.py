@@ -97,7 +97,7 @@ GROOVY = (
 JAR_IN_FIJI = (FIJI or Path(".")) / "plugins" / "labconstrictor-fiji.jar"
 
 
-def install_into_fiji():
+def install_into_fiji(case=None):
     """LC_FIJI_MODE=script (default): the loose Groovy script. LC_FIJI_MODE=jar: build the plugin jar and call its menu command.
     Returns the launcher arguments that start the tool."""
     if os.environ.get("LC_FIJI_MODE", "script") == "jar":
@@ -105,7 +105,8 @@ def install_into_fiji():
         shutil.copyfile(next((PLUGIN / "target").glob("labconstrictor-fiji-*.jar")), JAR_IN_FIJI)
         shutil.rmtree(SCRIPT_DIR, ignore_errors=True)  # never both: the menu would list the tool twice
         macro = Path(tempfile.mkdtemp()) / "start.ijm"
-        macro.write_text('run("LabConstrictor Tools...");\n')
+        options = (case or {}).get("macro")
+        macro.write_text('run("LabConstrictor Tools...");\n' if options is None else 'run("LabConstrictor Tools...", "%s");\n' % options)
         return ["-macro", str(macro)]
     JAR_IN_FIJI.unlink(missing_ok=True)
     SCRIPT_DIR.mkdir(parents=True, exist_ok=True)
@@ -132,7 +133,9 @@ def run_case(path):
     (case_dir / "report.json").unlink(missing_ok=True)
     case_file = Path(tempfile.mkdtemp()) / "case.json"
     case_file.write_text(json.dumps(case))
-    launch = install_into_fiji()
+    launch = install_into_fiji(case)
+    if case.get("macro") is not None and os.environ.get("LC_FIJI_MODE", "script") != "jar":
+        return name, [], {}  # macro calls need the menu command of the jar (LC_FIJI_MODE=jar): not applicable to the loose script
     env = dict(os.environ, LC_FIJI_HARNESS=str(HERE / "test_harness.groovy"), LC_FIJI_CASE=str(case_file))
     if "LC_HOME" not in env or not REAL_APPS:  # portable runs get a private registry holding only the example app
         env["LC_HOME"] = PRIVATE_HOME

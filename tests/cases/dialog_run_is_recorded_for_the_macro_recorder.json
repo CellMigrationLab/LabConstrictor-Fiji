@@ -1,0 +1,27 @@
+{
+ "app": "synthetic",
+ "tool": "Kitchen sink",
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "sample.tif",
+   "pixel_size": 0.5
+  }
+ ],
+ "record": true,
+ "select": [
+  "sample.tif"
+ ],
+ "overrides": {
+  "image": "sample.tif",
+  "required_string": "rec",
+  "count": 7,
+  "mode": "alpha"
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "match": {
+   "recorded_options": "tool=[Kitchen sink] required_string=rec image=sample.tif"
+  }
+ }
+}

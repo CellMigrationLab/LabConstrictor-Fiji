@@ -33,6 +33,15 @@ Fiji update-site publication is not set up yet.
 Fiji's own input harvester show the dialog, exports images as TIFF (or passes file paths), and drives the worker with Appose's Java
 client using the restricted `lc:<tool>` protocol. The Groovy script is interpreted at run time; the jar is a packaging shell, not a port.
 
+## Macro recording and replay (prototype)
+With the Macro Recorder open, a run through the dialog records one line, e.g.
+
+    run("LabConstrictor Tools...", "app=NucleiSky tool=[Relocalize 2D] reference=ref.tif query=crop.tif reference_pixel_size_um=0.65 query_pixel_size_um=0.325 segmentation=threshold");
+
+Playing that line (or typing it) runs the tool without any dialog. Images are given by window title (`name=title`) or by file
+(`name_file=path`); tables and files by path; unknown apps/tools/images are reported with the valid choices. Not yet: headless mode,
+keeping the worker alive between several calls in a loop, a menu entry per tool. Needs the jar (the menu command receives the options).
+
 ## Tests
 `tests/run_cases.py` drives desktop Fiji on a virtual screen (Linux: `xvfb-run`), answering the real SciJava dialogs with
 `tests/test_harness.groovy` (the only place with test hooks) and writing JSON reports and screenshots to `evidence/`.
@@ -47,4 +56,4 @@ client using the restricted `lc:<tool>` protocol. The Groovy script is interpret
 Cases are JSON (`tests/cases/*.json`): the app and tool, images to preload, dialog overrides, optional cancel timing, expectations.
 
 Status: **testing phase**. Tested on Linux only (Fiji with Java 21, Xvfb). Windows and macOS are untested; SciJava Command generation
-(macro recording, headless use) is not implemented, as the tools are not registered Fiji commands. License: MIT.
+(a menu command per tool, headless use) is not implemented. License: MIT.
