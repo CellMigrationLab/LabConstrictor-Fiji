@@ -1,0 +1,6 @@
+{"app": "nucleisky", "tool": "Relocalize 2D",
+ "preload": [{"path": "${REAL_FIXTURES}/nucleisky/reference.tif", "title": "reference.tif", "pixel_size": 0.65},
+             {"path": "${REAL_FIXTURES}/nucleisky/query.tif", "title": "query.tif", "pixel_size": 0.325}],
+ "select": ["reference.tif", "query.tif"], "overrides": {"reference": "reference.tif", "query": "query.tif"},
+ "overlay_zoom": [600, 550, 420, 420],
+ "expect": {"status": "COMPLETE", "min_progress_events": 3, "max": {"fiji_warp_vs_worker_warp_rel_diff": 1e-6}, "worker_alive_after": false}}

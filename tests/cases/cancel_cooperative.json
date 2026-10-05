@@ -1,0 +1,2 @@
+{"app": "synthetic", "tool": "Slow with progress", "overrides": {"seconds": 30.0, "steps": 60}, "cancel_after_s": 2.0,
+ "expect": {"status": "CANCELED", "worker_alive_after": false}}

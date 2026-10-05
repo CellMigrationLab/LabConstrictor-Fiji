@@ -1,0 +1,2 @@
+{"app": "celltracks", "tool": "Calculate Track Metrics", "overrides": {"tracks": "${REAL_FIXTURES}/celltracks/tracks.csv"},
+ "expect": {"status": "COMPLETE", "equals": {"single_input_prompt": "native file chooser (SciJava single-input prompt)"}}}

@@ -1,0 +1,2 @@
+{"app": "synthetic", "tool": "Stubborn (ignores cancel)", "overrides": {"seconds": 60.0}, "cancel_after_s": 2.0,
+ "expect": {"status_in": ["RUNNING", "CRASHED"], "worker_alive_after": false}}

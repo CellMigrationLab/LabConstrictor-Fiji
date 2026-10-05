@@ -1,0 +1,24 @@
+{
+ "app": "crashy",
+ "register": [
+  {
+   "name": "crashy",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/crashy_app"
+   ]
+  }
+ ],
+ "tool": "Raises with a traceback",
+ "expect": {
+  "status": "FAILED",
+  "log_contains": [
+   "fiji: ---- session start",
+   "fiji: starting worker for crashy",
+   "fiji: worker",
+   "ZeroDivisionError",
+   "fiji: task FAILED tool=raises"
+  ]
+ }
+}

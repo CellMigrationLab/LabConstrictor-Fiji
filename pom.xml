@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>org.cellmigrationlab</groupId>
+  <artifactId>labconstrictor-fiji</artifactId>
+  <version>0.1.0</version>
+  <name>LabConstrictor for Fiji</name>
+  <description>Generic Fiji front-end for LabConstrictor tools: forms are generated from the tools' declared schemas.</description>
+  <packaging>jar</packaging>
+
+  <properties>
+    <!-- Java 8 bytecode: runs in every Fiji bundle (they ship Java 8 to 21) -->
+    <maven.compiler.release>8</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <scijava.version>2.101.0</scijava.version>
+  </properties>
+
+  <dependencies>
+    <!-- everything below is provided by Fiji at run time -->
+    <dependency>
+      <groupId>org.scijava</groupId>
+      <artifactId>scijava-common</artifactId>
+      <version>${scijava.version}</version>
+      <scope>provided</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.2</version>
+        <configuration>
+          <archive>
+            <manifest>
+              <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+            </manifest>
+          </archive>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

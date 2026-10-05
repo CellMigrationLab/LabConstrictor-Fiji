@@ -1,0 +1,14 @@
+{
+ "app": "synthetic",
+ "tool": "Kitchen sink",
+ "overrides": {
+  "image_file": "${FIXTURES}/sample.tif",
+  "required_string": "hello"
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "match": {
+   "request.image": "/fixtures/sample.tif"
+  }
+ }
+}

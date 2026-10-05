@@ -1,0 +1,5 @@
+{"app": "synthetic", "tool": "Kitchen sink",
+ "preload": [{"path": "${FIXTURES}/sample.tif", "title": "query.tif", "pixel_size": 0.325}],
+ "select": ["query.tif"],
+ "overrides": {"image": "query.tif", "use_optional_image": false, "required_string": "hello", "count": 4, "mode": "gamma", "flag": false},
+ "expect": {"status": "COMPLETE"}}

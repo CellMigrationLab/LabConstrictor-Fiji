@@ -1,0 +1,29 @@
+{
+ "app": "synthetic",
+ "tool": "Kitchen sink",
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "sample.tif",
+   "pixel_size": 325.0,
+   "unit": "nm"
+  }
+ ],
+ "select": [
+  "sample.tif",
+  "sample.tif"
+ ],
+ "overrides": {
+  "image": "sample.tif",
+  "required_string": "hello"
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "approx": {
+   "request.scale": [
+    0.325,
+    1e-06
+   ]
+  }
+ }
+}

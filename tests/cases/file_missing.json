@@ -1,0 +1,13 @@
+{
+ "app": "synthetic",
+ "tool": "Kitchen sink",
+ "overrides": {
+  "image_file": "${FIXTURES}/does_not_exist.tif",
+  "required_string": "hello"
+ },
+ "expect": {
+  "match": {
+   "error": "file not found"
+  }
+ }
+}

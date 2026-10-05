@@ -1,0 +1,2 @@
+{"app": "synthetic", "tool": "Slow with progress", "overrides": {"seconds": 3.0, "steps": 6},
+ "expect": {"status": "COMPLETE", "min_progress_events": 6}}
