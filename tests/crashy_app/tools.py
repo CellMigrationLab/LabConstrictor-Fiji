@@ -15,3 +15,10 @@ def killed(a: float = 1.0) -> Scalars:
 @tool("Raises with a traceback")
 def raises(a: float = 1.0) -> Scalars:
     return {"x": 1 / 0}
+
+
+@tool("Returns NaN and numpy values")
+def nan_and_numpy(a: float = 1.0) -> Scalars:
+    import numpy as np
+
+    return {"nan": float("nan"), "inf": float("inf"), "np_int": np.int64(5), "plain": a}

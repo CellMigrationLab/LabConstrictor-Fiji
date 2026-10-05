@@ -1,0 +1,18 @@
+{
+ "app": "crashy",
+ "register": [
+  {
+   "name": "crashy",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/crashy_app"
+   ]
+  }
+ ],
+ "tool": "Returns NaN and numpy values",
+ "expect": {
+  "status": "COMPLETE",
+  "worker_alive_after": false
+ }
+}
