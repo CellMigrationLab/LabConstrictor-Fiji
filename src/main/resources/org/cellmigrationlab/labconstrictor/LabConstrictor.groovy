@@ -530,11 +530,12 @@ Map<String, String> toMacroOptions(String appName, Map tool, def module) {
                 if (file) o[p.name + "_file"] = file.path
                 else if (imp instanceof ImagePlus && (p.required || module.getInput("use_" + p.name))) o[p.name] = imp.getTitle()
                 break
-            case ["table", "file"]:
+            case ["table", "file", "folder"]:
                 def f = module.getInput(p.name) as File
                 if (f) o[p.name] = f.path
                 break
             default:
+                if (p.nullable && !module.getInput("set_" + p.name)) break      // unset stays out of the macro
                 def v = module.getInput(p.name)
                 if (v != null) o[p.name] = v.toString()
         }
@@ -556,6 +557,10 @@ MacroModule moduleFromMacro(Map tool, String options) {
     tool.inputs.each { p ->
         def text = Macro.getValue(options, p.name, null)
         def fileText = Macro.getValue(options, p.name + "_file", null)
+        if (p.nullable && p.type in ["string", "integer", "float", "choice"]) {   // optional, no default: not in the macro = unset
+            module.values["set_" + p.name] = text != null
+            if (text == null) return
+        }
         switch (p.type) {
             case ["image", "labels"]:
                 if (fileText) { module.values[p.name + "_file"] = new File(fileText); module.values["use_" + p.name] = true; break }
@@ -564,7 +569,7 @@ MacroModule moduleFromMacro(Map tool, String options) {
                 if (imp == null) throw new IllegalArgumentException("'" + p.label + "': no open image" + (text ? " called '" + text + "'" : "") + " (use " + p.name + "=<window title> or " + p.name + "_file=<path>)")
                 module.values[p.name] = imp; module.values["use_" + p.name] = true
                 break
-            case ["table", "file"]:
+            case ["table", "file", "folder"]:
                 if (text) module.values[p.name] = new File(text)
                 break
             case "boolean":

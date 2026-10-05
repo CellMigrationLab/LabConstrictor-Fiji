@@ -1,0 +1,6 @@
+{"app": "nullable", "tool": "Optional settings",
+ "register": [{"name": "nullable", "prefix": "${PREFIX}", "module": "tools", "pythonpath": ["${V3}/tests/nullable_app"]}],
+ "macro": "app=nullable tool=[Optional settings] fixed_seed=7",
+ "expect": {"status": "COMPLETE",
+            "equals": {"replayed_from_macro": true,
+                       "values_values": {"seed": 7, "max_seconds": null, "notes": null, "folder": "None"}}}}

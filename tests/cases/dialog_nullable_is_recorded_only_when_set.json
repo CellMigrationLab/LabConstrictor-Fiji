@@ -1,0 +1,6 @@
+{"app": "nullable", "tool": "Optional settings",
+ "register": [{"name": "nullable", "prefix": "${PREFIX}", "module": "tools", "pythonpath": ["${V3}/tests/nullable_app"]}],
+ "record": true,
+ "overrides": {"set_fixed_seed": true, "fixed_seed": 7},
+ "expect": {"status": "COMPLETE",
+            "equals": {"recorded_options": "app=nullable tool=[Optional settings] fixed_seed=7"}}}
