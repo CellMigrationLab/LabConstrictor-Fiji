@@ -425,7 +425,9 @@ Map showResults(Map app, List results, Map images) {
 void showImage(Map app, Map r, Map summary) {
     def imp = IJ.openImage(r.path)
     if (imp == null) { IJ.error("LabConstrictor", "Fiji cannot open result image " + r.name); return }
-    imp.setTitle(app.name + ":" + r.name)
+    def title = app.name + ":" + r.name
+    for (int n = 1; WindowManager.getImage(title) != null; n++) title = app.name + ":" + r.name + " [" + n + "]"   // a chain must be able to tell results apart
+    imp.setTitle(title)
     imp.show()
     summary["image_" + r.name] = [imp.getWidth(), imp.getHeight(), imp.getNSlices() * imp.getNFrames(), imp.getBitDepth()]
 }
