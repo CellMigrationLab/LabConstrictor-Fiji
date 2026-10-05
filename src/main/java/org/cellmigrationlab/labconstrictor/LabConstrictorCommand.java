@@ -45,6 +45,11 @@ public class LabConstrictorCommand implements Command {
 	@Override
 	public void run() {
 		try {
+			// A macro call run("LabConstrictor Tools...", "app=... tool=...") keeps its options in a per-thread slot of ImageJ 1;
+			// the script runs on another thread, so hand them over explicitly (the script clears the property).
+			final String macroOptions = ij.Macro.getOptions();
+			if (macroOptions != null && !macroOptions.trim().isEmpty()) System.setProperty("lc.macro.options", macroOptions);
+			else System.clearProperty("lc.macro.options");
 			final ScriptInfo script = new ScriptInfo(context, "LabConstrictor.groovy", new StringReader(readScript()));
 			scriptService.run(script, true).get();
 		}

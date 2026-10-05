@@ -25,6 +25,12 @@
       <version>${scijava.version}</version>
       <scope>provided</scope>
     </dependency>
+    <dependency>
+      <groupId>net.imagej</groupId>
+      <artifactId>ij</artifactId>
+      <version>1.54p</version>
+      <scope>provided</scope>
+    </dependency>
   </dependencies>
 
   <build>

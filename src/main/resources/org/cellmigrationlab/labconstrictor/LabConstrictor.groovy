@@ -14,6 +14,8 @@ import ij.ImagePlus
 import ij.WindowManager
 import ij.io.FileSaver
 import ij.measure.ResultsTable
+import ij.Macro
+import ij.plugin.frame.Recorder
 import ij.process.ColorProcessor
 import ij.process.FloatProcessor
 import org.apposed.appose.Service
@@ -490,6 +492,84 @@ double relativeDifference(FloatProcessor a, FloatProcessor b) {
     return sumDiff / Math.max(sumRef, 1e-9)
 }
 
+
+// ---------------------------------------------------------------- macro recording / replay
+/** Module stand-in for a macro call: same getInput(name) contract as the harvested dialog module, values from the options string. */
+class MacroModule {
+    Map values = [:]
+    def getInput(String name) { values[name] }
+}
+
+/** Options string of a macro call (run("LabConstrictor Tools...", "app=[X] tool=[Y] image=a.tif ...")), or null for an interactive run. */
+String macroOptions() {
+    def given = System.clearProperty("lc.macro.options") ?: Macro.getOptions()
+    return given && given.trim() ? given : null
+}
+
+/** The dialog's choices as macro options (key -> text). Images by window title, or `<name>_file` for a file. */
+Map<String, String> toMacroOptions(String appName, Map tool, def module) {
+    def o = [app: appName, tool: tool.label] as LinkedHashMap
+    tool.inputs.each { p ->
+        switch (p.type) {
+            case ["image", "labels"]:
+                def file = module.getInput(p.name + "_file") as File
+                def imp = module.getInput(p.name)
+                if (file) o[p.name + "_file"] = file.path
+                else if (imp instanceof ImagePlus && (p.required || module.getInput("use_" + p.name))) o[p.name] = imp.getTitle()
+                break
+            case ["table", "file"]:
+                def f = module.getInput(p.name) as File
+                if (f) o[p.name] = f.path
+                break
+            default:
+                def v = module.getInput(p.name)
+                if (v != null) o[p.name] = v.toString()
+        }
+    }
+    return o
+}
+
+/** Tell the macro recorder what this run was (only when the recorder is open); the command line becomes a replayable run(...). */
+void recordRun(String appName, Map tool, def module) {
+    try {
+        if (!Recorder.record) return
+        toMacroOptions(appName, tool, module).each { k, v -> Recorder.recordOption(k, v) }
+    } catch (Throwable ignored) { }          // recording must never break a run
+}
+
+/** Build the module values for a replayed call; unknown tools/parameters or missing images raise IllegalArgumentException (shown, logged). */
+MacroModule moduleFromMacro(Map tool, String options) {
+    def module = new MacroModule()
+    tool.inputs.each { p ->
+        def text = Macro.getValue(options, p.name, null)
+        def fileText = Macro.getValue(options, p.name + "_file", null)
+        switch (p.type) {
+            case ["image", "labels"]:
+                if (fileText) { module.values[p.name + "_file"] = new File(fileText); module.values["use_" + p.name] = true; break }
+                if (text == null && !p.required) break
+                def imp = text ? WindowManager.getImage(text) : WindowManager.getCurrentImage()
+                if (imp == null) throw new IllegalArgumentException("'" + p.label + "': no open image" + (text ? " called '" + text + "'" : "") + " (use " + p.name + "=<window title> or " + p.name + "_file=<path>)")
+                module.values[p.name] = imp; module.values["use_" + p.name] = true
+                break
+            case ["table", "file"]:
+                if (text) module.values[p.name] = new File(text)
+                break
+            case "boolean":
+                module.values[p.name] = text == null ? (p.default ?: false) : (text in ["", "true", "1", "yes"])
+                break
+            case "integer":
+                module.values[p.name] = text == null ? (p.default ?: 0) as Integer : (text as Double).intValue()
+                break
+            case "float":
+                module.values[p.name] = text == null ? (p.default ?: 0) as Double : text as Double
+                break
+            default:
+                module.values[p.name] = text == null ? (p.default ?: "") : text
+        }
+    }
+    return module
+}
+
 // ---------------------------------------------------------------- main
 def labConstrictorRun() {
     hooks.setup()
@@ -505,19 +585,32 @@ def labConstrictorRun() {
         return hooks.finish(summary + [error: "no apps registered"])
     }
 
-    def appName = pickOne("LabConstrictor", "Application", found.apps.keySet().toList(), hooks.preferred("app"))
-    if (appName == null) return hooks.finish(summary + [cancelled: true])
-    def app = found.apps[appName]
-    def toolLabel = pickOne("LabConstrictor: " + app.display_name, "Tool", app.schema.tools.collect { it.label }, hooks.preferred("tool"))
-    if (toolLabel == null) return hooks.finish(summary + [cancelled: true])
-    def tool = app.schema.tools.find { it.label == toolLabel }
+    def macro = macroOptions()
+    def appName, toolLabel, app, tool, module
+    if (macro) {                                               // replay of a recorded macro: no choosers, no dialog
+        appName = found.apps.keySet().find { it.equalsIgnoreCase(Macro.getValue(macro, "app", "") ?: "") }
+        if (appName == null) return failEarly(summary, "unknown app '" + Macro.getValue(macro, "app", "") + "' (registered: " + found.apps.keySet().join(", ") + ")")
+        app = found.apps[appName]
+        tool = app.schema.tools.find { it.label.equalsIgnoreCase(Macro.getValue(macro, "tool", "") ?: "") || it.id == Macro.getValue(macro, "tool", "") }
+        if (tool == null) return failEarly(summary, "unknown tool '" + Macro.getValue(macro, "tool", "") + "' in " + appName + " (tools: " + app.schema.tools.collect { it.label }.join(", ") + ")")
+        try { module = moduleFromMacro(tool, macro) } catch (IllegalArgumentException | NumberFormatException problem) { return failEarly(summary, problem.message ?: problem.toString()) }
+        summary.replayed_from_macro = true
+    } else {
+        appName = pickOne("LabConstrictor", "Application", found.apps.keySet().toList(), hooks.preferred("app"))
+        if (appName == null) return hooks.finish(summary + [cancelled: true])
+        app = found.apps[appName]
+        toolLabel = pickOne("LabConstrictor: " + app.display_name, "Tool", app.schema.tools.collect { it.label }, hooks.preferred("tool"))
+        if (toolLabel == null) return hooks.finish(summary + [cancelled: true])
+        tool = app.schema.tools.find { it.label == toolLabel }
 
-    def openImages = WindowManager.getImageTitles() as List<String>
-    def dialogStarted = System.nanoTime()
-    def (info, links) = buildToolDialog(tool, openImages)
-    summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / 1e9
-    def module = harvest(info, tool.label, links)
-    if (module == null) return hooks.finish(summary + [cancelled: true])
+        def openImages = WindowManager.getImageTitles() as List<String>
+        def dialogStarted = System.nanoTime()
+        def (info, links) = buildToolDialog(tool, openImages)
+        summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / 1e9
+        module = harvest(info, tool.label, links)
+        if (module == null) return hooks.finish(summary + [cancelled: true])
+        recordRun(appName, tool, module)
+    }
 
     def jobDir = Files.createTempDirectory("lcjob_fiji_").toFile()
     List exported
@@ -552,6 +645,12 @@ void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
     } else {
         IJ.showStatus("LabConstrictor: " + outcome.status.toLowerCase())
     }
+}
+def failEarly(Map summary, String message) {
+    lcLog("ERROR", "macro call rejected: " + message)
+    if (hooks.interactive) IJ.error("LabConstrictor", message)
+    IJ.log("LabConstrictor: " + message)
+    return hooks.finish(summary + [error: message])
 }
 /** Entry point: anything unexpected is logged with its stack trace and shown with the log's location. */
 def labConstrictorMain() {

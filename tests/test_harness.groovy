@@ -85,6 +85,7 @@ def startClicker = { String title ->
 }
 
 def preload = {
+    if (cfg.record) ij.plugin.frame.Recorder.record = true          // as if the Macro Recorder window were open
     cfg.preload?.each { item ->                              // stands in for "images the user already has open"
         def imp = IJ.openImage(item.path as String)
         imp.setTitle(item.title as String)
@@ -99,6 +100,7 @@ def preload = {
 }
 
 def finish = { Map summary ->
+    if (cfg.record) summary.recorded_options = ij.plugin.frame.Recorder.getCommandOptions()
     summary.dialogs = report.dialogs
     summary.spinner_values_after_selection = report.spinner_values_after_selection
     summary.single_input_prompt = report.single_input_prompt
