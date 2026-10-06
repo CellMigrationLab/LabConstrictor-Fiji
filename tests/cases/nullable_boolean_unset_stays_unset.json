@@ -1,0 +1,22 @@
+{
+ "app": "nullable",
+ "tool": "Optional flag",
+ "register": [
+  {
+   "name": "nullable",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/nullable_app"
+   ]
+  }
+ ],
+ "expect": {
+  "status": "COMPLETE",
+  "equals": {
+   "values_values": {
+    "flag": "None"
+   }
+  }
+ }
+}

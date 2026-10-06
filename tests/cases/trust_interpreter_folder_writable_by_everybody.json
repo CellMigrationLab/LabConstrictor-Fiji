@@ -1,0 +1,27 @@
+{
+ "app": "victim",
+ "tool": "Scalar echo",
+ "register": [
+  {
+   "name": "victim",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "tamper": [
+  {
+   "world_writable_bin": true,
+   "app": "victim"
+  }
+ ],
+ "expect": {
+  "equals": {
+   "error": "no apps registered"
+  },
+  "log_contains": [
+   "app skipped: ",
+   "is writable by everybody"
+  ]
+ }
+}

@@ -1,0 +1,30 @@
+{
+ "app": "victim",
+ "tool": "Scalar echo",
+ "register": [
+  {
+   "name": "victim",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "tamper": [
+  {
+   "schema_replace": [
+    "\"id\": \"scalar_echo\"",
+    "\"id\": \"../../x\""
+   ],
+   "app": "victim"
+  }
+ ],
+ "expect": {
+  "equals": {
+   "error": "no apps registered"
+  },
+  "log_contains": [
+   "app skipped: ",
+   "unexpected structure"
+  ]
+ }
+}
