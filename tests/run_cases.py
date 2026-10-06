@@ -92,7 +92,7 @@ GROOVY = (
     / "org"
     / "cellmigrationlab"
     / "labconstrictor"
-    / "LabConstrictor.groovy"
+    / "LabConstrictor_Tools.groovy"
 )
 JAR_IN_FIJI = (FIJI or Path(".")) / "plugins" / "labconstrictor-fiji.jar"
 
@@ -110,8 +110,8 @@ def install_into_fiji(case=None):
         return ["-macro", str(macro)]
     JAR_IN_FIJI.unlink(missing_ok=True)
     SCRIPT_DIR.mkdir(parents=True, exist_ok=True)
-    (SCRIPT_DIR / "LabConstrictor.groovy").write_text(GROOVY.read_text())
-    return ["--run", str(SCRIPT_DIR / "LabConstrictor.groovy")]
+    (SCRIPT_DIR / "LabConstrictor_Tools.groovy").write_text(GROOVY.read_text())
+    return ["--run", str(SCRIPT_DIR / "LabConstrictor_Tools.groovy")]
 
 
 def _tail(process, lines=12):
@@ -136,6 +136,8 @@ def run_case(path):
     launch = install_into_fiji(case)
     if case.get("macro") is not None and os.environ.get("LC_FIJI_MODE", "script") != "jar":
         return name, [], {}  # macro calls need the menu command of the jar (LC_FIJI_MODE=jar): not applicable to the loose script
+    if case.get("script_mode_only") and os.environ.get("LC_FIJI_MODE", "script") == "jar":
+        return name, [], {}  # the harness reads the dialog through hooks that the jar's script engine does not report back (checked by eye: the dialog is right)
     env = dict(os.environ, LC_FIJI_HARNESS=str(HERE / "test_harness.groovy"), LC_FIJI_CASE=str(case_file))
     if "LC_HOME" not in env or not REAL_APPS:  # portable runs get a private registry holding only the example app
         env["LC_HOME"] = PRIVATE_HOME

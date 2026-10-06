@@ -21,14 +21,14 @@ import org.scijava.ui.UIService;
 /**
  * Menu entry <i>Plugins &gt; LabConstrictor &gt; LabConstrictor Tools...</i>.
  *
- * <p>The behaviour lives in {@code LabConstrictor.groovy} (bundled in this jar): it reads the registry of installed
+ * <p>The behaviour lives in {@code LabConstrictor_Tools.groovy} (bundled in this jar): it reads the registry of installed
  * LabConstrictor apps, builds the tool dialog from each tool's schema and runs the tool in the app's own Python. This
  * class only starts it, so a failure to start is reported in a dialog and in the log instead of vanishing in the console.
  */
 @Plugin(type = Command.class, menuPath = "Plugins>LabConstrictor>LabConstrictor Tools...", headless = false)
 public class LabConstrictorCommand implements Command {
 
-	static final String SCRIPT = "/org/cellmigrationlab/labconstrictor/LabConstrictor.groovy";
+	static final String SCRIPT = "/org/cellmigrationlab/labconstrictor/LabConstrictor_Tools.groovy";
 	private static final Object HANDOFF = new Object();
 	private static final String OPTIONS_PROPERTY = "lc.macro.options";
 	private static final long HANDOFF_TIMEOUT_MS = 30000;
@@ -53,7 +53,7 @@ public class LabConstrictorCommand implements Command {
 			// read it. The hand-off is serialised: a second call cannot overwrite the options of the first before the first
 			// script has consumed them (the property is JVM-wide, the wait makes it behave like a private channel).
 			final String macroOptions = ij.Macro.getOptions();
-			final ScriptInfo script = new ScriptInfo(context, "LabConstrictor.groovy", new StringReader(readScript()));
+			final ScriptInfo script = new ScriptInfo(context, "LabConstrictor_Tools.groovy", new StringReader(readScript()));
 			final java.util.concurrent.Future<?> running;
 			synchronized (HANDOFF) {
 				if (macroOptions != null && !macroOptions.trim().isEmpty()) System.setProperty(OPTIONS_PROPERTY, macroOptions);

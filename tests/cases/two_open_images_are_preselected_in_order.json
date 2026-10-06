@@ -1,0 +1,35 @@
+{
+ "app": "twoimg",
+ "tool": "Two images",
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "first.tif",
+   "pixel_size": 0.5
+  },
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "second.tif",
+   "pixel_size": 0.25
+  }
+ ],
+ "expect": {
+  "equals": {
+   "chooser_initial": [
+    "first.tif",
+    "second.tif"
+   ]
+  }
+ },
+ "register": [
+  {
+   "name": "twoimg",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/two_images_app"
+   ]
+  }
+ ],
+ "script_mode_only": true
+}

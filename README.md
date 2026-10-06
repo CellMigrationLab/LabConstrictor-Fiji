@@ -24,13 +24,13 @@ environment through [Appose](https://github.com/apposed/appose), so Fiji never i
         mvn package
         cp target/labconstrictor-fiji-0.1.0.jar <Fiji.app>/plugins/      # restart Fiji
 
-   (Alternatively copy `src/main/resources/org/cellmigrationlab/labconstrictor/LabConstrictor.groovy` to
+   (Alternatively copy `src/main/resources/org/cellmigrationlab/labconstrictor/LabConstrictor_Tools.groovy` to
    `<Fiji.app>/scripts/Plugins/LabConstrictor/` to run the script without the jar.)
 
 Fiji update-site publication is not set up yet.
 
 ## How it works
-`LabConstrictorCommand.java` (the menu entry, reports start-up failures) starts `LabConstrictor.groovy`, which reads the registry
+`LabConstrictorCommand.java` (the menu entry, reports start-up failures) starts `LabConstrictor_Tools.groovy`, which reads the registry
 (`~/.labconstrictor/apps`, `LC_APPS_PATH`, system folder; entries are trust-checked), builds a SciJava `ModuleInfo` from the schema, lets
 Fiji's own input harvester show the dialog, exports images as TIFF (or passes file paths), and drives the worker with Appose's Java
 client using the restricted `lc:<tool>` protocol. The Groovy script is interpreted at run time; the jar is a packaging shell, not a port.
