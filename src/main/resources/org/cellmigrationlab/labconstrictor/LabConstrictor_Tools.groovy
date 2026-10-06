@@ -50,6 +50,7 @@ class LCModule extends DefaultMutableModule {
     }
     /** Pixel size (um) stored in a TIFF file's header (ImageJ description or TIFF resolution tags), without loading the pixels. */
     static Double micronsFromFile(File file) {
+        if (!file.isFile()) return null            // a path that is still being typed: nothing to read, nothing to complain about
         try {
             def info = new ij.io.TiffDecoder(file.parent + File.separator, file.name).getTiffInfo()
             if (!info || info[0].pixelWidth <= 0 || info[0].pixelWidth == 1.0d && !info[0].description) return null
@@ -80,6 +81,8 @@ class LCModule extends DefaultMutableModule {
     void syncFile6() { syncFromFile(6) }
     void syncImage7() { sync(7) }
     void syncFile7() { syncFromFile(7) }
+    /** The image a chooser names: a window title (dialog) or the image itself (macro replay). */
+    static ImagePlus imageOf(def value) { return value instanceof ImagePlus ? value : (value ? WindowManager.getImage(value as String) : null) }
     private void syncFromFile(int slot) {
         def imageName = links.keySet().toList()[slot]
         def file = getInput(imageName + "_file") as File
@@ -88,7 +91,7 @@ class LCModule extends DefaultMutableModule {
     }
     private void sync(int slot) {
         def imageName = links.keySet().toList()[slot]
-        def imp = getInput(imageName) as ImagePlus
+        def imp = imageOf(getInput(imageName))
         def microns = micronsPerPixel(imp)
         if (microns != null) links[imageName].each { setInput(it, microns) }
     }
@@ -300,6 +303,7 @@ def addItem(MutableModuleInfo info, String name, Class type, Map o) {
     item.setLabel(o.label ?: name)
     if (o.description) item.setDescription(o.description)
     item.setRequired(o.required != false)
+    item.setPersisted(false)                    // never remember values between runs: a stale '(or file)' would silently beat the open image
     if (o.default != null) item.setDefaultValue(o.default)
     if (o.min != null) item.setMinimumValue(o.min)
     if (o.max != null) item.setMaximumValue(o.max)
@@ -345,7 +349,11 @@ List buildToolDialog(Map tool, List<String> openImages) {
     def links = [:]                                          // image param -> [pixel-size params]
     tool.inputs.findAll { it.pixel_size_of }.each { links.get(it.pixel_size_of, []) << it.name }
     def linkedImages = links.keySet().toList()
-    def imageIndex = 0                                       // i-th image parameter defaults to the i-th open image
+    def defaultTitle = [:]                                   // i-th image parameter defaults to the i-th open image (the last one repeats)
+    tool.inputs.findAll { it.type in ["image", "labels"] }.eachWithIndex { p, i ->
+        def given = hooks.overrides[p.name]
+        defaultTitle[p.name] = given ? given as String : (openImages ? openImages[Math.min(i, openImages.size() - 1)] : null)
+    }
     if (openImages && tool.inputs.any { it.type in ["image", "labels"] }) {
         // also keeps SciJava from replacing a one-image dialog by a bare file chooser (the open image is auto-resolved)
         addItem(info, "image_source_note", String, [label: "Image source", message: true, required: false,
@@ -369,12 +377,11 @@ List buildToolDialog(Map tool, List<String> openImages) {
                 def slot = linkedImages.indexOf(p.name)
                 def fileOverride = hooks.overrides[p.name + "_file"]
                 if (openImages) {
-                    def imp = WindowManager.getImage(override ?: openImages[Math.min(imageIndex++, openImages.size() - 1)])
                     if (!p.required) {                       // SciJava image choosers cannot be empty
                         addItem(info, "use_" + p.name, Boolean, [label: "Use " + p.label.toLowerCase(), required: false,
                                                                  default: hooks.overrides.containsKey("use_" + p.name) ? hooks.overrides["use_" + p.name] : false])
                     }
-                    addItem(info, p.name, ImagePlus, base + [default: imp, callback: slot >= 0 ? "syncImage" + slot : null])
+                    addItem(info, p.name, String, base + [choices: openImages, default: defaultTitle[p.name], callback: slot >= 0 ? "syncImage" + slot : null])
                     addItem(info, p.name + "_file", File, [label: p.label + " (or file)", required: false,
                                                            description: "Read the image from a file instead of the open image above (leave empty to use the open image)",
                                                            default: fileOverride ? new File(fileOverride as String) : null,
@@ -400,7 +407,7 @@ List buildToolDialog(Map tool, List<String> openImages) {
                                                       min: p.minimum as Integer, max: p.maximum as Integer, step: 1]); break
             case "float":
                 def value = overridden ? override : p.default
-                def source = p.pixel_size_of && openImages ? WindowManager.getImage(hooks.overrides[p.pixel_size_of] ?: openImages[0]) : null
+                def source = p.pixel_size_of && openImages ? WindowManager.getImage(defaultTitle[p.pixel_size_of] ?: openImages[0]) : null
                 def microns = LCModule.micronsPerPixel(source)
                 def fileSource = p.pixel_size_of ? hooks.overrides[p.pixel_size_of + "_file"] : null
                 if (microns == null && fileSource) microns = LCModule.micronsFromFile(new File(fileSource as String))
@@ -432,7 +439,9 @@ List exportInputs(Map tool, def module, File jobDir) {
                     break
                 }
                 if (!p.required && !module.getInput("use_" + p.name)) break
-                if (!(value instanceof ImagePlus)) throw new IllegalArgumentException("'" + p.label + "' is required: open an image or choose a file")
+                def chosenImage = LCModule.imageOf(value)
+                if (chosenImage == null) throw new IllegalArgumentException("'" + p.label + "' is required: open an image or choose a file")
+                value = chosenImage
                 def file = new File(jobDir, p.name + ".tif")
                 if (file.canonicalFile.parentFile != jobDir.canonicalFile) throw new IllegalArgumentException("'" + p.label + "': refusing to write outside " + jobDir)
                 def imp = value as ImagePlus
@@ -527,7 +536,7 @@ String crashHint(Map outcome) {
 
 /** Text of the error dialog for a failed or crashed run: what happened, the worker's own output, where the details are. */
 String failureMessage(Map outcome, Map summary) {
-    def worker = (outcome.workerOutput ?: []).findAll { !it.startsWith("[SERVICE-0]") }       // protocol chatter is in the log, not for people
+    def worker = (outcome.workerOutput ?: []).findAll { !it.startsWith("[SERVICE-0]") && !it.trim().startsWith("{") }       // protocol chatter (and raw JSON lines) is in the log, not for people
     return (outcome.status == "CRASHED" ? crashHint(outcome) + "\n\n" : "") + (outcome.error ?: "failed") +
            (worker ? "\n\nWorker output (last lines):\n" + worker.takeRight(8).join("\n") : "") +
            "\n\nRun record: " + (summary.run_record ?: "(none)") + "\nLog file: " + new File(lcHome(), "logs/labconstrictor.log").path
@@ -660,7 +669,7 @@ Map<String, String> toMacroOptions(String appName, Map tool, def module) {
                 def file = module.getInput(p.name + "_file") as File
                 def imp = module.getInput(p.name)
                 if (file) o[p.name + "_file"] = file.path
-                else if (imp instanceof ImagePlus && (p.required || module.getInput("use_" + p.name))) o[p.name] = imp.getTitle()
+                else if (imp && (p.required || module.getInput("use_" + p.name))) o[p.name] = imp instanceof ImagePlus ? imp.getTitle() : imp as String
                 break
             case ["table", "file", "folder"]:
                 def f = module.getInput(p.name) as File
@@ -838,6 +847,7 @@ void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
         if (hooks.interactive) IJ.error("LabConstrictor: " + app.display_name, summary.failure_message)
     } else {
         IJ.showStatus("LabConstrictor: " + outcome.status.toLowerCase())
+        IJ.log("LabConstrictor: the run was " + (outcome.cancelRequested ? "cancelled" : outcome.status.toLowerCase()))
     }
 }
 def failEarly(Map summary, String message) {

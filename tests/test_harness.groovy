@@ -1,4 +1,4 @@
-// Test harness for fiji/LabConstrictor.groovy. NOT part of the product: it automates the real SciJava dialogs on a virtual
+// Test harness for fiji/LabConstrictor_Tools.groovy. NOT part of the product: it automates the real SciJava dialogs on a virtual
 // screen (answers them, clicks OK, takes screenshots) and writes a JSON report. Selected with LC_FIJI_HARNESS=<this file>;
 // the case to run comes from LC_FIJI_CASE=<case.json>. Returns the hook map the product script merges over its no-op defaults.
 import groovy.json.JsonOutput
@@ -57,6 +57,12 @@ def answerDialog = { Window dialog, String title ->
     Thread.sleep(700)
     screenshot(dialog, "dialog_" + safe(title))
     report.dialogs[title] = components(dialog, JLabel).findAll { it.text }.collect { it.text }
+    if (title == cfg.tool) {      // which open image each image chooser shows before anybody touches it (top to bottom)
+        def open = (WindowManager.getImageTitles() as List)
+        report.chooser_initial = components(dialog, JComboBox).sort { it.getLocationOnScreen().y }
+            .findAll { box -> box.getItemCount() > 0 && (0..<box.getItemCount()).every { open.contains(box.getItemAt(it).toString()) } }
+            .collect { it.getSelectedItem()?.toString() }
+    }
     if (title == cfg.tool) selectImages(dialog)
     def ok = components(dialog, JButton).find { it.text == "OK" }
     if (ok) SwingUtilities.invokeLater { ok.doClick() }
@@ -103,6 +109,7 @@ def finish = { Map summary ->
     if (cfg.record) summary.recorded_options = ij.plugin.frame.Recorder.getCommandOptions()
     summary.dialogs = report.dialogs
     summary.spinner_values_after_selection = report.spinner_values_after_selection
+    summary.chooser_initial = report.chooser_initial
     summary.single_input_prompt = report.single_input_prompt
     summary.open_windows = WindowManager.getImageTitles() as List
     def overlay = summary.overlay_title ? WindowManager.getImage(summary.overlay_title as String) : null
