@@ -536,7 +536,9 @@ String crashHint(Map outcome) {
 
 /** Text of the error dialog for a failed or crashed run: what happened, the worker's own output, where the details are. */
 String failureMessage(Map outcome, Map summary) {
-    def worker = (outcome.workerOutput ?: []).findAll { !it.startsWith("[SERVICE-0]") && !it.trim().startsWith("{") }       // protocol chatter (and raw JSON lines) is in the log, not for people
+    // protocol chatter ("[SERVICE-n] {...}", raw JSON lines) is in the log, not for people; a long line would make the dialog wider than the screen
+    def worker = (outcome.workerOutput ?: []).findAll { !(it =~ /^\[SERVICE-\d+\]/) && !it.trim().startsWith("{") }
+            .collect { it.length() > 300 ? it.substring(0, 300) + " …" : it }
     return (outcome.status == "CRASHED" ? crashHint(outcome) + "\n\n" : "") + (outcome.error ?: "failed") +
            (worker ? "\n\nWorker output (last lines):\n" + worker.takeRight(8).join("\n") : "") +
            "\n\nRun record: " + (summary.run_record ?: "(none)") + "\nLog file: " + new File(lcHome(), "logs/labconstrictor.log").path
