@@ -149,6 +149,8 @@ def run_case(path):
                  "--module", app["module"], *[a for p in app["pythonpath"] for a in ("--pythonpath", p)]],
                 check=True, capture_output=True, env=dict(env, PYTHONPATH=str(V3)),
             )  # fmt: skip
+    for op in case.get("tamper", []):
+        tamper(Path(env["LC_HOME"]) / "apps", op)
     command = [
         "xvfb-run",
         "-a",
@@ -182,6 +184,35 @@ def run_case(path):
     log_file = Path(env["LC_HOME"]) / "logs" / "labconstrictor.log"
     report["log_text"] = log_file.read_text(encoding="utf-8") if log_file.exists() else ""
     return name, check(case.get("expect", {}), report), report
+
+
+def tamper(apps, op):
+    """Damage a registered app the way a hostile or broken registry could be (the host must refuse or explain it).
+    Operations: world_writable_bin, schema_replace [old, new], schema_move_to_other_folder, entry {key: value}."""
+    entry_file = apps / (op["app"] + ".json")
+    entry = json.loads(entry_file.read_text())
+    schema_file = Path(entry["schema_path"])
+    if op.get("world_writable_bin"):
+        prefix = Path(tempfile.mkdtemp(prefix="lcprefix_"))
+        (prefix / "bin").mkdir()
+        (prefix / "bin" / "python").symlink_to(sys.executable)
+        (prefix / "bin").chmod(0o777)
+        entry.update(prefix=str(prefix), python=str(prefix / "bin" / "python"))
+    if "schema_replace" in op:
+        old, new = op["schema_replace"]
+        text = schema_file.read_text()
+        assert old in text, old
+        schema_file.write_text(text.replace(old, new, 1))
+    if op.get("schema_move_to_other_folder"):
+        elsewhere = Path(tempfile.mkdtemp(prefix="lcschema_")) / schema_file.name
+        shutil.move(str(schema_file), str(elsewhere))
+        elsewhere.chmod(0o644)
+        entry["schema_path"] = str(elsewhere)
+    entry.update(op.get("entry", {}))
+    entry_file.write_text(json.dumps(entry))
+    entry_file.chmod(0o644)
+    if schema_file.exists():
+        schema_file.chmod(0o644)
 
 
 PRIVATE_HOME = tempfile.mkdtemp(prefix="lchome_fiji_")

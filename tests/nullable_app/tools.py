@@ -19,3 +19,9 @@ def optional_settings(
 def no_match() -> Scalars:
     """A tool whose honest answer is 'nothing found' (shown as a message, not as an error)."""
     raise ToolError("no_match", "No match found: try another setting.")
+
+
+@tool("Optional flag")
+def optional_flag(flag: Optional[bool] = None) -> Scalars:
+    """A yes/no that may be left unset: unset (None) and False are different answers."""
+    return {"flag": str(flag)}

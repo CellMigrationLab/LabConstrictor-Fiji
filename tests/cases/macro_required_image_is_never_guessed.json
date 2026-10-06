@@ -1,0 +1,17 @@
+{
+ "app": "synthetic",
+ "tool": "Image stats",
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "sample.tif",
+   "pixel_size": 0.5
+  }
+ ],
+ "macro": "app=synthetic tool=[Image stats]",
+ "expect": {
+  "match": {
+   "error": "never guesses the current image"
+  }
+ }
+}

@@ -1,0 +1,10 @@
+{
+ "app": "synthetic",
+ "tool": "Scalar echo",
+ "macro": "app=synthetic tool=[Scalar echo] a=1 bb=2",
+ "expect": {
+  "match": {
+   "error": "unknown option 'bb'"
+  }
+ }
+}

@@ -1,0 +1,10 @@
+{
+ "app": "synthetic",
+ "tool": "Slow with progress",
+ "macro": "app=synthetic tool=[Slow with progress] steps=1000",
+ "expect": {
+  "match": {
+   "error": "must be <= 100"
+  }
+ }
+}

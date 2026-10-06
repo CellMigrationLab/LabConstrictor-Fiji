@@ -1,0 +1,27 @@
+{
+ "app": "victim",
+ "tool": "Scalar echo",
+ "register": [
+  {
+   "name": "victim",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "tamper": [
+  {
+   "schema_move_to_other_folder": true,
+   "app": "victim"
+  }
+ ],
+ "expect": {
+  "equals": {
+   "error": "no apps registered"
+  },
+  "log_contains": [
+   "app skipped: ",
+   "is not in the same folder as the entry"
+  ]
+ }
+}

@@ -1,0 +1,10 @@
+{
+ "app": "synthetic",
+ "tool": "Scalar echo",
+ "macro": "app=synthetic tool=[Scalar echo] a=NaN",
+ "expect": {
+  "match": {
+   "error": "must be a finite number"
+  }
+ }
+}

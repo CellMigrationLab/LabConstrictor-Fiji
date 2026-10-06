@@ -29,6 +29,9 @@ import org.scijava.ui.UIService;
 public class LabConstrictorCommand implements Command {
 
 	static final String SCRIPT = "/org/cellmigrationlab/labconstrictor/LabConstrictor.groovy";
+	private static final Object HANDOFF = new Object();
+	private static final String OPTIONS_PROPERTY = "lc.macro.options";
+	private static final long HANDOFF_TIMEOUT_MS = 30000;
 
 	@Parameter
 	private Context context;
@@ -46,12 +49,24 @@ public class LabConstrictorCommand implements Command {
 	public void run() {
 		try {
 			// A macro call run("LabConstrictor Tools...", "app=... tool=...") keeps its options in a per-thread slot of ImageJ 1;
-			// the script runs on another thread, so hand them over explicitly (the script clears the property).
+			// the script runs on another thread, so they travel through a property that the script clears as soon as it has
+			// read it. The hand-off is serialised: a second call cannot overwrite the options of the first before the first
+			// script has consumed them (the property is JVM-wide, the wait makes it behave like a private channel).
 			final String macroOptions = ij.Macro.getOptions();
-			if (macroOptions != null && !macroOptions.trim().isEmpty()) System.setProperty("lc.macro.options", macroOptions);
-			else System.clearProperty("lc.macro.options");
 			final ScriptInfo script = new ScriptInfo(context, "LabConstrictor.groovy", new StringReader(readScript()));
-			scriptService.run(script, true).get();
+			final java.util.concurrent.Future<?> running;
+			synchronized (HANDOFF) {
+				if (macroOptions != null && !macroOptions.trim().isEmpty()) System.setProperty(OPTIONS_PROPERTY, macroOptions);
+				else System.clearProperty(OPTIONS_PROPERTY);
+				running = scriptService.run(script, true);
+				final long deadline = System.currentTimeMillis() + HANDOFF_TIMEOUT_MS;
+				while (System.getProperty(OPTIONS_PROPERTY) != null && System.currentTimeMillis() < deadline) Thread.sleep(20);
+				if (System.getProperty(OPTIONS_PROPERTY) != null) {
+					System.clearProperty(OPTIONS_PROPERTY);
+					log.warn("LabConstrictor: the script did not read the macro options within " + HANDOFF_TIMEOUT_MS + " ms");
+				}
+			}
+			running.get();
 		}
 		catch (final Throwable problem) {
 			log.error("LabConstrictor could not start", problem);

@@ -29,6 +29,7 @@ import java.nio.file.Files
 @Field final String JOB_DIR_KEY = "_job_dir"     // reserved input: host-owned directory for outputs
 @Field final String TOOL_PREFIX = "lc:"
 @Field final List<Integer> SUPPORTED_PROTOCOLS = [1]
+@Field final int MAX_KEPT_LINES = 500            // worker output and progress events kept per run (the log has the rest)
 @Field final int EXIT_WAIT_MS = 15000            // heavy interpreters (torch, numba) need a few seconds to exit after stdin closes
 
 /** Module whose callbacks keep a calibration field in sync with the image chosen for it (schema: pixel_size_of). */
@@ -56,7 +57,11 @@ class LCModule extends DefaultMutableModule {
             unit = unit.toLowerCase().replace("\u00b5", "u").replace("\u03bc", "u").replace("\ufffd", "u").trim()
             def factor = MICRONS_PER_UNIT[unit] ?: (unit == "cm" ? 1e4d : unit == "inch" ? 25400.0d : null)
             return factor == null ? null : info[0].pixelWidth * factor
-        } catch (Throwable ignored) { return null }
+        } catch (Throwable problem) {
+            // not "no calibration" but "could not read it": tell the user instead of silently leaving the field alone
+            IJ.log("LabConstrictor: could not read the pixel size from " + file.name + " (" + problem + "); enter it by hand")
+            return null
+        }
     }
     // SciJava resolves callbacks by method name, so each linked image parameter gets a fixed slot (max 8 per tool).
     void syncImage0() { sync(0) }
@@ -128,24 +133,106 @@ List<File> registryDirs() {
     return dirs
 }
 
-/** Why an entry must not be used to start a process, or null. */
+/** Identifiers that become file names (app, tool and parameter names): the same plain-name rule as the Python registry. */
+boolean plainName(def text) {
+    return text instanceof String && text && text != "." && text != ".." && !text.any { it in ["/", "\\", "\0"] as Set } && text == text.trim()
+}
+boolean identifier(def text) { return text instanceof String && (text ==~ /[A-Za-z_][A-Za-z0-9_]*/) }
+boolean toolId(def text) { return text instanceof String && (text ==~ /[A-Za-z0-9_][A-Za-z0-9_.-]*/) }   // @tool(id=...) may contain - and .
+String slug(String text) { return text.replaceAll(/[^A-Za-z0-9_.-]+/, "_").replaceFirst(/^\.+/, "") ?: "x" }
+
+boolean isPosixHost() { return !System.getProperty("os.name").toLowerCase().contains("win") }
+
+/** unix permission bits of `path`, or null where the file system has no such notion (then the POSIX checks cannot apply). */
+Integer unixMode(java.nio.file.Path path) {
+    try { return java.nio.file.Files.getAttribute(path, "unix:mode") as Integer }
+    catch (UnsupportedOperationException | IllegalArgumentException ignored) { return null }
+}
+
+/** Writable by everybody (a directory with the sticky bit, like /tmp, only lets owners replace their own files). */
+boolean worldWritable(File file, boolean directory) {
+    def path = file.toPath()
+    def mode = unixMode(path)
+    if (mode == null)
+        return java.nio.file.Files.getPosixFilePermissions(path).contains(java.nio.file.attribute.PosixFilePermission.OTHERS_WRITE)
+    return (mode & 2) != 0 && !(directory && (mode & 01000) != 0)
+}
+
+/** Ownership and permission policy for a file hosts read to decide what to start (same as registry._file_reason). */
+String fileReason(File file, boolean userDir, String what) {
+    def path = file.toPath()
+    def owner = java.nio.file.Files.getOwner(path).name
+    // per-user entries must be ours; entries in shared folders (LC_APPS_PATH, /etc) may also belong to root (the administrator)
+    if (owner != System.getProperty("user.name") && !(owner == "root" && !userDir))
+        return what + " is not owned by the current user" + (userDir ? "" : " or root")
+    def permissions = java.nio.file.Files.getPosixFilePermissions(path)
+    if (permissions.contains(java.nio.file.attribute.PosixFilePermission.GROUP_WRITE) || permissions.contains(java.nio.file.attribute.PosixFilePermission.OTHERS_WRITE))
+        return what + " is writable by other users"
+    return null
+}
+
+/** Why an entry must not be used to start a process, or null. Fails closed: a check that cannot be made is a reason. */
 String untrustedReason(File entryFile, Map entry, boolean userDir) {
     try {
         // lexical containment (symlinks inside the prefix are normal: a venv's python links to the base interpreter)
         def python = new File(entry.python).absoluteFile.toPath().normalize(), prefix = new File(entry.prefix).absoluteFile.toPath().normalize()
         if (!python.startsWith(prefix))
             return "interpreter " + entry.python + " is not inside the install prefix " + entry.prefix
-        if (!System.getProperty("os.name").toLowerCase().contains("win")) {
-            def path = entryFile.toPath()
-            def owner = java.nio.file.Files.getOwner(path).name
-            // per-user entries must be ours; entries in shared folders (LC_APPS_PATH, /etc) may also belong to root (the administrator)
-            if (owner != System.getProperty("user.name") && !(owner == "root" && !userDir))
-                return "entry file is not owned by the current user" + (userDir ? "" : " or root")
-            def permissions = java.nio.file.Files.getPosixFilePermissions(path)
-            if (permissions.contains(java.nio.file.attribute.PosixFilePermission.GROUP_WRITE) || permissions.contains(java.nio.file.attribute.PosixFilePermission.OTHERS_WRITE))
-                return "entry file is writable by other users"
+        if (prefix.parent == null)
+            return "the install prefix " + prefix + " is a filesystem root"
+        if (!isPosixHost()) return null                                  // Windows: no POSIX ownership/mode to check (known, not an error)
+        try { java.nio.file.Files.getPosixFilePermissions(entryFile.toPath()) }
+        catch (UnsupportedOperationException ignored) { return null }    // a file system without POSIX permissions (known)
+        def reason = fileReason(entryFile, userDir, "entry file")
+        if (reason) return reason
+        def schemaFile = new File(entry.schema_path).absoluteFile
+        if (schemaFile.parentFile.toPath().normalize() != entryFile.absoluteFile.parentFile.toPath().normalize())
+            return "schema file " + entry.schema_path + " is not in the same folder as the entry"
+        if (schemaFile.exists()) {                                       // a missing schema is reported later, with its own message
+            reason = fileReason(schemaFile, userDir, "schema file")
+            if (reason) return reason
         }
-    } catch (Exception ignored) { }          // e.g. a file system without POSIX permissions
+        // anybody who can replace the interpreter (or its folders) can run code as this user the next time an app is started
+        for (item in [[python.toFile(), false, "interpreter"], [python.parent.toFile(), true, "interpreter folder"], [prefix.toFile(), true, "install prefix"]]) {
+            if (item[0].exists() && worldWritable(item[0] as File, item[1] as boolean))
+                return item[2] + " " + item[0] + " is writable by everybody"
+        }
+    } catch (Exception problem) {
+        lcLog("WARNING", "cannot verify the registry entry " + entryFile + ": " + problem, problem)
+        return "cannot verify the registry entry permissions (" + problem + ")"
+    }
+    return null
+}
+
+@Field final List<String> PARAMETER_TYPES = ["string", "integer", "float", "boolean", "choice", "image", "labels", "table", "file", "folder"]
+
+/** The registry entry is untrusted JSON: check its shape before any field is used (same rules as registry._validated_entry). */
+String entryProblem(def entry) {
+    if (!(entry instanceof Map)) return "the entry is not a JSON object"
+    for (key in ["name", "python", "prefix", "module", "schema_path"])
+        if (!(entry[key] instanceof String) || !entry[key]) return "field '" + key + "' must be a non-empty string"
+    if (!plainName(entry.name)) return "invalid app name '" + entry.name + "': it must be a plain name without path separators"
+    if (entry.pythonpath != null && !(entry.pythonpath instanceof List && entry.pythonpath.every { it instanceof String }))
+        return "field 'pythonpath' must be a list of strings"
+    if (entry.runtime_path != null && !(entry.runtime_path instanceof String)) return "field 'runtime_path' must be a string"
+    return null
+}
+
+/** The cached schema is untrusted JSON too: shape, plus the names that later become file names or SciJava item names. */
+String schemaProblem(def schema) {
+    if (!(schema instanceof Map)) return "schema is not a JSON object"
+    if (!(schema.protocol in SUPPORTED_PROTOCOLS)) return "schema protocol " + schema.protocol + " is not supported"
+    if (!(schema.tools instanceof List)) return "schema has no list of tools"
+    for (tool in schema.tools) {
+        if (!(tool instanceof Map) || !(tool.label instanceof String) || !toolId(tool.id) || !(tool.inputs instanceof List) || !(tool.outputs instanceof List))
+            return "a tool has an unexpected structure (needs a plain id, a text label, inputs and outputs lists)"
+        for (p in tool.inputs) {
+            if (!(p instanceof Map) || !identifier(p.name) || !(p.label instanceof String))
+                return "tool '" + tool.id + "' has a parameter without an identifier name and a text label"
+            if (!(p.type in PARAMETER_TYPES)) return "tool '" + tool.id + "': parameter '" + p.name + "' has the unsupported type " + p.type
+            if (p.type == "choice" && !(p.choices instanceof List && p.choices)) return "tool '" + tool.id + "': choice parameter '" + p.name + "' has no choices"
+        }
+    }
     return null
 }
 
@@ -159,14 +246,17 @@ Map discoverApps() {
             if (apps.containsKey(name) || skip.contains(name)) return          // a higher-priority directory already provided it
             try {                                                            // one broken app must not hide the others
                 def entry = slurper.parseText(file.text)
+                def malformed = entryProblem(entry)
+                if (malformed) { problems << (file.name + ": " + malformed); skip << name; return }
                 name = entry.name
                 if (apps.containsKey(name) || skip.contains(name)) return          // the file name differs from the app name it claims: priority stays with the earlier directory
                 if (!new File(entry.python).exists()) { problems << (name + ": not available on this machine (interpreter " + entry.python + " is missing)"); skip << name; return }
                 def reason = untrustedReason(file, entry, index == 0)
                 if (reason) { problems << (name + ": ignored: " + reason); skip << name; return }
                 def schema = slurper.parseText(new File(entry.schema_path).text)
-                if (!(schema.protocol in SUPPORTED_PROTOCOLS)) throw new IllegalStateException("schema protocol " + schema.protocol + " is not supported")
-                apps[name] = entry + [schema: schema]
+                def badSchema = schemaProblem(schema)
+                if (badSchema) throw new IllegalStateException(badSchema)
+                apps[name] = entry + [pythonpath: entry.pythonpath ?: [], runtime_path: entry.runtime_path ?: "", schema: schema]
             } catch (Exception e) {
                 problems << (file.name + ": " + e.message)
             }
@@ -181,7 +271,8 @@ String writeRunRecord(Map app, Map tool, Map inputs, Map outcome, Map summary) {
     try {
         def runs = new File(lcHome(), "runs")
         def stamp = new java.text.SimpleDateFormat("yyyyMMdd'T'HHmmssSSS").format(new Date())
-        def folder = new File(runs, stamp + "_" + app.name + "_" + tool.id)
+        def folder = new File(runs, stamp + "_" + slug(app.name as String) + "_" + slug(tool.id as String))
+        if (folder.canonicalFile.parentFile != runs.canonicalFile) throw new IOException("run folder " + folder + " is not inside " + runs)
         folder.mkdirs()
         new File(folder, "run.json").text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
             app: app.name, app_version: app.version, tool: tool.id, host: "fiji", status: outcome.status, error: outcome.error,
@@ -189,7 +280,10 @@ String writeRunRecord(Map app, Map tool, Map inputs, Map outcome, Map summary) {
             results: (outcome.outputs?.results ?: []).collect { it.findAll { k, v -> k != "matrix_yx" } }]))
         (runs.listFiles({ File f -> f.isDirectory() } as FileFilter) ?: [] as File[]).sort().reverse().drop(50).each { it.deleteDir() }
         return folder.path
-    } catch (Exception ignored) { return null }       // a log must never break a run
+    } catch (Exception problem) {                       // a record must never break a run, but its absence must be visible
+        lcLog("WARNING", "could not write the run record: " + problem, problem)
+        return null
+    }
 }
 
 // ---------------------------------------------------------------- SciJava helpers
@@ -264,7 +358,7 @@ List buildToolDialog(Map tool, List<String> openImages) {
         if (p.group && p.group != lastGroup) heading(p.group as String)
         lastGroup = p.group ?: lastGroup
         def base = [label: p.label + (p.unit ? " (" + p.unit + ")" : ""), description: p.description, required: p.required]
-        if (p.nullable && p.type in ["string", "integer", "float", "choice"]) {   // optional with no default: "unset" must stay possible
+        if (p.nullable && p.type in ["string", "integer", "float", "choice", "boolean"]) {   // optional with no default: "unset" must stay possible
             addItem(info, "set_" + p.name, Boolean, [label: "Set " + p.label.toLowerCase(), required: false,
                                                      default: hooks.overrides.containsKey("set_" + p.name) ? hooks.overrides["set_" + p.name] : false])
         }
@@ -311,8 +405,12 @@ List buildToolDialog(Map tool, List<String> openImages) {
                 def fileSource = p.pixel_size_of ? hooks.overrides[p.pixel_size_of + "_file"] : null
                 if (microns == null && fileSource) microns = LCModule.micronsFromFile(new File(fileSource as String))
                 if (microns != null) value = microns                                                      // calibration prefill (unit-aware)
+                if (p.pixel_size_of && value == null)
+                    IJ.log("LabConstrictor: no pixel size found for '" + p.label + "' (the image has no usable calibration): enter it by hand")
                 addItem(info, p.name, Double, base + [default: (value ?: 0) as Double, min: p.minimum as Double, max: p.maximum as Double, step: 0.0001d])
                 break
+            default:
+                throw new IllegalArgumentException("parameter '" + p.name + "' has the unsupported type '" + p.type + "'")
         }
     }
     return [info, links]
@@ -336,6 +434,7 @@ List exportInputs(Map tool, def module, File jobDir) {
                 if (!p.required && !module.getInput("use_" + p.name)) break
                 if (!(value instanceof ImagePlus)) throw new IllegalArgumentException("'" + p.label + "' is required: open an image or choose a file")
                 def file = new File(jobDir, p.name + ".tif")
+                if (file.canonicalFile.parentFile != jobDir.canonicalFile) throw new IllegalArgumentException("'" + p.label + "': refusing to write outside " + jobDir)
                 def imp = value as ImagePlus
                 if (p.axes == "YX" && imp.getStackSize() > 1) {          // tool wants one plane: send the one on screen
                     IJ.log("LabConstrictor: '" + p.label + "' needs a single 2D plane - using the current plane (" + imp.getCurrentSlice() + " of " + imp.getStackSize() + ")")
@@ -370,23 +469,24 @@ Map runTool(Map app, Map tool, Map inputs) {
     def command = [app.python, "-m", "labconstrictor_tools", "serve", "--module", app.module] + app.pythonpath.collectMany { ["--pythonpath", it] }
     def env = [PYTHONPATH: app.runtime_path, PYTHONNOUSERSITE: "1", PYTHONIOENCODING: "utf-8", PYTHONUNBUFFERED: "1"]
     def service = new Service(new File(app.prefix), env, command as String[])
-    def workerOutput = []                                    // the worker's stderr: tracebacks, import errors, native crashes
-    service.debug { String line -> workerOutput << line; lcLog("DEBUG", "worker " + line) }
+    def workerOutput = new LinkedList<String>()              // the worker's stderr tail: tracebacks, import errors, native crashes
+    service.debug { String line -> synchronized (workerOutput) { workerOutput << line; if (workerOutput.size() > MAX_KEPT_LINES) workerOutput.removeFirst() }; lcLog("DEBUG", "worker " + line) }
     lcLog("INFO", "starting worker for " + app.name + " python=" + app.python + " module=" + app.module + " tool=" + tool.id)
     def progress = []
     def task = service.task(TOOL_PREFIX + tool.id, inputs)
     task.listen { event ->
         if (event.responseType == Service.ResponseType.UPDATE) {
-            progress << [event.message, event.current, event.maximum]
+            synchronized (progress) { progress << [event.message, event.current, event.maximum]; if (progress.size() > MAX_KEPT_LINES) progress.remove(0) }
             IJ.showStatus("LabConstrictor: " + (event.message ?: ""))
             if (event.maximum > 0) IJ.showProgress(event.current / (double) event.maximum)
         }
     }
+    def started = System.currentTimeMillis()
+    Long cancelSent = null
+    try {
     task.start()
     IJ.resetEscape()
-    def started = System.currentTimeMillis()
     def cancelAfter = hooks.cancelAfterMs()
-    Long cancelSent = null
     while (!task.status.isFinished()) {
         if (cancelSent == null && (IJ.escapePressed() || (cancelAfter != null && System.currentTimeMillis() - started > cancelAfter))) {
             task.cancel()
@@ -399,9 +499,11 @@ Map runTool(Map app, Map tool, Map inputs) {
         }
         Thread.sleep(50)
     }
-    IJ.showProgress(1.0)
-    service.close()
-    waitForExit(service, EXIT_WAIT_MS)
+    } finally {                                              // also when interrupted or when anything above throws: no worker left behind
+        IJ.showProgress(1.0)
+        try { service.close(); waitForExit(service, EXIT_WAIT_MS) }
+        catch (Throwable problem) { lcLog("ERROR", "could not close the worker cleanly: " + problem, problem); service.kill() }
+    }
     def complete = task.status == Service.TaskStatus.COMPLETE
     if (complete) lcLog("INFO", "task COMPLETE tool=" + tool.id + " timings=" + task.outputs?.timings)
     else lcLog("ERROR", "task " + task.status + " tool=" + tool.id + " error=" + (task.error ?: "") + (workerOutput ? "\n--- worker output ---\n" + workerOutput.takeRight(40).join("\n") : ""))
@@ -442,12 +544,22 @@ void waitForExit(Service service, int timeoutMs) {
 Map showResults(Map app, List results, Map images) {
     def summary = [:]
     results.each { r ->
-        switch (r.type) {
-            case ["image", "labels"]: showImage(app, r, summary); break
-            case "table": showTable(r, summary); break
-            case "values": IJ.log(app.display_name + " " + r.name + ": " + r.values); summary["values_" + r.name] = r.values; break
-            case "file": IJ.log("Output file: " + r.path); break
-            case "affine": showAffine(r, images, results, summary); break
+        try {
+            switch (r.type) {
+                case ["image", "labels"]: showImage(app, r, summary); break
+                case "table": showTable(r, summary); break
+                case "values": IJ.log(app.display_name + " " + r.name + ": " + r.values); summary["values_" + r.name] = r.values; break
+                case "file":
+                    if (!new File(r.path as String).isFile()) throw new IllegalStateException("the tool reported the file " + r.path + " but it does not exist")
+                    IJ.log("Output file: " + r.path); break
+                case "affine": showAffine(r, images, results, summary); break
+                default: throw new IllegalStateException("the tool returned a result of the type '" + r.type + "', which this version of Fiji LabConstrictor cannot show")
+            }
+        } catch (Exception problem) {
+            def text = "could not show the result '" + r.name + "': " + problem.message
+            lcLog("ERROR", text, problem)
+            IJ.log("LabConstrictor: " + text)
+            summary.display_errors = (summary.display_errors ?: []) + [text]
         }
     }
     return summary
@@ -499,6 +611,10 @@ FloatProcessor resample(ImagePlus source, int width, int height, List matrix) {
     def (a, b, ty) = matrix[0]
     def (c, d, tx) = matrix[1]
     double det = a * d - b * c
+    if (!matrix.flatten().every { it instanceof Number && Double.isFinite(it as double) })
+        throw new IllegalStateException("the alignment matrix contains values that are not finite numbers")
+    if (!(Math.abs(det) > 1e-9 * Math.max(1.0d, Math.abs(a * d) + Math.abs(b * c))))
+        throw new IllegalStateException("the alignment matrix is singular (determinant " + det + "): it cannot be applied")
     def input = source.getProcessor().convertToFloat()
     def output = new FloatProcessor(width, height)
     for (int y = 0; y < height; y++) {
@@ -531,7 +647,7 @@ class MacroModule {
 
 /** Options string of a macro call (run("LabConstrictor Tools...", "app=[X] tool=[Y] image=a.tif ...")), or null for an interactive run. */
 String macroOptions() {
-    def given = System.clearProperty("lc.macro.options") ?: Macro.getOptions()
+    def given = System.clearProperty("lc.macro.options") ?: Macro.getOptions()   // consumed here: the menu command waits for this (see its hand-off)
     return given && given.trim() ? given : null
 }
 
@@ -567,13 +683,42 @@ void recordRun(String appName, Map tool, def module) {
     } catch (Throwable ignored) { }          // recording must never break a run
 }
 
-/** Build the module values for a replayed call; unknown tools/parameters or missing images raise IllegalArgumentException (shown, logged). */
+/** The keys of a macro options string (`key=value key=[value with spaces] flag`). */
+List<String> macroKeys(String options) {
+    def keys = []
+    def matcher = options =~ /(\w+)(?:=(?:\[[^\]]*\]|\S*))?/
+    while (matcher.find()) keys << matcher.group(1)
+    return keys
+}
+
+/** Strict number parsing for macro values: no truncation, no NaN/Infinity, within the declared bounds. */
+def macroNumber(Map p, String text) {
+    def number
+    if (p.type == "integer") {
+        if (!(text.trim() ==~ /[+-]?\d+/)) throw new IllegalArgumentException("'" + p.label + "' must be a whole number, got '" + text + "'")
+        number = new BigInteger(text.trim().replaceFirst(/^\+/, ""))
+        if (number > Integer.MAX_VALUE || number < Integer.MIN_VALUE) throw new IllegalArgumentException("'" + p.label + "' is out of range: " + text)
+        number = number.intValue()
+    } else {
+        try { number = Double.parseDouble(text.trim()) } catch (NumberFormatException ignored) { throw new IllegalArgumentException("'" + p.label + "' must be a number, got '" + text + "'") }
+        if (!Double.isFinite(number)) throw new IllegalArgumentException("'" + p.label + "' must be a finite number, got '" + text + "'")
+    }
+    if (p.minimum != null && number < p.minimum) throw new IllegalArgumentException("'" + p.label + "' must be >= " + p.minimum + ", got " + text)
+    if (p.maximum != null && number > p.maximum) throw new IllegalArgumentException("'" + p.label + "' must be <= " + p.maximum + ", got " + text)
+    return number
+}
+
+/** Build the module values for a replayed call; unknown options, tools or parameters, missing images and invalid values raise IllegalArgumentException (shown, logged). */
 MacroModule moduleFromMacro(Map tool, String options) {
+    def allowed = ["app", "tool"] + tool.inputs.collectMany { p -> [p.name] + (p.type in ["image", "labels"] ? [p.name + "_file"] : []) }
+    def unknown = macroKeys(options).findAll { !(it in allowed) }
+    if (unknown) throw new IllegalArgumentException("unknown option" + (unknown.size() > 1 ? "s " : " ") + unknown.collect { "'" + it + "'" }.join(", ") +
+                                                    " (the tool accepts: " + allowed.findAll { it != "app" && it != "tool" }.join(", ") + ")")
     def module = new MacroModule()
     tool.inputs.each { p ->
         def text = Macro.getValue(options, p.name, null)
         def fileText = Macro.getValue(options, p.name + "_file", null)
-        if (p.nullable && p.type in ["string", "integer", "float", "choice"]) {   // optional, no default: not in the macro = unset
+        if (p.nullable && p.type in ["string", "integer", "float", "choice", "boolean"]) {   // optional, no default: not in the macro = unset
             module.values["set_" + p.name] = text != null
             if (text == null) return
         }
@@ -581,7 +726,8 @@ MacroModule moduleFromMacro(Map tool, String options) {
             case ["image", "labels"]:
                 if (fileText) { module.values[p.name + "_file"] = new File(fileText); module.values["use_" + p.name] = true; break }
                 if (text == null && !p.required) break
-                def imp = text ? WindowManager.getImage(text) : WindowManager.getCurrentImage()
+                if (text == null) throw new IllegalArgumentException("'" + p.label + "' is required: give " + p.name + "=<window title> or " + p.name + "_file=<path> (a macro never guesses the current image)")
+                def imp = WindowManager.getImage(text)
                 if (imp == null) throw new IllegalArgumentException("'" + p.label + "': no open image" + (text ? " called '" + text + "'" : "") + " (use " + p.name + "=<window title> or " + p.name + "_file=<path>)")
                 module.values[p.name] = imp; module.values["use_" + p.name] = true
                 break
@@ -589,13 +735,20 @@ MacroModule moduleFromMacro(Map tool, String options) {
                 if (text) module.values[p.name] = new File(text)
                 break
             case "boolean":
-                module.values[p.name] = text == null ? (p.default ?: false) : (text in ["", "true", "1", "yes"])
+                if (text == null) module.values[p.name] = p.default ?: false
+                else if (text.toLowerCase() in ["", "true", "1", "yes"]) module.values[p.name] = true       // a bare flag counts as true (macro convention)
+                else if (text.toLowerCase() in ["false", "0", "no"]) module.values[p.name] = false
+                else throw new IllegalArgumentException("'" + p.label + "' must be true or false, got '" + text + "'")
                 break
             case "integer":
-                module.values[p.name] = text == null ? (p.default ?: 0) as Integer : (text as Double).intValue()
+                module.values[p.name] = text == null ? (p.default ?: 0) as Integer : macroNumber(p, text)
                 break
             case "float":
-                module.values[p.name] = text == null ? (p.default ?: 0) as Double : text as Double
+                module.values[p.name] = text == null ? (p.default ?: 0) as Double : macroNumber(p, text)
+                break
+            case "choice":
+                if (text != null && !(text in p.choices)) throw new IllegalArgumentException("'" + p.label + "' must be one of " + p.choices + ", got '" + text + "'")
+                module.values[p.name] = text == null ? (p.default ?: p.choices[0]) : text
                 break
             default:
                 module.values[p.name] = text == null ? (p.default ?: "") : text
@@ -648,19 +801,18 @@ def labConstrictorRun() {
     }
 
     def jobDir = Files.createTempDirectory("lcjob_fiji_").toFile()
-    List exported
-    try {
-        exported = exportInputs(tool, module, jobDir)
-    } catch (IllegalArgumentException problem) {               // missing file, nothing chosen for a required image
-        if (hooks.interactive) IJ.error("LabConstrictor", problem.message)
-        jobDir.deleteDir()
-        return hooks.finish(summary + [error: problem.message])
-    }
-    def (inputs, images) = exported
-    try {
+    try {                                                        // the folder goes whatever happens from here on
+        List exported
+        try {
+            exported = exportInputs(tool, module, jobDir)
+        } catch (IllegalArgumentException problem) {           // missing file, nothing chosen for a required image
+            if (hooks.interactive) IJ.error("LabConstrictor", problem.message)
+            return hooks.finish(summary + [error: problem.message])
+        }
+        def (inputs, images) = exported
         runAndShow(app, tool, inputs, images, summary)
     } finally {
-        jobDir.deleteDir()                                       // also when running or showing the results throws
+        jobDir.deleteDir()
     }
     hooks.finish(summary)
 }
@@ -674,6 +826,8 @@ void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
     if (outcome.complete) {
         summary.interpreter = outcome.outputs.diagnostics
         summary << showResults(app, outcome.outputs.results, images)
+        if (summary.display_errors && hooks.interactive)
+            IJ.error("LabConstrictor: " + app.display_name, "The tool finished, but not everything could be shown:\n" + summary.display_errors.join("\n"))
     } else if (outcome.status == "FAILED" && !outcome.cancelRequested && (outcome.error ?: "") =~ /^\[(no_match|no_result)\] /) {
         // an outcome ("nothing found"), not a fault: a plain message, not an error dialog
         summary.no_match_message = outcome.error.replaceFirst(/^\[[a-z_]+\] /, "")
