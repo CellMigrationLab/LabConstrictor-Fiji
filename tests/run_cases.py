@@ -75,6 +75,11 @@ def check(expect, report):
             found = found.get(part) if isinstance(found, dict) else None
         if not isinstance(found, str) or text not in found:
             failed.append("%s = %r does not contain %r" % (dotted, found, text))
+    for dotted, texts in expect.get("absent", {}).items():
+        found = report.get(dotted)
+        for text in texts:
+            if isinstance(found, str) and text in found:
+                failed.append("%s must not contain %r" % (dotted, text))
     for key, limit in expect.get("max", {}).items():
         if report.get(key) is None or report[key] > limit:
             failed.append("%s = %r > %r" % (key, report.get(key), limit))

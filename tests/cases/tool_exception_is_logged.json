@@ -13,6 +13,14 @@
  "tool": "Raises with a traceback",
  "expect": {
   "status": "FAILED",
+  "match": {
+   "failure_message": "ZeroDivisionError"
+  },
+  "absent": {
+   "failure_message": [
+    "[SERVICE-"
+   ]
+  },
   "log_contains": [
    "fiji: ---- session start",
    "fiji: starting worker for crashy",
