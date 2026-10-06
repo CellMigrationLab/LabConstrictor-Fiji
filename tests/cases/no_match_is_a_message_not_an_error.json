@@ -1,0 +1,3 @@
+{"app": "nullable", "tool": "No match",
+ "register": [{"name": "nullable", "prefix": "${PREFIX}", "module": "tools", "pythonpath": ["${V3}/tests/nullable_app"]}],
+ "expect": {"status": "FAILED", "match": {"no_match_message": "No match found: try another setting."}}}

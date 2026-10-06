@@ -674,6 +674,11 @@ void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
     if (outcome.complete) {
         summary.interpreter = outcome.outputs.diagnostics
         summary << showResults(app, outcome.outputs.results, images)
+    } else if (outcome.status == "FAILED" && !outcome.cancelRequested && (outcome.error ?: "") =~ /^\[(no_match|no_result)\] /) {
+        // an outcome ("nothing found"), not a fault: a plain message, not an error dialog
+        summary.no_match_message = outcome.error.replaceFirst(/^\[[a-z_]+\] /, "")
+        if (hooks.interactive) IJ.showMessage("LabConstrictor: " + app.display_name, summary.no_match_message)
+        IJ.showStatus("LabConstrictor: " + summary.no_match_message)
     } else if (outcome.status in ["FAILED", "CRASHED"] && !outcome.cancelRequested) {
         summary.failure_message = failureMessage(outcome, summary)
         if (hooks.interactive) IJ.error("LabConstrictor: " + app.display_name, summary.failure_message)
