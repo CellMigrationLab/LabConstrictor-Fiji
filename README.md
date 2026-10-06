@@ -55,5 +55,7 @@ keeping the worker alive between several calls in a loop, a menu entry per tool.
 
 Cases are JSON (`tests/cases/*.json`): the app and tool, images to preload, dialog overrides, optional cancel timing, expectations.
 
+Manifest hints: parameters of a `group` are shown together under a heading and `advanced` ones last under "Advanced settings"; `enabled_when` is not applied (SciJava dialogs cannot grey fields out dynamically), so all parameters stay editable and the tool must accept them either way. The Napari widget implements all three.
+
 Status: **testing phase**. Tested on Linux only (Fiji with Java 21, Xvfb). Windows and macOS are untested; SciJava Command generation
 (a menu command per tool, headless use) is not implemented. License: MIT.

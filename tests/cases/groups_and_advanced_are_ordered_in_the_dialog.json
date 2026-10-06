@@ -1,0 +1,4 @@
+{"app": "presentation", "tool": "Grouped settings",
+ "register": [{"name": "presentation", "prefix": "${PREFIX}", "module": "tools", "pythonpath": ["${V3}/tests/presentation_app"]}],
+ "expect": {"status": "COMPLETE",
+            "equals": {"dialog_inputs": ["heading_0", "mode", "method", "heading_1", "size", "heading_2", "heading_3", "fixed_seed", "set_seed", "seed"]}}}

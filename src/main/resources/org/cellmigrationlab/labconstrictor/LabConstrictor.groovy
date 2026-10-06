@@ -234,6 +234,17 @@ String pickOne(String title, String label, List<String> choices, String preferre
 }
 
 // ---------------------------------------------------------------- schema -> dialog
+/** Inputs in the order the dialog shows them: the parameters of a `group` together (where the group first appears), `advanced` ones
+ *  after all the others. Without group/advanced hints the order is unchanged. (Same rule as the Napari form.) */
+List presentationOrder(List inputs) {
+    if (!inputs.any { it.group || it.advanced }) return inputs
+    def first = [:]                                                   // [advanced?, group] -> index where the group first appears
+    inputs.eachWithIndex { p, i -> if (p.group) first.putIfAbsent([p.advanced ? 1 : 0, p.group], i) }
+    def keyOf = { p, i -> [p.advanced ? 1 : 0, p.group ? first[[p.advanced ? 1 : 0, p.group]] : i, i] }
+    def keyed = inputs.withIndex().collect { p, i -> [p, keyOf(p, i)] }
+    return keyed.sort(false) { a, b -> a[1][0] <=> b[1][0] ?: a[1][1] <=> b[1][1] ?: a[1][2] <=> b[1][2] }.collect { it[0] }
+}
+
 /** Build the tool dialog from the schema. Returns [info, links]. */
 List buildToolDialog(Map tool, List<String> openImages) {
     def info = newInfo(tool.label)
@@ -246,7 +257,12 @@ List buildToolDialog(Map tool, List<String> openImages) {
         addItem(info, "image_source_note", String, [label: "Image source", message: true, required: false,
                                                     default: "Images are taken from the open windows. To use a file instead, choose it in the matching '(or file)' field."])
     }
-    tool.inputs.each { p ->
+    def lastGroup = null, advancedShown = false, headings = 0
+    def heading = { String text -> addItem(info, "heading_" + (headings++), String, [label: text, message: true, required: false, default: "— " + text + " —"]) }
+    presentationOrder(tool.inputs).each { p ->
+        if (p.advanced && !advancedShown) { advancedShown = true; heading("Advanced settings"); lastGroup = null }
+        if (p.group && p.group != lastGroup) heading(p.group as String)
+        lastGroup = p.group ?: lastGroup
         def base = [label: p.label + (p.unit ? " (" + p.unit + ")" : ""), description: p.description, required: p.required]
         if (p.nullable && p.type in ["string", "integer", "float", "choice"]) {   // optional with no default: "unset" must stay possible
             addItem(info, "set_" + p.name, Boolean, [label: "Set " + p.label.toLowerCase(), required: false,
@@ -625,6 +641,7 @@ def labConstrictorRun() {
         def dialogStarted = System.nanoTime()
         def (info, links) = buildToolDialog(tool, openImages)
         summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / 1e9
+        summary.dialog_inputs = info.inputs().collect { it.getName() }
         module = harvest(info, tool.label, links)
         if (module == null) return hooks.finish(summary + [cancelled: true])
         recordRun(appName, tool, module)
