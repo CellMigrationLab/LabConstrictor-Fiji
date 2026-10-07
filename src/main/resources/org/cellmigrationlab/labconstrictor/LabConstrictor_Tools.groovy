@@ -994,11 +994,59 @@ def labConstrictorRun() {
     hooks.finish(summary)
 }
 
+// ---------------------------------------------------------------- Copy as command (same text as labconstrictor_tools.command)
+@Field final Map<String, String> FILE_PLACEHOLDERS = [image: "image.tif", labels: "labels.tif", table: "table.csv", file: "file", folder: "folder"]
+
+String shellQuote(String text, boolean windows) {
+    if (windows) return (text && text ==~ /[A-Za-z0-9_.:\/\\=+,-]+/) ? text : '"' + text.replace('"', '\\"') + '"'
+    return (text && text ==~ /[A-Za-z0-9_@%+=:,.\/-]+/) ? text : "'" + text.replace("'", "'\"'\"'") + "'"
+}
+
+/** The values a command line needs: the file behind each image (its own file, or the file the open image came from), else a placeholder. */
+Map commandValues(Map tool, Map inputs, Map images) {
+    def values = [:], missing = []
+    tool.inputs.each { p ->
+        def value = inputs[p.name]
+        if (p.type in ["image", "labels"]) {
+            def source = images[p.name]
+            def path = source instanceof ImagePlus ? ((source.getOriginalFileInfo()?.directory && source.getOriginalFileInfo()?.fileName) ? new File(source.getOriginalFileInfo().directory, source.getOriginalFileInfo().fileName).path : null)
+                     : source instanceof String ? source : null
+            if (path != null) values[p.name] = path
+        } else if (value != null) values[p.name] = value
+        if (p.type in FILE_PLACEHOLDERS.keySet() && p.required && values[p.name] == null) { values[p.name] = FILE_PLACEHOLDERS[p.type]; missing << p.name }
+    }
+    return [values: values, missing: missing]
+}
+
+String commandText(String kind, Map app, Map tool, Map inputs, Map images) {
+    def built = commandValues(tool, inputs, images)
+    def note = built.missing ? "# replace the file for: " + built.missing.join(", ") + "\n" : ""
+    def given = tool.inputs.findAll { built.values.containsKey(it.name) }
+    if (kind == "python") {
+        def literal = { v -> v instanceof Boolean ? (v ? "True" : "False") : v instanceof Number ? v.toString() : "'" + v.toString().replace("\\", "\\\\").replace("'", "\\'") + "'" }
+        def body = given ? "{\n" + given.collect { "    '" + it.name + "': " + literal(built.values[it.name]) + "," }.join("\n") + "\n}" : "{}"
+        return note + "from labconstrictor_tools import client\n\ntask = client.run_once('" + app.name + "', '" + tool.id + "', " + body + ")\n" +
+               'print(task.status, task.outputs if task.status == "COMPLETE" else task.error)'
+    }
+    boolean windows = System.getProperty("os.name").toLowerCase().contains("win")
+    def parts = [app.python as String, "-m", "labconstrictor_tools", "run", app.name as String, tool.id as String].collect { shellQuote(it, windows) }
+    given.each { p ->
+        def v = built.values[p.name]
+        parts << shellQuote(p.name + "=" + (v instanceof Boolean ? (v ? "true" : "false") : v.toString()), windows)
+    }
+    return note + parts.join(" ")
+}
+
 void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
     def outcome = runTool(app, tool, inputs)
     summary << [request: inputs, status: outcome.status, error: outcome.error, progress_events: outcome.progress,
                 worker_alive_after: outcome.workerAlive, cancel_requested: outcome.cancelRequested]
     summary.timings.worker_run_s = outcome.seconds
+    try {                                                    // Copy as command: the Log carries what repeats this run outside Fiji
+        summary.command_line = commandText("terminal", app, tool, inputs, images)
+        summary.python_snippet = commandText("python", app, tool, inputs, images)
+        IJ.log("LabConstrictor: to repeat this run outside Fiji, copy from here:\n" + summary.command_line + "\n--- or in Python:\n" + summary.python_snippet)
+    } catch (Throwable problem) { lcLog("WARN", "could not build the command text: " + problem, problem) }
     summary.run_record = writeRunRecord(app, tool, inputs, outcome, summary)
     if (outcome.complete) {
         summary.interpreter = outcome.outputs.diagnostics
