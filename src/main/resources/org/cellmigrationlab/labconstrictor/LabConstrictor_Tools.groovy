@@ -712,7 +712,12 @@ void showPoints(Map app, Map r, Map images, Map summary, boolean replace) {
     def table = ResultsTable.open(r.path)
     def target = images[r.apply_to]
     if (!(target instanceof ImagePlus)) target = lastShownImage ?: WindowManager.getCurrentImage()
-    if (!(target instanceof ImagePlus)) throw new IllegalStateException("no image to place the points on: open or produce an image first")
+    if (!(target instanceof ImagePlus)) {                    // nothing to place them on: the table is still the result
+        table.show(app.name + ":" + r.name)
+        IJ.log("LabConstrictor: '" + r.name + "' has " + table.size() + " point(s) but no image is open to place them on: shown as a table (open an image and run again to see them on it)")
+        summary["points_" + r.name] = [count: table.size(), image: null, columns: table.getHeadings() as List]
+        return
+    }
     def xs = new float[table.size()], ys = new float[table.size()]
     for (int i = 0; i < table.size(); i++) { xs[i] = (float) (table.getValue("x", i) + 0.5d); ys[i] = (float) (table.getValue("y", i) + 0.5d) }   // pixel centres
     def roi = new ij.gui.PointRoi(xs, ys, xs.length)
