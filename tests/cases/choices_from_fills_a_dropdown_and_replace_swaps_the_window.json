@@ -1,0 +1,7 @@
+{"app": "interactive", "tool": "Answer",
+ "register": [{"name": "interactive", "prefix": "${PREFIX}", "module": "tools", "pythonpath": ["${V3}/tests/interactive_app"]}],
+ "preload": [{"path": "${FIXTURES}/sample.tif", "title": "interactive:view"}],
+ "overrides": {"folder": "${FIXTURES}/options", "set_guess": true, "guess": "Treated"},
+ "script_mode_only": true,
+ "expect": {"status": "COMPLETE",
+            "equals": {"dialog_choices": {"guess": ["Control", "Treated"]}, "open_windows": ["interactive:view"]}}}

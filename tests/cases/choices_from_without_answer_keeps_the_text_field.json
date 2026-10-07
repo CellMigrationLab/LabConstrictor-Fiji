@@ -1,0 +1,5 @@
+{"app": "interactive", "tool": "Answer",
+ "register": [{"name": "interactive", "prefix": "${PREFIX}", "module": "tools", "pythonpath": ["${V3}/tests/interactive_app"]}],
+ "overrides": {"folder": "${FIXTURES}/no_options", "set_guess": true, "guess": "anything"},
+ "script_mode_only": true,
+ "expect": {"status": "COMPLETE", "equals": {"dialog_choices": {}}}}

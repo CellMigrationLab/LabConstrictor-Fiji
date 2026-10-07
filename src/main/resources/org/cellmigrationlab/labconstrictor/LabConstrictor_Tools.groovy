@@ -344,7 +344,7 @@ List presentationOrder(List inputs) {
 }
 
 /** Build the tool dialog from the schema. Returns [info, links]. */
-List buildToolDialog(Map tool, List<String> openImages) {
+List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
     def info = newInfo(tool.label)
     def links = [:]                                          // image param -> [pixel-size params]
     tool.inputs.findAll { it.pixel_size_of }.each { links.get(it.pixel_size_of, []) << it.name }
@@ -397,7 +397,10 @@ List buildToolDialog(Map tool, List<String> openImages) {
             case "folder":
                 addItem(info, p.name, File, base + [default: override ? new File(override as String) : null]).setWidgetStyle("directory"); break
             case "string":
-                addItem(info, p.name, String, base + [default: override ?: p.default ?: ""]); break
+                def options = choiceLists[p.name]                  // ChoicesFrom answered: a dropdown (otherwise the plain text field)
+                if (options) addItem(info, p.name, String, base + [choices: options, default: options.contains(override) ? override : options.contains(p.default) ? p.default : options[0]])
+                else addItem(info, p.name, String, base + [default: override ?: p.default ?: ""])
+                break
             case "boolean":
                 addItem(info, p.name, Boolean, base + [default: overridden ? override : (p.default ?: false)]); break
             case "choice":
@@ -470,6 +473,72 @@ List exportInputs(Map tool, def module, File jobDir) {
     }
     inputs[JOB_DIR_KEY] = jobDir.path
     return [inputs, images]
+}
+
+// ---------------------------------------------------------------- remembered values and dynamic choices (ChoicesFrom)
+/** Names of the parameters that some ChoicesFrom of the app depends on: the only values kept between runs. */
+Set<String> dependsNames(Map app) {
+    def names = [] as Set
+    app.schema.tools.each { tool -> tool.inputs.each { p -> if (p.choices_from?.depends instanceof List) names.addAll(p.choices_from.depends) } }
+    return names
+}
+
+File stateFile(Map app) { return new File(new File(lcHome(), "state"), slug(app.name as String) + ".json") }
+
+Map readState(Map app) {
+    try {
+        def file = stateFile(app)
+        def data = file.isFile() ? new JsonSlurper().parseText(file.text) : [:]
+        return data instanceof Map ? data : [:]
+    } catch (Exception problem) {
+        lcLog("WARNING", "could not read the remembered values: " + problem)
+        return [:]
+    }
+}
+
+/** Keep the values of the parameters ChoicesFrom depends on, so the next dialog can ask the source tool (Fiji builds the dialog before anything is typed). */
+void rememberDepends(Map app, Map tool, Map inputs) {
+    try {
+        def keep = dependsNames(app)
+        def now = tool.inputs.findAll { it.name in keep && inputs[it.name] instanceof String }.collectEntries { [(it.name): inputs[it.name]] }
+        if (!now) return
+        def state = readState(app) + now
+        def file = stateFile(app)
+        file.parentFile.mkdirs()
+        file.text = groovy.json.JsonOutput.toJson(state)
+    } catch (Exception problem) { lcLog("WARNING", "could not remember the values: " + problem) }
+}
+
+/** ChoicesFrom parameters of `tool` -> their options, asked of the source tool with the values of the previous run; unanswered ones are left out (text field). */
+Map choiceListsFor(Map app, Map tool) {
+    def lists = [:]
+    def state = null
+    tool.inputs.findAll { it.choices_from instanceof Map }.each { p ->
+        state = state ?: readState(app)
+        def source = app.schema.tools.find { it.id == p.choices_from.tool }
+        def given = hooks.overrides.containsKey("_choices_" + p.name) ? hooks.overrides["_choices_" + p.name] : null
+        try {
+            if (given instanceof List) { lists[p.name] = given; return }
+            if (source == null || !(p.choices_from.depends instanceof List)) return
+            def request = [:]
+            for (name in p.choices_from.depends) {
+                def value = hooks.overrides.containsKey(name) ? hooks.overrides[name] : state[name]
+                def type = tool.inputs.find { it.name == name }?.type
+                if (!(value instanceof String) || !value || (type == "folder" && !new File(value).isDirectory())) return    // not known yet: text field
+                request[name] = value
+            }
+            def jobDir = Files.createTempDirectory("lcchoices_fiji_").toFile()
+            try {
+                request[JOB_DIR_KEY] = jobDir.path
+                def outcome = runTool(app, source, request)
+                if (!outcome.complete) { lcLog("WARNING", "choices of '" + p.name + "' not available: " + outcome.error); return }
+                def found = outcome.outputs.results.find { it.type == "values" && it.values?.get(p.choices_from.field ?: "choices") instanceof List }
+                def options = found?.values?.get(p.choices_from.field ?: "choices")?.collect { it.toString() }
+                if (options) lists[p.name] = options
+            } finally { jobDir.deleteDir() }
+        } catch (Exception problem) { lcLog("WARNING", "could not get the choices of '" + p.name + "': " + problem, problem) }
+    }
+    return lists
 }
 
 // ---------------------------------------------------------------- run
@@ -552,12 +621,13 @@ void waitForExit(Service service, int timeoutMs) {
 }
 
 // ---------------------------------------------------------------- results (switch on result type only)
-Map showResults(Map app, List results, Map images) {
+Map showResults(Map app, List results, Map images, Map tool = null) {
     def summary = [:]
+    def replaced = (tool?.outputs ?: []).findAll { it.replace }.collect { it.name } as Set
     results.each { r ->
         try {
             switch (r.type) {
-                case ["image", "labels"]: showImage(app, r, summary); break
+                case ["image", "labels"]: showImage(app, r, summary, r.name in replaced); break
                 case "table": showTable(r, summary); break
                 case "values": IJ.log(app.display_name + " " + r.name + ": " + r.values); summary["values_" + r.name] = r.values; break
                 case "file":
@@ -576,10 +646,14 @@ Map showResults(Map app, List results, Map images) {
     return summary
 }
 
-void showImage(Map app, Map r, Map summary) {
+void showImage(Map app, Map r, Map summary, boolean replace = false) {
     def imp = IJ.openImage(r.path)
     if (imp == null) { IJ.error("LabConstrictor", "Fiji cannot open result image " + r.name); return }
     def title = app.name + ":" + r.name
+    if (replace) {                                           // Replace(): the previous result of this output makes way (no "name [1]" pile)
+        def previous = WindowManager.getImage(title)
+        if (previous != null) { previous.changes = false; previous.close() }
+    }
     for (int n = 1; WindowManager.getImage(title) != null; n++) title = app.name + ":" + r.name + " [" + n + "]"   // a chain must be able to tell results apart
     imp.setTitle(title)
     imp.show()
@@ -803,9 +877,10 @@ def labConstrictorRun() {
 
         def openImages = WindowManager.getImageTitles() as List<String>
         def dialogStarted = System.nanoTime()
-        def (info, links) = buildToolDialog(tool, openImages)
+        def (info, links) = buildToolDialog(tool, openImages, choiceListsFor(app, tool))
         summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / 1e9
         summary.dialog_inputs = info.inputs().collect { it.getName() }
+        summary.dialog_choices = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getChoices() as List] }
         module = harvest(info, tool.label, links)
         if (module == null) return hooks.finish(summary + [cancelled: true])
         recordRun(appName, tool, module)
@@ -822,6 +897,7 @@ def labConstrictorRun() {
         }
         def (inputs, images) = exported
         runAndShow(app, tool, inputs, images, summary)
+        if (summary.status == "COMPLETE") rememberDepends(app, tool, inputs)
     } finally {
         jobDir.deleteDir()
     }
@@ -836,7 +912,7 @@ void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
     summary.run_record = writeRunRecord(app, tool, inputs, outcome, summary)
     if (outcome.complete) {
         summary.interpreter = outcome.outputs.diagnostics
-        summary << showResults(app, outcome.outputs.results, images)
+        summary << showResults(app, outcome.outputs.results, images, tool)
         if (summary.display_errors && hooks.interactive)
             IJ.error("LabConstrictor: " + app.display_name, "The tool finished, but not everything could be shown:\n" + summary.display_errors.join("\n"))
     } else if (outcome.status == "FAILED" && !outcome.cancelRequested && (outcome.error ?: "") =~ /^\[(no_match|no_result)\] /) {
