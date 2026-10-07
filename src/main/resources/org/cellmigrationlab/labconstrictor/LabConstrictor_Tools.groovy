@@ -634,7 +634,7 @@ Map showResults(Map app, List results, Map images, Map tool = null) {
                 case "file":
                     if (!new File(r.path as String).isFile()) throw new IllegalStateException("the tool reported the file " + r.path + " but it does not exist")
                     IJ.log("Output file: " + r.path); break
-                case "affine": showAffine(r, images, results, summary); break
+                case "affine": showAffine(r, images, results, summary, r.name in replaced); break
                 default: throw new IllegalStateException("the tool returned a result of the type '" + r.type + "', which this version of Fiji LabConstrictor cannot show")
             }
         } catch (Exception problem) {
@@ -675,7 +675,7 @@ ImagePlus asImage(def image) {                          // inputs given as files
     return imp
 }
 
-void showAffine(Map r, Map images, List results, Map summary) {
+void showAffine(Map r, Map images, List results, Map summary, boolean replace = false) {
     def source = asImage(images[r.apply_to]), target = asImage(images[r.relative_to ?: r.apply_to])
     def warped = resample(source, target.getWidth(), target.getHeight(), r.matrix_yx)
     summary.affine_matrix = r.matrix_yx
@@ -688,7 +688,12 @@ void showAffine(Map r, Map images, List results, Map summary) {
         int g = green.get(i) & 0xff, m = magenta.get(i) & 0xff
         rgb.set(i, (m << 16) | (g << 8) | m)                  // aligned structures turn white
     }
-    def overlay = new ImagePlus("Alignment overlay (green = " + (r.relative_to ?: "") + ", magenta = " + r.apply_to + ")", rgb)
+    def overlayTitle = "Alignment overlay (green = " + (r.relative_to ?: "") + ", magenta = " + r.apply_to + ")"
+    if (replace) {                                           // Replace(): the previous overlay of this alignment makes way
+        def previous = WindowManager.getImage(overlayTitle)
+        if (previous != null) { previous.changes = false; previous.close() }
+    }
+    def overlay = new ImagePlus(overlayTitle, rgb)
     overlay.show()
     summary.overlay_title = overlay.getTitle()
 }
