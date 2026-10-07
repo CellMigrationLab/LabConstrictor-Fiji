@@ -2,7 +2,7 @@
 import time
 from typing import Annotated, Optional
 import numpy as np
-from labconstrictor_tools import ApplyTo, Image, ChoicesFrom, ClearAfterRun, ImageOut, MessageOut, Name, PointsOut, Replace, Scalars, ToolError, tool
+from labconstrictor_tools import ApplyTo, Image, ChoicesFrom, ClearAfterRun, ImageOut, MessageOut, Name, PointsOut, Replace, Scalars, ShapesOut, ToolError, tool
 
 @tool("Options: broken")
 def broken_options(mode: str = "x") -> Scalars:
@@ -33,3 +33,20 @@ def dims(ndim: int = 2, rows: int = 3, text_length: int = 10, fail: bool = False
 def spots(image: Image, rows: int = 3) -> Annotated[PointsOut, Name("pts"), ApplyTo("image"), Replace()]:
     import pandas as pd
     return pd.DataFrame({"y": np.arange(rows, dtype=float) * 10, "x": np.arange(rows, dtype=float) * 10}) if rows else pd.DataFrame({"y": [], "x": []})
+
+
+@tool("Outlines")
+def outlines(image: Image, count: int = 3, holes: bool = False) -> Annotated[ShapesOut, Name("shp"), ApplyTo("image"), Replace()]:
+    """`count` small triangles on a grid (0 = none); with holes=True each is a square with a hole, split in two parts."""
+    features = []
+    for i in range(count):
+        x0, y0 = (i % 300) * 3.0, (i // 300) * 3.0
+        outer = [[x0, y0], [x0 + 2, y0], [x0 + 2, y0 + 2], [x0, y0 + 2], [x0, y0]]
+        if holes:
+            hole = [[x0 + 0.5, y0 + 0.5], [x0 + 1.5, y0 + 0.5], [x0 + 1.5, y0 + 1.5], [x0 + 0.5, y0 + 1.5], [x0 + 0.5, y0 + 0.5]]
+            far = [[x0 + 100, y0], [x0 + 102, y0], [x0 + 102, y0 + 2], [x0 + 100, y0]]
+            geometry = {"type": "MultiPolygon", "coordinates": [[outer, hole], [far]]}
+        else:
+            geometry = {"type": "Polygon", "coordinates": [[[x0, y0], [x0 + 2, y0], [x0, y0 + 2], [x0, y0]]]}
+        features.append({"type": "Feature", "properties": {"label": i + 1, "name": "noyau µ→✓"}, "geometry": geometry})
+    return {"type": "FeatureCollection", "features": features}

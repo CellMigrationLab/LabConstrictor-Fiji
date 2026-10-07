@@ -672,6 +672,7 @@ Map showResults(Map app, List results, Map images, Map tool = null) {
                 case "values": IJ.log(app.display_name + " " + r.name + ": " + r.values); summary["values_" + r.name] = r.values; break
                 case "message": showMessage(app, r, summary); break
                 case "points": showPoints(app, r, images, summary, r.name in replaced); break
+                case "shapes": showShapes(app, r, images, summary, r.name in replaced); break
                 case "file":
                     if (!new File(r.path as String).isFile()) throw new IllegalStateException("the tool reported the file " + r.path + " but it does not exist")
                     IJ.log("Output file: " + r.path); break
@@ -736,6 +737,62 @@ void showPoints(Map app, Map r, Map images, Map summary, boolean replace) {
     manager.addRoi(roi)
     table.show(app.name + ":" + r.name)
     summary["points_" + r.name] = [count: table.size(), image: target.getTitle(), columns: table.getHeadings() as List]
+}
+
+@groovy.transform.Field final int MAX_SHAPES = 50000       // outlines shown on the image
+@groovy.transform.Field final int MAX_MANAGER_SHAPES = 1000  // outlines also listed in the ROI Manager (it gets very slow with more)
+
+/** Outlines (GeoJSON Polygon / MultiPolygon, [x, y] with pixel centres at integers) in the frame of the image named by apply_to
+ *  (else the first image of this run, else the current image): an overlay on that image with holes kept (composite ROIs), and the
+ *  first MAX_MANAGER_SHAPES also in the ROI Manager. Replace() swaps this output's previous outlines. */
+void showShapes(Map app, Map r, Map images, Map summary, boolean replace) {
+    def collection = new JsonSlurper().parse(new File(r.path as String), "UTF-8")
+    def target = images[r.apply_to]
+    if (!(target instanceof ImagePlus)) target = lastShownImage ?: WindowManager.getCurrentImage()
+    def prefix = app.name + ":" + r.name
+    def rois = [], holes = 0, total = 0
+    collection.features.each { feature ->
+        def geometry = feature.geometry
+        def parts = geometry.type == "Polygon" ? [geometry.coordinates] : geometry.coordinates
+        parts.each { part ->
+            total++
+            if (rois.size() >= MAX_SHAPES) return
+            def path = new java.awt.geom.Path2D.Double(java.awt.geom.Path2D.WIND_EVEN_ODD)
+            part.each { ring ->
+                ring.eachWithIndex { point, i ->
+                    double x = (point[0] as double) + 0.5d, y = (point[1] as double) + 0.5d       // pixel centres
+                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                }
+                path.closePath()
+            }
+            if (part.size() > 1) holes++
+            def roi = new ij.gui.ShapeRoi(path)
+            def label = feature.properties?.label
+            roi.setName(prefix + " " + (label != null ? label : rois.size() + 1) + (parts.size() > 1 ? "." + (rois.size() + 1) : ""))
+            rois << roi
+        }
+    }
+    if (!(target instanceof ImagePlus)) {
+        IJ.log("LabConstrictor: '" + r.name + "' has " + total + " outline(s) but no image is open to place them on (open an image and run again)")
+        summary["shapes_" + r.name] = [count: total, shown: 0, image: null]
+        return
+    }
+    def overlay = target.getOverlay() ?: new ij.gui.Overlay()
+    def manager = ij.plugin.frame.RoiManager.getRoiManager()
+    if (replace) {                                           // Replace(): the previous outlines of this output make way
+        for (int i = overlay.size() - 1; i >= 0; i--) if (overlay.get(i).getName()?.startsWith(prefix + " ")) overlay.remove(i)
+        def indexes = (0..<manager.getCount()).findAll { manager.getRoi(it).getName()?.startsWith(prefix + " ") } as int[]
+        if (indexes) manager.setSelectedIndexes(indexes).with { manager.runCommand("Delete") }
+    }
+    rois.each { overlay.add(it) }
+    target.setOverlay(overlay)
+    overlay.setStrokeColor(java.awt.Color.YELLOW)
+    target.updateAndDraw()
+    rois.take(MAX_MANAGER_SHAPES).each { manager.addRoi(it.clone() as ij.gui.Roi) }
+    if (total > MAX_SHAPES) IJ.log("LabConstrictor: '" + r.name + "': showing the first " + MAX_SHAPES + " of " + total + " outlines")
+    if (rois.size() > MAX_MANAGER_SHAPES) IJ.log("LabConstrictor: '" + r.name + "': the ROI Manager lists the first " + MAX_MANAGER_SHAPES + " of " + rois.size() + " outlines (all are in the overlay)")
+    if (holes) IJ.log("LabConstrictor: '" + r.name + "': " + holes + " outline(s) have holes (kept in the overlay and the ROI Manager)")
+    summary["shapes_" + r.name] = [count: total, shown: rois.size(), holes: holes, image: target.getTitle(), overlay_size: overlay.size(), manager_count: manager.getCount()]
 }
 
 void showTable(Map r, Map summary) {
