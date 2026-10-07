@@ -12,6 +12,7 @@ public class LabConstrictorCopyCommand extends LabConstrictorCommand {
 
 	@Override
 	protected String macroOptions() {
-		return "copy_last=true";
+		final String given = ij.Macro.getOptions();   // run("Copy last run as command", "kind=python") picks the Python snippet
+		return "copy_last=true" + (given == null || given.trim().isEmpty() ? "" : " " + given);
 	}
 }

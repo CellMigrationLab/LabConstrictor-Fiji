@@ -1,0 +1,4 @@
+{"app": "synthetic", "tool": "Kitchen sink",
+ "last_command": {"app": "synthetic", "tool": "scalar_echo", "terminal": "python -m labconstrictor_tools run synthetic scalar_echo a=1.5", "python": "task = client.run_once('synthetic', 'scalar_echo', {'a': 1.5})"},
+ "macro": "copy_last=true kind=python",
+ "expect": {"equals": {"copied_kind": "python"}, "match": {"copied_last": "client.run_once('synthetic', 'scalar_echo'"}}}
