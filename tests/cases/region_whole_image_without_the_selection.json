@@ -1,0 +1,35 @@
+{
+ "app": "interactions",
+ "tool": "Find bright spots",
+ "register": [
+  {
+   "name": "interactions",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.interactions",
+   "pythonpath": []
+  }
+ ],
+ "script_mode_only": true,
+ "preload": [
+  {
+   "path": "${FIXTURES}/blobs.tif",
+   "title": "blobs.tif"
+  }
+ ],
+ "select": [
+  "blobs.tif"
+ ],
+ "overrides": {
+  "image": "blobs.tif",
+  "threshold": 0.5
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "approx": {
+   "points_spots.count": [
+    492,
+    0
+   ]
+  }
+ }
+}

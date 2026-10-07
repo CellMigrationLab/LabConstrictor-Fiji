@@ -384,6 +384,11 @@ List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
             case ["image", "labels"]:
                 def slot = linkedImages.indexOf(p.name)
                 def fileOverride = hooks.overrides[p.name + "_file"]
+                if (p.region_of) {                           // RegionOf: the ROI / ROI Manager selection of the named image can be the value
+                    addItem(info, "selection_" + p.name, Boolean, [label: "Use the selection as " + p.label.toLowerCase(), required: false,
+                                                                   description: "Send the ROI of the image (or the ROIs selected in the ROI Manager: several are labels 1, 2, 3...) as the region",
+                                                                   default: hooks.overrides.containsKey("selection_" + p.name) ? hooks.overrides["selection_" + p.name] : false])
+                }
                 if (openImages) {
                     if (!p.required) {                       // SciJava image choosers cannot be empty
                         addItem(info, "use_" + p.name, Boolean, [label: "Use " + p.label.toLowerCase(), required: false,
@@ -456,12 +461,41 @@ ImagePlus channelOf(ImagePlus imp, int channel, String label) {
     return single
 }
 
+@groovy.transform.Field final int MAX_REGION_OBJECTS = 65535      // labels of the region image (16 bit)
+
+/** RegionOf: the ROIs selected in the ROI Manager (else the ROI of the image) as a label image the size of the image the region
+ *  belongs to: labels 1..N, 0 outside. Whatever makes that impossible is said to the person, never guessed around. */
+File selectionMask(Map p, Map tool, def module, File jobDir) {
+    def label = p.label as String, owner = tool.inputs.find { it.name == p.region_of }
+    if (module.getInput(p.region_of + "_file"))
+        throw new IllegalArgumentException("'" + label + "': the selection belongs to an open image, but a file was chosen for '" + owner.label + "': open the image, or untick the selection")
+    def imp = LCModule.imageOf(module.getInput(p.region_of))
+    if (imp == null) throw new IllegalArgumentException("'" + label + "': choose the open image it belongs to ('" + owner.label + "')")
+    def manager = ij.plugin.frame.RoiManager.getInstance2()
+    def rois = (manager?.getSelectedIndexes() ?: [] as int[]).collect { manager.getRoi(it) }.findAll { it != null }
+    if (!rois && imp.getRoi() != null) rois = [imp.getRoi()]
+    if (!rois) throw new IllegalArgumentException("'" + label + "': nothing is selected: draw a region on '" + imp.getTitle() + "' or select entries in the ROI Manager, or untick the selection")
+    if (rois.size() > MAX_REGION_OBJECTS) throw new IllegalArgumentException("'" + label + "': " + rois.size() + " objects are selected; at most " + MAX_REGION_OBJECTS + " are supported")
+    def mask = new ij.process.ShortProcessor(imp.getWidth(), imp.getHeight())
+    rois.eachWithIndex { roi, i -> mask.setValue(i + 1); mask.fill(roi) }
+    if (mask.getStatistics().max == 0) throw new IllegalArgumentException("'" + label + "': the selection lies outside the image")
+    def file = new File(jobDir, p.name + ".tif")
+    new FileSaver(new ImagePlus(p.name, mask)).saveAsTiff(file.path)
+    return file
+}
+
 List exportInputs(Map tool, def module, File jobDir) {
     def inputs = [:], images = [:]
     tool.inputs.each { p ->
         def value = module.getInput(p.name)
         switch (p.type) {
             case ["image", "labels"]:
+                if (p.region_of && module.getInput("selection_" + p.name)) {   // RegionOf: the selection is the value
+                    def maskFile = selectionMask(p, tool, module, jobDir)
+                    inputs[p.name] = maskFile.path
+                    images[p.name] = maskFile.path
+                    break
+                }
                 def chosen = module.getInput(p.name + "_file") as File
                 if (chosen) {                                                // a file wins over the open image: the worker reads it directly
                     if (!chosen.isFile()) throw new IllegalArgumentException("'" + p.label + "': file not found: " + chosen.path)
@@ -884,6 +918,7 @@ Map<String, String> toMacroOptions(String appName, Map tool, def module) {
             case ["image", "labels"]:
                 def file = module.getInput(p.name + "_file") as File
                 def imp = module.getInput(p.name)
+                if (p.region_of && module.getInput("selection_" + p.name)) o["selection_" + p.name] = "true"
                 if (file) o[p.name + "_file"] = file.path
                 else if (imp && (p.required || module.getInput("use_" + p.name))) o[p.name] = imp instanceof ImagePlus ? imp.getTitle() : imp as String
                 if (p.pick_channel && module.getInput(p.name + "_channel") != null) o[p.name + "_channel"] = module.getInput(p.name + "_channel").toString()
@@ -936,7 +971,7 @@ def macroNumber(Map p, String text) {
 
 /** Build the module values for a replayed call; unknown options, tools or parameters, missing images and invalid values raise IllegalArgumentException (shown, logged). */
 MacroModule moduleFromMacro(Map tool, String options) {
-    def allowed = ["app", "tool"] + tool.inputs.collectMany { p -> [p.name] + (p.type in ["image", "labels"] ? [p.name + "_file"] : []) + (p.pick_channel ? [p.name + "_channel"] : []) }
+    def allowed = ["app", "tool"] + tool.inputs.collectMany { p -> [p.name] + (p.type in ["image", "labels"] ? [p.name + "_file"] : []) + (p.pick_channel ? [p.name + "_channel"] : []) + (p.region_of ? ["selection_" + p.name] : []) }
     def unknown = macroKeys(options).findAll { !(it in allowed) }
     if (unknown) throw new IllegalArgumentException("unknown option" + (unknown.size() > 1 ? "s " : " ") + unknown.collect { "'" + it + "'" }.join(", ") +
                                                     " (the tool accepts: " + allowed.findAll { it != "app" && it != "tool" }.join(", ") + ")")
@@ -952,8 +987,10 @@ MacroModule moduleFromMacro(Map tool, String options) {
             module.values["set_" + p.name] = text != null
             if (text == null) return
         }
+        if (p.region_of) module.values["selection_" + p.name] = (Macro.getValue(options, "selection_" + p.name, "false") ?: "true").toLowerCase() in ["true", "1", "yes"]   // a bare flag counts as true
         switch (p.type) {
             case ["image", "labels"]:
+                if (p.region_of && module.values["selection_" + p.name]) break          // the selection is the value (taken when the run starts)
                 if (fileText) { module.values[p.name + "_file"] = new File(fileText); module.values["use_" + p.name] = true; break }
                 if (text == null && !p.required) break
                 if (text == null) throw new IllegalArgumentException("'" + p.label + "' is required: give " + p.name + "=<window title> or " + p.name + "_file=<path> (a macro never guesses the current image)")

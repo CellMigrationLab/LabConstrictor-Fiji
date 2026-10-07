@@ -102,6 +102,12 @@ def preload = {
             cal.setUnit(item.unit ?: "um")
         }
         imp.show()
+        if (item.roi) imp.setRoi(new java.awt.Rectangle(item.roi[0] as int, item.roi[1] as int, item.roi[2] as int, item.roi[3] as int))      // "the person drew a region"
+        if (item.manager_rois) {                                // "the person listed regions in the ROI Manager and selected some"
+            def manager = ij.plugin.frame.RoiManager.getRoiManager()
+            item.manager_rois.each { r -> manager.addRoi(new ij.gui.Roi(r[0] as int, r[1] as int, r[2] as int, r[3] as int)) }
+            manager.setSelectedIndexes(item.manager_selected as int[])
+        }
     }
 }
 
