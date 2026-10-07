@@ -1,0 +1,4 @@
+{"app": "interactive", "tool": "Points without an image",
+ "register": [{"name": "interactive", "prefix": "${PREFIX}", "module": "tools", "pythonpath": ["${V3}/tests/interactive_app"]}],
+ "script_mode_only": true,
+ "expect": {"status": "COMPLETE", "approx": {"points_points.count": [2, 0]}, "absent_keys": ["display_errors"]}}

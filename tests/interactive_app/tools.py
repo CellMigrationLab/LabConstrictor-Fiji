@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Annotated, Optional
 
 import numpy as np
-from labconstrictor_tools import ChoicesFrom, ClearAfterRun, Folder, ImageOut, Name, Replace, Scalars, tool
+from labconstrictor_tools import ChoicesFrom, ClearAfterRun, Folder, ImageOut, Name, PointsOut, Replace, Scalars, tool
 
 
 @tool("List options")
@@ -22,3 +22,9 @@ def answer(
     """Shows a small image and repeats the guess."""
     size = 16 + len(guess or "")
     return np.full((size, size), 7, dtype=np.uint8), {"guess": guess or ""}
+
+
+@tool("Points without an image")
+def points_only() -> Annotated[PointsOut, Name("points")]:
+    """Returns points although the tool has no image: a host with no image open must still show them (as a table)."""
+    return [{"y": 1.0, "x": 2.0, "score": 0.5}, {"y": 3.0, "x": 4.0, "score": 0.9}]
