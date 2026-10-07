@@ -398,6 +398,8 @@ List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
                 addItem(info, p.name, File, base + [default: override ? new File(override as String) : null]).setWidgetStyle("directory"); break
             case "string":
                 def options = choiceLists[p.name]                  // ChoicesFrom answered: a dropdown (otherwise the plain text field)
+                def held = (override ?: p.default) as String                // a value the parameter already holds (its default, or a remembered one) stays selectable even when the source does not list it: never silently replaced
+                if (options && held && !options.contains(held)) options = [held] + options
                 if (options && p.nullable) options = [""] + options    // no answer pre-selected: ticking "Set" with the blank entry is refused by the tool, not silently answered
                 if (options) addItem(info, p.name, String, base + [choices: options, default: options.contains(override) ? override : options.contains(p.default) ? p.default : options[0]])
                 else addItem(info, p.name, String, base + [default: override ?: p.default ?: ""])
@@ -921,6 +923,7 @@ def labConstrictorRun() {
         summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / 1e9
         summary.dialog_inputs = info.inputs().collect { it.getName() }
         summary.dialog_choices = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getChoices() as List] }
+        summary.dialog_defaults = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getDefaultValue()] }
         module = harvest(info, tool.label, links)
         if (module == null) return hooks.finish(summary + [cancelled: true])
         recordRun(appName, tool, module)

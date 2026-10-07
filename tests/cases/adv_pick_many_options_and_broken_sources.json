@@ -26,6 +26,9 @@
   "absent_keys": [
    "dialog_choices.a",
    "dialog_choices.b"
-  ]
+  ],
+  "match": {
+   "dialog_defaults.mode": "x"
+  }
  }
 }
