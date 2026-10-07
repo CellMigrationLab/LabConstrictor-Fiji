@@ -120,6 +120,9 @@ def finish = { Map summary ->
             IJ.saveAs(overlay.crop(), "PNG", new File(shots, "overlay_zoom.png").path)
         }
     }
+    if (cfg.final_screenshot) {                              // the whole screen after the run: result windows, log, table
+        try { ImageIO.write(new Robot().createScreenCapture(new java.awt.Rectangle(java.awt.Toolkit.getDefaultToolkit().getScreenSize())), "png", new File(shots, "final_screen.png")) } catch (Throwable ignored) { }
+    }
     new File(cfg.report as String).text = JsonOutput.prettyPrint(JsonOutput.toJson(summary))
     System.exit(0)
 }
