@@ -946,6 +946,19 @@ def labConstrictorRun() {
     }
 
     def macro = macroOptions()
+    if (macro && macro =~ /(^|\s)copy_last(=|\s|$)/) {         // menu entry "Copy last run as command": no dialog, nothing is run
+        def file = new File(new File(lcHome(), "state"), "last_command.json")
+        if (!file.isFile()) return failEarly(summary, "nothing to copy yet: run a tool first")
+        def last = new JsonSlurper().parseText(file.getText("UTF-8"))
+        def kind = Macro.getValue(macro, "kind", "terminal")
+        def text = kind == "python" ? last.python : last.terminal
+        try {
+            java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new java.awt.datatransfer.StringSelection(text), null)
+        } catch (Throwable problem) { lcLog("WARN", "clipboard not available: " + problem) }
+        IJ.log("LabConstrictor: copied the " + kind + " command of the last run (" + last.app + ": " + last.tool + "):\n" + text)
+        IJ.showStatus("LabConstrictor: copied the last run as a " + kind + " command")
+        return hooks.finish(summary + [copied_last: text, copied_kind: kind])
+    }
     def appName, toolLabel, app, tool, module
     if (macro) {                                               // replay of a recorded macro: no choosers, no dialog
         appName = found.apps.keySet().find { it.equalsIgnoreCase(Macro.getValue(macro, "app", "") ?: "") }
@@ -1046,6 +1059,8 @@ void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
         summary.command_line = commandText("terminal", app, tool, inputs, images)
         summary.python_snippet = commandText("python", app, tool, inputs, images)
         IJ.log("LabConstrictor: to repeat this run outside Fiji, copy from here:\n" + summary.command_line + "\n--- or in Python:\n" + summary.python_snippet)
+        def stateDir = new File(lcHome(), "state"); stateDir.mkdirs()
+        new File(stateDir, "last_command.json").setText(groovy.json.JsonOutput.toJson([app: app.name, tool: tool.id, terminal: summary.command_line, python: summary.python_snippet]), "UTF-8")
     } catch (Throwable problem) { lcLog("WARN", "could not build the command text: " + problem, problem) }
     summary.run_record = writeRunRecord(app, tool, inputs, outcome, summary)
     if (outcome.complete) {

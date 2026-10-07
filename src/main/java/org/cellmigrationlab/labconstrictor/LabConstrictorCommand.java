@@ -52,7 +52,7 @@ public class LabConstrictorCommand implements Command {
 			// the script runs on another thread, so they travel through a property that the script clears as soon as it has
 			// read it. The hand-off is serialised: a second call cannot overwrite the options of the first before the first
 			// script has consumed them (the property is JVM-wide, the wait makes it behave like a private channel).
-			final String macroOptions = ij.Macro.getOptions();
+			final String macroOptions = macroOptions();
 			final ScriptInfo script = new ScriptInfo(context, "LabConstrictor_Tools.groovy", new StringReader(readScript()));
 			final java.util.concurrent.Future<?> running;
 			synchronized (HANDOFF) {
@@ -74,6 +74,11 @@ public class LabConstrictorCommand implements Command {
 			problem.printStackTrace(new PrintWriter(trace));
 			if (ui != null) ui.showDialog("LabConstrictor could not start:\n" + problem + "\n\n" + trace, "LabConstrictor");
 		}
+	}
+
+	/** The options handed to the script: those of a macro call; a subclass can fix its own. */
+	protected String macroOptions() {
+		return ij.Macro.getOptions();
 	}
 
 	/** Version of this plugin (from the jar manifest), for bug reports. */
