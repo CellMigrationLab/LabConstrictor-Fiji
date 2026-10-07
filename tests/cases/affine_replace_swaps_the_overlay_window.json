@@ -1,0 +1,7 @@
+{"app": "affine", "tool": "Identity alignment (replaces its overlay)",
+ "register": [{"name": "affine", "prefix": "${PREFIX}", "module": "tools", "pythonpath": ["${V3}/tests/affine_app"]}],
+ "preload": [{"path": "${FIXTURES}/sample.tif", "title": "sample.tif", "pixel_size": 0.5},
+             {"path": "${FIXTURES}/sample.tif", "title": "Alignment overlay (green = , magenta = image)"}],
+ "script_mode_only": true,
+ "expect": {"status": "COMPLETE",
+            "equals": {"open_windows": ["sample.tif", "Alignment overlay (green = , magenta = image)"]}}}
