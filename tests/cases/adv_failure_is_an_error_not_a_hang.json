@@ -1,0 +1,24 @@
+{
+ "app": "adv",
+ "tool": "Dims",
+ "register": [
+  {
+   "name": "adv",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/adversarial_app"
+   ]
+  }
+ ],
+ "overrides": {
+  "fail": true
+ },
+ "script_mode_only": true,
+ "expect": {
+  "status": "FAILED",
+  "match": {
+   "failure_message": "deliberate failure"
+  }
+ }
+}

@@ -1,0 +1,8 @@
+{"app": "interactions", "tool": "Show a shape",
+ "register": [{"name": "interactions", "prefix": "${PREFIX}", "module": "labconstrictor_tools.examples.interactions", "pythonpath": []}],
+ "overrides": {"set_shape": true, "shape": "bar", "size": 40},
+ "final_screenshot": true,
+ "script_mode_only": true,
+ "expect": {"status": "COMPLETE",
+            "equals": {"dialog_choices": {"shape": ["", "square", "bar", "dot"]}, "open_windows": ["interactions:picture"]},
+            "match": {"message_note": "bar"}}}

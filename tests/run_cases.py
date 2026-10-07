@@ -83,6 +83,18 @@ def check(expect, report):
     for key, limit in expect.get("max", {}).items():
         if report.get(key) is None or report[key] > limit:
             failed.append("%s = %r > %r" % (key, report.get(key), limit))
+    for dotted, size in expect.get("min_length", {}).items():
+        found = report
+        for part in dotted.split("."):
+            found = found.get(part) if isinstance(found, dict) else None
+        if not isinstance(found, list) or len(found) < size:
+            failed.append("%s has %s items, expected at least %d" % (dotted, len(found) if isinstance(found, list) else found, size))
+    for dotted in expect.get("absent_keys", []):
+        found = report
+        for part in dotted.split("."):
+            found = found.get(part) if isinstance(found, dict) else None
+        if found is not None:
+            failed.append("%s must not be present" % dotted)
     if "worker_alive_after" in expect and report.get("worker_alive_after") != expect["worker_alive_after"]:
         failed.append("worker_alive_after = %r" % report.get("worker_alive_after"))
     return failed

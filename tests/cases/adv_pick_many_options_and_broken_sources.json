@@ -1,0 +1,31 @@
+{
+ "app": "adv",
+ "tool": "Pick",
+ "register": [
+  {
+   "name": "adv",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/adversarial_app"
+   ]
+  }
+ ],
+ "script_mode_only": true,
+ "overrides": {
+  "set_a": true,
+  "a": "free",
+  "set_c": true,
+  "c": "opt 00042 \u00e9\u4e2d"
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "min_length": {
+   "dialog_choices.mode": 5000
+  },
+  "absent_keys": [
+   "dialog_choices.a",
+   "dialog_choices.b"
+  ]
+ }
+}

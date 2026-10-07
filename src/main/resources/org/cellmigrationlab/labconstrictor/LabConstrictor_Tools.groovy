@@ -622,6 +622,7 @@ void waitForExit(Service service, int timeoutMs) {
 }
 
 // ---------------------------------------------------------------- results (switch on result type only)
+@groovy.transform.Field def lastShownImage = null          // the image window this run showed last (points without an apply_to go on it)
 Map showResults(Map app, List results, Map images, Map tool = null) {
     def summary = [:]
     def replaced = (tool?.outputs ?: []).findAll { it.replace }.collect { it.name } as Set
@@ -631,6 +632,8 @@ Map showResults(Map app, List results, Map images, Map tool = null) {
                 case ["image", "labels"]: showImage(app, r, summary, r.name in replaced); break
                 case "table": showTable(r, summary); break
                 case "values": IJ.log(app.display_name + " " + r.name + ": " + r.values); summary["values_" + r.name] = r.values; break
+                case "message": showMessage(app, r, summary); break
+                case "points": showPoints(app, r, images, summary, r.name in replaced); break
                 case "file":
                     if (!new File(r.path as String).isFile()) throw new IllegalStateException("the tool reported the file " + r.path + " but it does not exist")
                     IJ.log("Output file: " + r.path); break
@@ -658,7 +661,38 @@ void showImage(Map app, Map r, Map summary, boolean replace = false) {
     for (int n = 1; WindowManager.getImage(title) != null; n++) title = app.name + ":" + r.name + " [" + n + "]"   // a chain must be able to tell results apart
     imp.setTitle(title)
     imp.show()
+    lastShownImage = imp
     summary["image_" + r.name] = [imp.getWidth(), imp.getHeight(), imp.getNSlices() * imp.getNFrames(), imp.getBitDepth()]
+}
+
+/** A message result: in the log, and in a dialog when a person is running the tool (markdown emphasis removed: a dialog shows plain text). */
+void showMessage(Map app, Map r, Map summary) {
+    def text = (r.text as String).replaceAll(/\*\*(.+?)\*\*/, '$1').replaceAll(/(?m)^\s*[-*] /, "\u2022 ")
+    IJ.log(app.display_name + ": " + text)
+    summary["message_" + r.name] = r.text
+    if (hooks.interactive) IJ.showMessage("LabConstrictor: " + app.display_name, text)
+}
+
+/** Points (columns y, x in pixels of the image named by apply_to, else of the first image of this run, else the current image):
+ *  a multi-point ROI on that image, also kept in the ROI Manager under the output's name, and a table with the properties. */
+void showPoints(Map app, Map r, Map images, Map summary, boolean replace) {
+    def table = ResultsTable.open(r.path)
+    def target = images[r.apply_to]
+    if (!(target instanceof ImagePlus)) target = lastShownImage ?: WindowManager.getCurrentImage()
+    if (!(target instanceof ImagePlus)) throw new IllegalStateException("no image to place the points on: open or produce an image first")
+    def xs = new float[table.size()], ys = new float[table.size()]
+    for (int i = 0; i < table.size(); i++) { xs[i] = (float) (table.getValue("x", i) + 0.5d); ys[i] = (float) (table.getValue("y", i) + 0.5d) }   // pixel centres
+    def roi = new ij.gui.PointRoi(xs, ys, xs.length)
+    roi.setName(app.name + ":" + r.name)
+    def manager = ij.plugin.frame.RoiManager.getRoiManager()
+    if (replace) {                                           // Replace(): the previous points of this output make way
+        def indexes = (0..<manager.getCount()).findAll { manager.getRoi(it).getName() == roi.getName() } as int[]
+        if (indexes) manager.setSelectedIndexes(indexes).with { manager.runCommand("Delete") }
+    }
+    target.setRoi(roi)
+    manager.addRoi(roi)
+    table.show(app.name + ":" + r.name)
+    summary["points_" + r.name] = [count: table.size(), image: target.getTitle(), columns: table.getHeadings() as List]
 }
 
 void showTable(Map r, Map summary) {
