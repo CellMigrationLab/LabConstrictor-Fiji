@@ -1,0 +1,7 @@
+{"app": "interactions", "tool": "Mean of a channel",
+ "register": [{"name": "interactions", "prefix": "${PREFIX}", "module": "labconstrictor_tools.examples.interactions", "pythonpath": []}],
+ "preload": [{"path": "${FIXTURES}/three_channels.tif", "title": "three_channels.tif"}],
+ "select": ["three_channels.tif"],
+ "overrides": {"image": "three_channels.tif", "image_channel": 2},
+ "script_mode_only": true,
+ "expect": {"status": "COMPLETE", "approx": {"values_values.mean": [20, 0.001]}}}
