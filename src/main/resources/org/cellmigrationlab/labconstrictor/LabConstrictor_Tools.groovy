@@ -398,6 +398,7 @@ List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
                 addItem(info, p.name, File, base + [default: override ? new File(override as String) : null]).setWidgetStyle("directory"); break
             case "string":
                 def options = choiceLists[p.name]                  // ChoicesFrom answered: a dropdown (otherwise the plain text field)
+                if (options && p.nullable) options = [""] + options    // no answer pre-selected: ticking "Set" with the blank entry is refused by the tool, not silently answered
                 if (options) addItem(info, p.name, String, base + [choices: options, default: options.contains(override) ? override : options.contains(p.default) ? p.default : options[0]])
                 else addItem(info, p.name, String, base + [default: override ?: p.default ?: ""])
                 break

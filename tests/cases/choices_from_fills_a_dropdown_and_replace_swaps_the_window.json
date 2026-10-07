@@ -4,4 +4,4 @@
  "overrides": {"folder": "${FIXTURES}/options", "set_guess": true, "guess": "Treated"},
  "script_mode_only": true,
  "expect": {"status": "COMPLETE",
-            "equals": {"dialog_choices": {"guess": ["Control", "Treated"]}, "open_windows": ["interactive:view"]}}}
+            "equals": {"dialog_choices": {"guess": ["", "Control", "Treated"]}, "open_windows": ["interactive:view"]}}}
