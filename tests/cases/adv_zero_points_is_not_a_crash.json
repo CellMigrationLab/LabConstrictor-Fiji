@@ -1,0 +1,26 @@
+{
+ "app": "adv",
+ "tool": "Dims",
+ "register": [
+  {
+   "name": "adv",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/adversarial_app"
+   ]
+  }
+ ],
+ "overrides": {
+  "rows": 0
+ },
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "equals": {
+   "open_windows": [
+    "adv:img"
+   ]
+  }
+ }
+}

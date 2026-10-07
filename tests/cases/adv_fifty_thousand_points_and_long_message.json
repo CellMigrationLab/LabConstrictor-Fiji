@@ -1,0 +1,32 @@
+{
+ "app": "adv",
+ "tool": "Dims",
+ "register": [
+  {
+   "name": "adv",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/adversarial_app"
+   ]
+  }
+ ],
+ "overrides": {
+  "rows": 50000,
+  "text_length": 3000
+ },
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "approx": {
+   "timings.worker_run_s": [
+    60,
+    60
+   ],
+   "points_pts.count": [
+    50000,
+    0
+   ]
+  }
+ }
+}
