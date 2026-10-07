@@ -1,0 +1,4 @@
+{"app": "synthetic", "tool": "Kitchen sink",
+ "register": [{"name": "interactions", "prefix": "${PREFIX}", "module": "labconstrictor_tools.examples.interactions", "pythonpath": []}],
+ "macro": "copy_last=true",
+ "expect": {"match": {"error": "nothing to copy yet"}}}

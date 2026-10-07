@@ -168,6 +168,10 @@ def run_case(path):
                  "--module", app["module"], *[a for p in app["pythonpath"] for a in ("--pythonpath", p)]],
                 check=True, capture_output=True, env=dict(env, PYTHONPATH=str(V3)),
             )  # fmt: skip
+    if case.get("last_command"):  # a previous run's command text, as the script leaves it for the "Copy last run as command" entry
+        state = Path(env["LC_HOME"]) / "state"
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "last_command.json").write_text(json.dumps(case["last_command"]))
     for op in case.get("tamper", []):
         tamper(Path(env["LC_HOME"]) / "apps", op)
     command = [
