@@ -1,0 +1,42 @@
+{
+ "app": "adv",
+ "tool": "Outlines",
+ "register": [
+  {
+   "name": "adv",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/adversarial_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/blobs.tif",
+   "title": "blobs.tif"
+  }
+ ],
+ "select": [
+  "blobs.tif"
+ ],
+ "overrides": {
+  "count": 5,
+  "holes": true,
+  "image": "blobs.tif"
+ },
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "equals": {
+   "shapes_shp": {
+    "count": 10,
+    "shown": 10,
+    "holes": 5,
+    "image": "blobs.tif",
+    "overlay_size": 10,
+    "manager_count": 10
+   }
+  }
+ }
+}

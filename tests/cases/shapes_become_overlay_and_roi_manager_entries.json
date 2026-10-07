@@ -1,0 +1,41 @@
+{
+ "app": "interactions",
+ "tool": "Outline the blobs",
+ "register": [
+  {
+   "name": "interactions",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.interactions",
+   "pythonpath": []
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/blobs.tif",
+   "title": "blobs.tif",
+   "pixel_size": 0.5
+  }
+ ],
+ "select": [
+  "blobs.tif"
+ ],
+ "overrides": {
+  "image": "blobs.tif",
+  "threshold": 0.5
+ },
+ "final_screenshot": true,
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "equals": {
+   "shapes_outlines": {
+    "count": 4,
+    "shown": 4,
+    "holes": 1,
+    "image": "blobs.tif",
+    "overlay_size": 4,
+    "manager_count": 4
+   }
+  }
+ }
+}
