@@ -343,6 +343,14 @@ List presentationOrder(List inputs) {
     return keyed.sort(false) { a, b -> a[1][0] <=> b[1][0] ?: a[1][1] <=> b[1][1] ?: a[1][2] <=> b[1][2] }.collect { it[0] }
 }
 
+/** The "channel" field of an image parameter declared with PickChannel: a number from 1 (the channels of the chosen image or file are checked when the run starts). */
+void addChannelItem(MutableModuleInfo info, Map p, String defaultImageTitle, Map overrides) {
+    def imp = defaultImageTitle ? WindowManager.getImage(defaultImageTitle) : null
+    def start = overrides.containsKey(p.name + "_channel") ? overrides[p.name + "_channel"] : (imp != null && imp.getNChannels() > 1 ? imp.getChannel() : 1)
+    addItem(info, p.name + "_channel", Integer, [label: p.label + " channel", required: false, min: 1, max: 1000, step: 1, default: start as Integer,
+                                                description: "Channel of the image to use (1 = first). The tool receives only this channel" + (imp != null && imp.getNChannels() > 1 ? "; the chosen image has " + imp.getNChannels() : "")])
+}
+
 /** Build the tool dialog from the schema. Returns [info, links]. */
 List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
     def info = newInfo(tool.label)
@@ -386,10 +394,12 @@ List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
                                                            description: "Read the image from a file instead of the open image above (leave empty to use the open image)",
                                                            default: fileOverride ? new File(fileOverride as String) : null,
                                                            callback: slot >= 0 ? "syncFile" + slot : null])
+                    if (p.pick_channel) addChannelItem(info, p, defaultTitle[p.name], hooks.overrides)
                 } else {                                     // nothing open: the file is the only way to give an image
                     addItem(info, p.name + "_file", File, base + [description: p.description ?: "No image is open - choose a file",
                                                                   default: fileOverride ? new File(fileOverride as String) : null,
                                                                   callback: slot >= 0 ? "syncFile" + slot : null])
+                    if (p.pick_channel) addChannelItem(info, p, null, hooks.overrides)
                 }
                 break
             case ["table", "file"]:
@@ -429,6 +439,16 @@ List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
 
 // ---------------------------------------------------------------- dialog -> request
 /** Harvested values -> worker inputs. Images are saved as TIFF (calibration travels as explicit parameters). */
+/** One channel of a (hyper)stack as a plain image, at the current Z and T: what a tool declared with PickChannel receives. */
+ImagePlus channelOf(ImagePlus imp, int channel, String label) {
+    if (channel < 1 || channel > imp.getNChannels())
+        throw new IllegalArgumentException("'" + label + "': channel " + channel + " was asked for, but the image has " + imp.getNChannels() + " channel" + (imp.getNChannels() == 1 ? "" : "s"))
+    def plane = imp.getNChannels() == 1 ? imp.getProcessor() : imp.getStack().getProcessor(imp.getStackIndex(channel, imp.getSlice(), imp.getFrame()))
+    def single = new ImagePlus(imp.getTitle(), plane.duplicate())
+    single.setCalibration(imp.getCalibration())
+    return single
+}
+
 List exportInputs(Map tool, def module, File jobDir) {
     def inputs = [:], images = [:]
     tool.inputs.each { p ->
@@ -438,6 +458,15 @@ List exportInputs(Map tool, def module, File jobDir) {
                 def chosen = module.getInput(p.name + "_file") as File
                 if (chosen) {                                                // a file wins over the open image: the worker reads it directly
                     if (!chosen.isFile()) throw new IllegalArgumentException("'" + p.label + "': file not found: " + chosen.path)
+                    def opened = p.pick_channel ? IJ.openImage(chosen.path) : null
+                    if (opened != null) {                                     // PickChannel: the file's chosen channel is written for the worker
+                        def picked = channelOf(opened, (module.getInput(p.name + "_channel") ?: 1) as int, p.label as String)
+                        def channelFile = new File(jobDir, p.name + ".tif")
+                        new FileSaver(picked).saveAsTiff(channelFile.path)
+                        inputs[p.name] = channelFile.path
+                        images[p.name] = chosen.path
+                        break
+                    }
                     inputs[p.name] = chosen.path
                     images[p.name] = chosen.path                              // opened later only if a result needs it (see asImage)
                     break
@@ -449,7 +478,9 @@ List exportInputs(Map tool, def module, File jobDir) {
                 def file = new File(jobDir, p.name + ".tif")
                 if (file.canonicalFile.parentFile != jobDir.canonicalFile) throw new IllegalArgumentException("'" + p.label + "': refusing to write outside " + jobDir)
                 def imp = value as ImagePlus
-                if (p.axes == "YX" && imp.getStackSize() > 1) {          // tool wants one plane: send the one on screen
+                if (p.pick_channel) {                                   // PickChannel: exactly the channel that was chosen, at the current Z and T
+                    imp = channelOf(imp, (module.getInput(p.name + "_channel") ?: 1) as int, p.label as String)
+                } else if (p.axes == "YX" && imp.getStackSize() > 1) {          // tool wants one plane: send the one on screen
                     IJ.log("LabConstrictor: '" + p.label + "' needs a single 2D plane - using the current plane (" + imp.getCurrentSlice() + " of " + imp.getStackSize() + ")")
                     imp = new ImagePlus(imp.getTitle(), imp.getProcessor().duplicate())
                     imp.setCalibration(value.getCalibration())
@@ -786,6 +817,7 @@ Map<String, String> toMacroOptions(String appName, Map tool, def module) {
                 def imp = module.getInput(p.name)
                 if (file) o[p.name + "_file"] = file.path
                 else if (imp && (p.required || module.getInput("use_" + p.name))) o[p.name] = imp instanceof ImagePlus ? imp.getTitle() : imp as String
+                if (p.pick_channel && module.getInput(p.name + "_channel") != null) o[p.name + "_channel"] = module.getInput(p.name + "_channel").toString()
                 break
             case ["table", "file", "folder"]:
                 def f = module.getInput(p.name) as File
@@ -835,7 +867,7 @@ def macroNumber(Map p, String text) {
 
 /** Build the module values for a replayed call; unknown options, tools or parameters, missing images and invalid values raise IllegalArgumentException (shown, logged). */
 MacroModule moduleFromMacro(Map tool, String options) {
-    def allowed = ["app", "tool"] + tool.inputs.collectMany { p -> [p.name] + (p.type in ["image", "labels"] ? [p.name + "_file"] : []) }
+    def allowed = ["app", "tool"] + tool.inputs.collectMany { p -> [p.name] + (p.type in ["image", "labels"] ? [p.name + "_file"] : []) + (p.pick_channel ? [p.name + "_channel"] : []) }
     def unknown = macroKeys(options).findAll { !(it in allowed) }
     if (unknown) throw new IllegalArgumentException("unknown option" + (unknown.size() > 1 ? "s " : " ") + unknown.collect { "'" + it + "'" }.join(", ") +
                                                     " (the tool accepts: " + allowed.findAll { it != "app" && it != "tool" }.join(", ") + ")")
@@ -843,6 +875,10 @@ MacroModule moduleFromMacro(Map tool, String options) {
     tool.inputs.each { p ->
         def text = Macro.getValue(options, p.name, null)
         def fileText = Macro.getValue(options, p.name + "_file", null)
+        if (p.pick_channel) {                                                  // PickChannel: the channel to hand the tool (1 = first)
+            def channelText = Macro.getValue(options, p.name + "_channel", null)
+            module.values[p.name + "_channel"] = channelText == null ? 1 : macroNumber([type: "integer", label: p.label + " channel", minimum: 1], channelText)
+        }
         if (p.nullable && p.type in ["string", "integer", "float", "choice", "boolean"]) {   // optional, no default: not in the macro = unset
             module.values["set_" + p.name] = text != null
             if (text == null) return
