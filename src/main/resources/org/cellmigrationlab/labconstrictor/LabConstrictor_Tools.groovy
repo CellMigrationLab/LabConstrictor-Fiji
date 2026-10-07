@@ -417,10 +417,14 @@ List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
             case "boolean":
                 addItem(info, p.name, Boolean, base + [default: overridden ? override : (p.default ?: false)]); break
             case "choice":
-                addItem(info, p.name, String, base + [choices: p.choices, default: override ?: p.default ?: p.choices[0]]); break
+                def choiceItem = addItem(info, p.name, String, base + [choices: p.choices, default: override ?: p.default ?: p.choices[0]])
+                if (p.widget == "radio" && !p.nullable) choiceItem.setWidgetStyle("radioButtonHorizontal")   // Widget("radio")
+                break
             case "integer":
-                addItem(info, p.name, Integer, base + [default: (overridden ? override : (p.default ?: 0)) as Integer,
-                                                      min: p.minimum as Integer, max: p.maximum as Integer, step: 1]); break
+                def intItem = addItem(info, p.name, Integer, base + [default: (overridden ? override : (p.default ?: 0)) as Integer,
+                                                                    min: p.minimum as Integer, max: p.maximum as Integer, step: 1])
+                if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) intItem.setWidgetStyle("slider")   // Widget("slider")
+                break
             case "float":
                 def value = overridden ? override : p.default
                 def source = p.pixel_size_of && openImages ? WindowManager.getImage(defaultTitle[p.pixel_size_of] ?: openImages[0]) : null
@@ -430,7 +434,8 @@ List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
                 if (microns != null) value = microns                                                      // calibration prefill (unit-aware)
                 if (p.pixel_size_of && value == null)
                     IJ.log("LabConstrictor: no pixel size found for '" + p.label + "' (the image has no usable calibration): enter it by hand")
-                addItem(info, p.name, Double, base + [default: (value ?: 0) as Double, min: p.minimum as Double, max: p.maximum as Double, step: 0.0001d])
+                def floatItem = addItem(info, p.name, Double, base + [default: (value ?: 0) as Double, min: p.minimum as Double, max: p.maximum as Double, step: 0.0001d])
+                if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) floatItem.setWidgetStyle("slider")   // Widget("slider")
                 break
             default:
                 throw new IllegalArgumentException("parameter '" + p.name + "' has the unsupported type '" + p.type + "'")
@@ -964,6 +969,7 @@ def labConstrictorRun() {
         summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / 1e9
         summary.dialog_inputs = info.inputs().collect { it.getName() }
         summary.dialog_choices = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getChoices() as List] }
+        summary.dialog_styles = info.inputs().findAll { it.getWidgetStyle() }.collectEntries { [(it.getName()): it.getWidgetStyle()] }
         summary.dialog_defaults = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getDefaultValue()] }
         module = harvest(info, tool.label, links)
         if (module == null) return hooks.finish(summary + [cancelled: true])
