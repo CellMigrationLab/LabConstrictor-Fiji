@@ -99,7 +99,7 @@ class LCModule extends DefaultMutableModule {
     }
 }
 
-// ---------------------------------------------------------------- hooks (no-ops unless a harness is supplied)
+// ---- logging and hooks (the hooks are no-ops unless a test harness is supplied)
 hooks = [
     interactive  : true,          // false: never block on modal error dialogs
     overrides    : [:],           // parameter name -> value used as dialog default
@@ -109,22 +109,14 @@ hooks = [
     cancelAfterMs: { null },
     finish       : { Map summary -> },
 ]
+
 def harnessPath = System.getenv("LC_FIJI_HARNESS")
+
 if (harnessPath) hooks += new GroovyShell(this.class.classLoader).evaluate(new File(harnessPath)) as Map
 
-// ---------------------------------------------------------------- discovery (same rules as labconstrictor_tools.registry)
 String lcHome() { System.getenv("LC_HOME") ?: (System.getProperty("user.home") + "/.labconstrictor") }
 
 LCModule.logger = { String level, String message, Throwable problem -> lcLog(level, message, problem) }
-
-/** Delete a temporary folder; a folder that cannot be removed is logged once (it stays on disk), never ignored. */
-void removeFolder(File folder, String what) {
-    try {
-        if (folder.exists() && !folder.deleteDir()) lcLog("WARN", "could not remove the " + what + " " + folder)
-    } catch (SecurityException problem) {
-        lcLog("WARN", "could not remove the " + what + " " + folder + ": " + problem, problem)
-    }
-}
 
 /** Append one line to the log shared with the Python tools (<LC_HOME>/logs/labconstrictor.log). Never throws. */
 void lcLog(String level, String message, Throwable problem = null) {
@@ -142,6 +134,16 @@ void lcLog(String level, String message, Throwable problem = null) {
     }
 }
 
+/** Delete a temporary folder; a folder that cannot be removed is logged once (it stays on disk), never ignored. */
+void removeFolder(File folder, String what) {
+    try {
+        if (folder.exists() && !folder.deleteDir()) lcLog("WARN", "could not remove the " + what + " " + folder)
+    } catch (SecurityException problem) {
+        lcLog("WARN", "could not remove the " + what + " " + folder + ": " + problem, problem)
+    }
+}
+
+// ---- registry and trust checks (same rules as labconstrictor_tools.registry)
 /** Directories searched, highest priority first: per-user, LC_APPS_PATH, system-wide. */
 List<File> registryDirs() {
     def dirs = [new File(lcHome(), "apps")]
@@ -156,8 +158,11 @@ List<File> registryDirs() {
 boolean plainName(def text) {
     return text instanceof String && text && text != "." && text != ".." && !text.any { it in ["/", "\\", "\0"] as Set } && text == text.trim()
 }
+
 boolean identifier(def text) { return text instanceof String && (text ==~ /[A-Za-z_][A-Za-z0-9_]*/) }
+
 boolean toolId(def text) { return text instanceof String && (text ==~ /[A-Za-z0-9_][A-Za-z0-9_.-]*/) }   // @tool(id=...) may contain - and .
+
 String slug(String text) { return text.replaceAll(/[^A-Za-z0-9_.-]+/, "_").replaceFirst(/^\.+/, "") ?: "x" }
 
 boolean isPosixHost() { return !System.getProperty("os.name").toLowerCase().contains("win") }
@@ -294,27 +299,16 @@ Map discoverApps() {
     return [home: lcHome(), apps: apps, problems: problems]
 }
 
-/** One folder per run under <home>/runs (newest 50 kept): what was run, by which interpreter, what came back. */
-String writeRunRecord(Map app, Map tool, Map inputs, Map outcome, Map summary) {
-    try {
-        def runs = new File(lcHome(), "runs")
-        def stamp = new java.text.SimpleDateFormat("yyyyMMdd'T'HHmmssSSS").format(new Date())
-        def folder = new File(runs, stamp + "_" + slug(app.name as String) + "_" + slug(tool.id as String))
-        if (folder.canonicalFile.parentFile != runs.canonicalFile) throw new IOException("run folder " + folder + " is not inside " + runs)
-        folder.mkdirs()
-        new File(folder, "run.json").text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
-            app: app.name, app_version: app.version, tool: tool.id, host: "fiji", status: outcome.status, error: outcome.error,
-            seconds: outcome.seconds, inputs: inputs, worker_output_tail: outcome.workerOutput, log_file: new File(lcHome(), "logs/labconstrictor.log").path, progress_events: outcome.progress, interpreter: outcome.outputs?.diagnostics,
-            results: (outcome.outputs?.results ?: []).collect { it.findAll { k, v -> k != "matrix_yx" } }]))
-        (runs.listFiles({ File f -> f.isDirectory() } as FileFilter) ?: [] as File[]).sort().reverse().drop(50).each { removeFolder(it, "old run record") }
-        return folder.path
-    } catch (Exception problem) {                       // a record must never break a run, but its absence must be visible
-        lcLog("WARNING", "could not write the run record: " + problem, problem)
-        return null
-    }
+/** No registered app can be used: say why (dialog and log) and finish. */
+def reportNoApps(Map found, Map summary) {
+    def why = found.problems ? "\n\nSkipped:\n" + found.problems.join("\n") : ""
+    lcLog("ERROR", "no usable apps in " + found.home + "/apps" + why.replace("\n", " | "))
+    if (hooks.interactive) IJ.error("LabConstrictor", "No LabConstrictor apps are registered in " + found.home + "/apps." + why +
+                                    "\n\nCheck with: labconstrictor-tools doctor   (log: " + new File(lcHome(), "logs/labconstrictor.log").path + ")")
+    return hooks.finish(summary + [error: "no apps registered"])
 }
 
-// ---------------------------------------------------------------- SciJava helpers
+// ---- the dialog
 MutableModuleInfo newInfo(String title) {
     def info = new DefaultMutableModuleInfo()
     info.setModuleClass(LCModule)
@@ -356,7 +350,6 @@ String pickOne(String title, String label, List<String> choices, String preferre
     return harvest(info, title)?.getInput("choice")
 }
 
-// ---------------------------------------------------------------- schema -> dialog
 /** Inputs in the order the dialog shows them: the parameters of a `group` together (where the group first appears), `advanced` ones
  *  after all the others. Without group/advanced hints the order is unchanged. (Same rule as the Napari form.) */
 List presentationOrder(List inputs) {
@@ -512,7 +505,128 @@ void addFloatItem(MutableModuleInfo info, Map p, Map base, boolean overridden, d
     if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) floatItem.setWidgetStyle("slider")   // Widget("slider")
 }
 
-// ---------------------------------------------------------------- dialog -> request
+/** Names of the parameters that some ChoicesFrom of the app depends on: the only values kept between runs. */
+Set<String> dependsNames(Map app) {
+    def names = [] as Set
+    app.schema.tools.each { tool -> tool.inputs.each { p -> if (p.choices_from?.depends instanceof List) names.addAll(p.choices_from.depends) } }
+    return names
+}
+
+File stateFile(Map app) { return new File(new File(lcHome(), "state"), slug(app.name as String) + ".json") }
+
+Map readState(Map app) {
+    try {
+        def file = stateFile(app)
+        def data = file.isFile() ? new JsonSlurper().parseText(file.text) : [:]
+        return data instanceof Map ? data : [:]
+    } catch (Exception problem) {
+        // (d) intended fallback: no remembered values (ChoicesFrom then shows a text field); broad because the file is whatever was left on disk
+        lcLog("WARNING", "could not read the remembered values (starting without them): " + problem, problem)
+        return [:]
+    }
+}
+
+/** Keep the values of the parameters ChoicesFrom depends on, so the next dialog can ask the source tool (Fiji builds the dialog before anything is typed). */
+void rememberDepends(Map app, Map tool, Map inputs) {
+    try {
+        def keep = dependsNames(app)
+        def now = tool.inputs.findAll { it.name in keep && inputs[it.name] instanceof String }.collectEntries { [(it.name): inputs[it.name]] }
+        if (!now) return
+        def state = readState(app) + now
+        def file = stateFile(app)
+        file.parentFile.mkdirs()
+        file.text = groovy.json.JsonOutput.toJson(state)
+    } catch (Exception problem) { lcLog("WARNING", "could not remember the values (the next dialog will not know them): " + problem, problem) }
+}
+
+/** The values of the parameters a ChoicesFrom depends on (the harness's, else the remembered ones), or null while one of them is not known yet. */
+Map choiceRequest(Map tool, Map p, Map state) {
+    def request = [:]
+    for (name in p.choices_from.depends) {
+        def value = hooks.overrides.containsKey(name) ? hooks.overrides[name] : state[name]
+        def type = tool.inputs.find { it.name == name }?.type
+        if (!(value instanceof String) || !value || (type == "folder" && !new File(value).isDirectory())) {   // (d) intended fallback: not known yet, so a text field
+            lcLog("INFO", "choices of '" + p.name + "' not asked yet: '" + name + "' has no usable value (text field)")
+            return null
+        }
+        request[name] = value
+    }
+    return request
+}
+
+/** Run the source tool of a ChoicesFrom with `request` and return the options it answered, or null when it gave none. */
+List askSourceTool(Map app, Map source, Map p, Map request) {
+    def jobDir = Files.createTempDirectory("lcchoices_fiji_").toFile()
+    try {
+        request[JOB_DIR_KEY] = jobDir.path
+        def outcome = runTool(app, source, request)
+        if (!outcome.complete) { lcLog("WARNING", "choices of '" + p.name + "' not available: " + outcome.error); return null }
+        def found = outcome.outputs.results.find { it.type == "values" && it.values?.get(p.choices_from.field ?: "choices") instanceof List }
+        def options = found?.values?.get(p.choices_from.field ?: "choices")?.collect { it.toString() }
+        return options ?: null
+    } finally { removeFolder(jobDir, "job folder of the choices request") }
+}
+
+/** The options for one ChoicesFrom parameter, or null (it stays a text field). One failing source tool must not break the dialog. */
+List choicesFor(Map app, Map tool, Map p, Map state) {
+    def source = app.schema.tools.find { it.id == p.choices_from.tool }
+    def given = hooks.overrides.containsKey("_choices_" + p.name) ? hooks.overrides["_choices_" + p.name] : null
+    try {
+        if (given instanceof List) return given
+        if (source == null || !(p.choices_from.depends instanceof List)) {
+            lcLog("WARNING", "choices of '" + p.name + "' cannot be asked: the source tool '" + p.choices_from.tool + "' is not in the app or 'depends' is not a list (text field)")
+            return null
+        }
+        def request = choiceRequest(tool, p, state)
+        return request == null ? null : askSourceTool(app, source, p, request)
+    } catch (Exception problem) {          // broad on purpose: one failing source tool must not break the dialog; the field stays a text field
+        lcLog("WARNING", "could not get the choices of '" + p.name + "': " + problem, problem)
+        IJ.log("LabConstrictor: could not get the choices of '" + p.label + "' (" + problem + "); type the value instead")
+        return null
+    }
+}
+
+/** ChoicesFrom parameters of `tool` -> their options, asked of the source tool with the values of the previous run; unanswered ones are left out (text field). */
+Map choiceListsFor(Map app, Map tool) {
+    def lists = [:]
+    def state = null
+    tool.inputs.findAll { it.choices_from instanceof Map }.each { p ->
+        state = state ?: readState(app)
+        def options = choicesFor(app, tool, p, state)
+        if (options != null) lists[p.name] = options
+    }
+    return lists
+}
+
+/** What the dialog offered, for the harness: item names, choices, widget styles and defaults. */
+void describeDialog(Map summary, def info) {
+    summary.dialog_inputs = info.inputs().collect { it.getName() }
+    summary.dialog_choices = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getChoices() as List] }
+    summary.dialog_styles = info.inputs().findAll { it.getWidgetStyle() }.collectEntries { [(it.getName()): it.getWidgetStyle()] }
+    summary.dialog_defaults = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getDefaultValue()] }
+}
+
+/** Interactive run: choose the app and tool, show the tool's dialog, record the run. Returns [app, tool, module], or [aborted: true, result: ...] when cancelled. */
+Map requestFromDialog(Map found, Map summary) {
+    def appName = pickOne("LabConstrictor", "Application", found.apps.keySet().toList(), hooks.preferred("app"))
+    if (appName == null) return [aborted: true, result: hooks.finish(summary + [cancelled: true])]
+    def app = found.apps[appName]
+    def toolLabel = pickOne("LabConstrictor: " + app.display_name, "Tool", app.schema.tools.collect { it.label }, hooks.preferred("tool"))
+    if (toolLabel == null) return [aborted: true, result: hooks.finish(summary + [cancelled: true])]
+    def tool = app.schema.tools.find { it.label == toolLabel }
+
+    def openImages = WindowManager.getImageTitles() as List<String>
+    def dialogStarted = System.nanoTime()
+    def (info, links) = buildToolDialog(tool, openImages, choiceListsFor(app, tool))
+    summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / 1e9
+    describeDialog(summary, info)
+    def module = harvest(info, tool.label, links)
+    if (module == null) return [aborted: true, result: hooks.finish(summary + [cancelled: true])]
+    recordRun(appName, tool, module)
+    return [app: app, tool: tool, module: module]
+}
+
+// ---- the request
 /** One channel of a (hyper)stack as a plain image, at the current Z and T: what a tool declared with PickChannel receives. */
 ImagePlus channelOf(ImagePlus imp, int channel, String label) {
     if (channel < 1 || channel > imp.getNChannels())
@@ -618,101 +732,7 @@ List exportInputs(Map tool, def module, File jobDir) {
     return [inputs, images]
 }
 
-// ---------------------------------------------------------------- remembered values and dynamic choices (ChoicesFrom)
-/** Names of the parameters that some ChoicesFrom of the app depends on: the only values kept between runs. */
-Set<String> dependsNames(Map app) {
-    def names = [] as Set
-    app.schema.tools.each { tool -> tool.inputs.each { p -> if (p.choices_from?.depends instanceof List) names.addAll(p.choices_from.depends) } }
-    return names
-}
-
-File stateFile(Map app) { return new File(new File(lcHome(), "state"), slug(app.name as String) + ".json") }
-
-Map readState(Map app) {
-    try {
-        def file = stateFile(app)
-        def data = file.isFile() ? new JsonSlurper().parseText(file.text) : [:]
-        return data instanceof Map ? data : [:]
-    } catch (Exception problem) {
-        // (d) intended fallback: no remembered values (ChoicesFrom then shows a text field); broad because the file is whatever was left on disk
-        lcLog("WARNING", "could not read the remembered values (starting without them): " + problem, problem)
-        return [:]
-    }
-}
-
-/** Keep the values of the parameters ChoicesFrom depends on, so the next dialog can ask the source tool (Fiji builds the dialog before anything is typed). */
-void rememberDepends(Map app, Map tool, Map inputs) {
-    try {
-        def keep = dependsNames(app)
-        def now = tool.inputs.findAll { it.name in keep && inputs[it.name] instanceof String }.collectEntries { [(it.name): inputs[it.name]] }
-        if (!now) return
-        def state = readState(app) + now
-        def file = stateFile(app)
-        file.parentFile.mkdirs()
-        file.text = groovy.json.JsonOutput.toJson(state)
-    } catch (Exception problem) { lcLog("WARNING", "could not remember the values (the next dialog will not know them): " + problem, problem) }
-}
-
-/** The values of the parameters a ChoicesFrom depends on (the harness's, else the remembered ones), or null while one of them is not known yet. */
-Map choiceRequest(Map tool, Map p, Map state) {
-    def request = [:]
-    for (name in p.choices_from.depends) {
-        def value = hooks.overrides.containsKey(name) ? hooks.overrides[name] : state[name]
-        def type = tool.inputs.find { it.name == name }?.type
-        if (!(value instanceof String) || !value || (type == "folder" && !new File(value).isDirectory())) {   // (d) intended fallback: not known yet, so a text field
-            lcLog("INFO", "choices of '" + p.name + "' not asked yet: '" + name + "' has no usable value (text field)")
-            return null
-        }
-        request[name] = value
-    }
-    return request
-}
-
-/** Run the source tool of a ChoicesFrom with `request` and return the options it answered, or null when it gave none. */
-List askSourceTool(Map app, Map source, Map p, Map request) {
-    def jobDir = Files.createTempDirectory("lcchoices_fiji_").toFile()
-    try {
-        request[JOB_DIR_KEY] = jobDir.path
-        def outcome = runTool(app, source, request)
-        if (!outcome.complete) { lcLog("WARNING", "choices of '" + p.name + "' not available: " + outcome.error); return null }
-        def found = outcome.outputs.results.find { it.type == "values" && it.values?.get(p.choices_from.field ?: "choices") instanceof List }
-        def options = found?.values?.get(p.choices_from.field ?: "choices")?.collect { it.toString() }
-        return options ?: null
-    } finally { removeFolder(jobDir, "job folder of the choices request") }
-}
-
-/** The options for one ChoicesFrom parameter, or null (it stays a text field). One failing source tool must not break the dialog. */
-List choicesFor(Map app, Map tool, Map p, Map state) {
-    def source = app.schema.tools.find { it.id == p.choices_from.tool }
-    def given = hooks.overrides.containsKey("_choices_" + p.name) ? hooks.overrides["_choices_" + p.name] : null
-    try {
-        if (given instanceof List) return given
-        if (source == null || !(p.choices_from.depends instanceof List)) {
-            lcLog("WARNING", "choices of '" + p.name + "' cannot be asked: the source tool '" + p.choices_from.tool + "' is not in the app or 'depends' is not a list (text field)")
-            return null
-        }
-        def request = choiceRequest(tool, p, state)
-        return request == null ? null : askSourceTool(app, source, p, request)
-    } catch (Exception problem) {          // broad on purpose: one failing source tool must not break the dialog; the field stays a text field
-        lcLog("WARNING", "could not get the choices of '" + p.name + "': " + problem, problem)
-        IJ.log("LabConstrictor: could not get the choices of '" + p.label + "' (" + problem + "); type the value instead")
-        return null
-    }
-}
-
-/** ChoicesFrom parameters of `tool` -> their options, asked of the source tool with the values of the previous run; unanswered ones are left out (text field). */
-Map choiceListsFor(Map app, Map tool) {
-    def lists = [:]
-    def state = null
-    tool.inputs.findAll { it.choices_from instanceof Map }.each { p ->
-        state = state ?: readState(app)
-        def options = choicesFor(app, tool, p, state)
-        if (options != null) lists[p.name] = options
-    }
-    return lists
-}
-
-// ---------------------------------------------------------------- run
+// ---- running the worker
 /** The worker process of an app (not started yet); its stderr goes to the log and, as a tail, into `workerOutput`. */
 Service newWorkerService(Map app, List<String> workerOutput) {
     def command = [app.python, "-m", "labconstrictor_tools", "serve", "--module", app.module] + app.pythonpath.collectMany { ["--pythonpath", it] }
@@ -787,6 +807,13 @@ Map runTool(Map app, Map tool, Map inputs) {
             seconds: (System.currentTimeMillis() - started) / 1000.0]
 }
 
+/** After close(): wait for the worker to exit on its own, then kill it so no process is ever left behind. */
+void waitForExit(Service service, int timeoutMs) {
+    def deadline = System.currentTimeMillis() + timeoutMs
+    while (service.isAlive() && System.currentTimeMillis() < deadline) Thread.sleep(100)
+    if (service.isAlive()) service.kill()
+}
+
 /** One line saying the likely cause of a worker that died (same wording as labconstrictor_tools.log.hint_for_exit). */
 String crashHint(Map outcome) {
     if (outcome.cancelRequested) return "The tool did not stop when Cancel was pressed, so its worker was stopped."
@@ -810,15 +837,40 @@ String failureMessage(Map outcome, Map summary) {
            "\n\nRun record: " + (summary.run_record ?: "(none)") + "\nLog file: " + new File(lcHome(), "logs/labconstrictor.log").path
 }
 
-/** After close(): wait for the worker to exit on its own, then kill it so no process is ever left behind. */
-void waitForExit(Service service, int timeoutMs) {
-    def deadline = System.currentTimeMillis() + timeoutMs
-    while (service.isAlive() && System.currentTimeMillis() < deadline) Thread.sleep(100)
-    if (service.isAlive()) service.kill()
+/** One folder per run under <home>/runs (newest 50 kept): what was run, by which interpreter, what came back. */
+String writeRunRecord(Map app, Map tool, Map inputs, Map outcome, Map summary) {
+    try {
+        def runs = new File(lcHome(), "runs")
+        def stamp = new java.text.SimpleDateFormat("yyyyMMdd'T'HHmmssSSS").format(new Date())
+        def folder = new File(runs, stamp + "_" + slug(app.name as String) + "_" + slug(tool.id as String))
+        if (folder.canonicalFile.parentFile != runs.canonicalFile) throw new IOException("run folder " + folder + " is not inside " + runs)
+        folder.mkdirs()
+        new File(folder, "run.json").text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
+            app: app.name, app_version: app.version, tool: tool.id, host: "fiji", status: outcome.status, error: outcome.error,
+            seconds: outcome.seconds, inputs: inputs, worker_output_tail: outcome.workerOutput, log_file: new File(lcHome(), "logs/labconstrictor.log").path, progress_events: outcome.progress, interpreter: outcome.outputs?.diagnostics,
+            results: (outcome.outputs?.results ?: []).collect { it.findAll { k, v -> k != "matrix_yx" } }]))
+        (runs.listFiles({ File f -> f.isDirectory() } as FileFilter) ?: [] as File[]).sort().reverse().drop(50).each { removeFolder(it, "old run record") }
+        return folder.path
+    } catch (Exception problem) {                       // a record must never break a run, but its absence must be visible
+        lcLog("WARNING", "could not write the run record: " + problem, problem)
+        return null
+    }
 }
 
-// ---------------------------------------------------------------- results (switch on result type only)
+/** Run the tool, then keep the command and the run record and show the outcome. */
+void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
+    def outcome = runTool(app, tool, inputs)
+    summary << [request: inputs, status: outcome.status, error: outcome.error, progress_events: outcome.progress,
+                worker_alive_after: outcome.workerAlive, cancel_requested: outcome.cancelRequested]
+    summary.timings.worker_run_s = outcome.seconds
+    rememberCommand(app, tool, inputs, images, summary)
+    summary.run_record = writeRunRecord(app, tool, inputs, outcome, summary)
+    reportOutcome(app, tool, outcome, images, summary)
+}
+
+// ---- showing results (switch on result type only)
 @groovy.transform.Field def lastShownImage = null          // the image window this run showed last (points without an apply_to go on it)
+
 Map showResults(Map app, List results, Map images, Map tool = null) {
     def summary = [:]
     def replaced = (tool?.outputs ?: []).findAll { it.replace }.collect { it.name } as Set
@@ -899,6 +951,7 @@ void showPoints(Map app, Map r, Map images, Map summary, boolean replace) {
 }
 
 @groovy.transform.Field final int MAX_SHAPES = 50000       // outlines shown on the image
+
 @groovy.transform.Field final int MAX_MANAGER_SHAPES = 1000  // outlines also listed in the ROI Manager (it gets very slow with more)
 
 /** One polygon (rings of [x, y], pixel centres at integers; the first ring is the outline, the others holes) as a ShapeRoi. */
@@ -975,7 +1028,7 @@ void showTable(Map r, Map summary) {
     summary["table_" + r.name] = [rows: table.size(), cols: table.getHeadings() as List, first: table.getRowAsString(0)]
 }
 
-/** Resample `source` into the `target` frame with the returned matrix (maps source px -> target px) and show an overlay. */
+/** An input image of the run: the image itself, or the file it was given as (opened only when a result needs it). */
 ImagePlus asImage(def image) {                          // inputs given as files are opened only when a result needs them
     if (image instanceof ImagePlus) return image
     def imp = IJ.openImage(image as String)
@@ -983,6 +1036,7 @@ ImagePlus asImage(def image) {                          // inputs given as files
     return imp
 }
 
+/** Resample `apply_to` into the `relative_to` frame with the returned matrix (maps source px -> target px) and show a green/magenta overlay. */
 void showAffine(Map r, Map images, List results, Map summary, boolean replace = false) {
     def source = asImage(images[r.apply_to]), target = asImage(images[r.relative_to ?: r.apply_to])
     def warped = resample(source, target.getWidth(), target.getHeight(), r.matrix_yx)
@@ -1036,8 +1090,28 @@ double relativeDifference(FloatProcessor a, FloatProcessor b) {
     return sumDiff / Math.max(sumRef, 1e-9)
 }
 
+/** Say what became of a run: show the results of a complete one, a plain message for "nothing found", an error for a failure, a status line for the rest. */
+void reportOutcome(Map app, Map tool, Map outcome, Map images, Map summary) {
+    if (outcome.complete) {
+        summary.interpreter = outcome.outputs.diagnostics
+        summary << showResults(app, outcome.outputs.results, images, tool)
+        if (summary.display_errors && hooks.interactive)
+            IJ.error("LabConstrictor: " + app.display_name, "The tool finished, but not everything could be shown:\n" + summary.display_errors.join("\n"))
+    } else if (outcome.status == "FAILED" && !outcome.cancelRequested && (outcome.error ?: "") =~ /^\[(no_match|no_result)\] /) {
+        // an outcome ("nothing found"), not a fault: a plain message, not an error dialog
+        summary.no_match_message = outcome.error.replaceFirst(/^\[[a-z_]+\] /, "")
+        if (hooks.interactive) IJ.showMessage("LabConstrictor: " + app.display_name, summary.no_match_message)
+        IJ.showStatus("LabConstrictor: " + summary.no_match_message)
+    } else if (outcome.status in ["FAILED", "CRASHED"] && !outcome.cancelRequested) {
+        summary.failure_message = failureMessage(outcome, summary)
+        if (hooks.interactive) IJ.error("LabConstrictor: " + app.display_name, summary.failure_message)
+    } else {
+        IJ.showStatus("LabConstrictor: " + outcome.status.toLowerCase())
+        IJ.log("LabConstrictor: the run was " + (outcome.cancelRequested ? "cancelled" : outcome.status.toLowerCase()))
+    }
+}
 
-// ---------------------------------------------------------------- macro recording / replay
+// ---- macro replay
 /** Module stand-in for a macro call: same getInput(name) contract as the harvested dialog module, values from the options string. */
 class MacroModule {
     Map values = [:]
@@ -1181,16 +1255,6 @@ MacroModule moduleFromMacro(Map tool, String options) {
     return module
 }
 
-// ---------------------------------------------------------------- main
-/** No registered app can be used: say why (dialog and log) and finish. */
-def reportNoApps(Map found, Map summary) {
-    def why = found.problems ? "\n\nSkipped:\n" + found.problems.join("\n") : ""
-    lcLog("ERROR", "no usable apps in " + found.home + "/apps" + why.replace("\n", " | "))
-    if (hooks.interactive) IJ.error("LabConstrictor", "No LabConstrictor apps are registered in " + found.home + "/apps." + why +
-                                    "\n\nCheck with: labconstrictor-tools doctor   (log: " + new File(lcHome(), "logs/labconstrictor.log").path + ")")
-    return hooks.finish(summary + [error: "no apps registered"])
-}
-
 /** Replay of a recorded macro: no choosers, no dialog. Returns [app, tool, module], or [aborted: true, result: ...] after reporting why not. */
 Map requestFromMacro(Map found, String macro, Map summary) {
     def appText = Macro.getValue(macro, "app", "") ?: ""
@@ -1206,70 +1270,14 @@ Map requestFromMacro(Map found, String macro, Map summary) {
     return [app: app, tool: tool, module: module]
 }
 
-/** What the dialog offered, for the harness: item names, choices, widget styles and defaults. */
-void describeDialog(Map summary, def info) {
-    summary.dialog_inputs = info.inputs().collect { it.getName() }
-    summary.dialog_choices = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getChoices() as List] }
-    summary.dialog_styles = info.inputs().findAll { it.getWidgetStyle() }.collectEntries { [(it.getName()): it.getWidgetStyle()] }
-    summary.dialog_defaults = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getDefaultValue()] }
+def failEarly(Map summary, String message) {
+    lcLog("ERROR", "macro call rejected: " + message)
+    if (hooks.interactive) IJ.error("LabConstrictor", message)
+    IJ.log("LabConstrictor: " + message)
+    return hooks.finish(summary + [error: message])
 }
 
-/** Interactive run: choose the app and tool, show the tool's dialog, record the run. Returns [app, tool, module], or [aborted: true, result: ...] when cancelled. */
-Map requestFromDialog(Map found, Map summary) {
-    def appName = pickOne("LabConstrictor", "Application", found.apps.keySet().toList(), hooks.preferred("app"))
-    if (appName == null) return [aborted: true, result: hooks.finish(summary + [cancelled: true])]
-    def app = found.apps[appName]
-    def toolLabel = pickOne("LabConstrictor: " + app.display_name, "Tool", app.schema.tools.collect { it.label }, hooks.preferred("tool"))
-    if (toolLabel == null) return [aborted: true, result: hooks.finish(summary + [cancelled: true])]
-    def tool = app.schema.tools.find { it.label == toolLabel }
-
-    def openImages = WindowManager.getImageTitles() as List<String>
-    def dialogStarted = System.nanoTime()
-    def (info, links) = buildToolDialog(tool, openImages, choiceListsFor(app, tool))
-    summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / 1e9
-    describeDialog(summary, info)
-    def module = harvest(info, tool.label, links)
-    if (module == null) return [aborted: true, result: hooks.finish(summary + [cancelled: true])]
-    recordRun(appName, tool, module)
-    return [app: app, tool: tool, module: module]
-}
-
-/** Export the inputs into a job folder (removed whatever happens), run the tool and show what came back. */
-def runRequest(Map app, Map tool, def module, Map summary) {
-    def jobDir = Files.createTempDirectory("lcjob_fiji_").toFile()
-    try {                                                        // the folder goes whatever happens from here on
-        List exported
-        try {
-            exported = exportInputs(tool, module, jobDir)
-        } catch (IllegalArgumentException problem) {           // missing file, nothing chosen for a required image
-            if (hooks.interactive) IJ.error("LabConstrictor", problem.message)
-            return hooks.finish(summary + [error: problem.message])
-        }
-        def (inputs, images) = exported
-        runAndShow(app, tool, inputs, images, summary)
-        if (summary.status == "COMPLETE") rememberDepends(app, tool, inputs)
-    } finally {
-        removeFolder(jobDir, "job folder of the run")
-    }
-    hooks.finish(summary)
-}
-
-def labConstrictorRun() {
-    hooks.setup()
-    def started = System.nanoTime()
-    def summary = [timings: [:]]
-    def found = discoverApps()
-    summary.timings.discovery_s = (System.nanoTime() - started) / 1e9
-    if (!found.apps) return reportNoApps(found, summary)
-
-    def macro = macroOptions()
-    if (macro && macro =~ /(^|\s)copy_last(=|\s|$)/) return copyLastRun(macro, summary)   // menu entry "Copy last run as command": no dialog, nothing is run
-    def request = macro ? requestFromMacro(found, macro, summary) : requestFromDialog(found, summary)
-    if (request.aborted) return request.result
-    return runRequest(request.app, request.tool, request.module, summary)
-}
-
-// ---------------------------------------------------------------- Copy as command (same text as labconstrictor_tools.command)
+// ---- copy as command (same text as labconstrictor_tools.command)
 @Field final Map<String, String> FILE_PLACEHOLDERS = [image: "image.tif", labels: "labels.tif", table: "table.csv", file: "file", folder: "folder"]
 
 String shellQuote(String text, boolean windows) {
@@ -1356,43 +1364,42 @@ void rememberCommand(Map app, Map tool, Map inputs, Map images, Map summary) {
     }
 }
 
-/** Say what became of a run: show the results of a complete one, a plain message for "nothing found", an error for a failure, a status line for the rest. */
-void reportOutcome(Map app, Map tool, Map outcome, Map images, Map summary) {
-    if (outcome.complete) {
-        summary.interpreter = outcome.outputs.diagnostics
-        summary << showResults(app, outcome.outputs.results, images, tool)
-        if (summary.display_errors && hooks.interactive)
-            IJ.error("LabConstrictor: " + app.display_name, "The tool finished, but not everything could be shown:\n" + summary.display_errors.join("\n"))
-    } else if (outcome.status == "FAILED" && !outcome.cancelRequested && (outcome.error ?: "") =~ /^\[(no_match|no_result)\] /) {
-        // an outcome ("nothing found"), not a fault: a plain message, not an error dialog
-        summary.no_match_message = outcome.error.replaceFirst(/^\[[a-z_]+\] /, "")
-        if (hooks.interactive) IJ.showMessage("LabConstrictor: " + app.display_name, summary.no_match_message)
-        IJ.showStatus("LabConstrictor: " + summary.no_match_message)
-    } else if (outcome.status in ["FAILED", "CRASHED"] && !outcome.cancelRequested) {
-        summary.failure_message = failureMessage(outcome, summary)
-        if (hooks.interactive) IJ.error("LabConstrictor: " + app.display_name, summary.failure_message)
-    } else {
-        IJ.showStatus("LabConstrictor: " + outcome.status.toLowerCase())
-        IJ.log("LabConstrictor: the run was " + (outcome.cancelRequested ? "cancelled" : outcome.status.toLowerCase()))
+// ---- entry point
+/** Export the inputs into a job folder (removed whatever happens), run the tool and show what came back. */
+def runRequest(Map app, Map tool, def module, Map summary) {
+    def jobDir = Files.createTempDirectory("lcjob_fiji_").toFile()
+    try {                                                        // the folder goes whatever happens from here on
+        List exported
+        try {
+            exported = exportInputs(tool, module, jobDir)
+        } catch (IllegalArgumentException problem) {           // missing file, nothing chosen for a required image
+            if (hooks.interactive) IJ.error("LabConstrictor", problem.message)
+            return hooks.finish(summary + [error: problem.message])
+        }
+        def (inputs, images) = exported
+        runAndShow(app, tool, inputs, images, summary)
+        if (summary.status == "COMPLETE") rememberDepends(app, tool, inputs)
+    } finally {
+        removeFolder(jobDir, "job folder of the run")
     }
+    hooks.finish(summary)
 }
 
-/** Run the tool, then keep the command and the run record and show the outcome. */
-void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
-    def outcome = runTool(app, tool, inputs)
-    summary << [request: inputs, status: outcome.status, error: outcome.error, progress_events: outcome.progress,
-                worker_alive_after: outcome.workerAlive, cancel_requested: outcome.cancelRequested]
-    summary.timings.worker_run_s = outcome.seconds
-    rememberCommand(app, tool, inputs, images, summary)
-    summary.run_record = writeRunRecord(app, tool, inputs, outcome, summary)
-    reportOutcome(app, tool, outcome, images, summary)
+def labConstrictorRun() {
+    hooks.setup()
+    def started = System.nanoTime()
+    def summary = [timings: [:]]
+    def found = discoverApps()
+    summary.timings.discovery_s = (System.nanoTime() - started) / 1e9
+    if (!found.apps) return reportNoApps(found, summary)
+
+    def macro = macroOptions()
+    if (macro && macro =~ /(^|\s)copy_last(=|\s|$)/) return copyLastRun(macro, summary)   // menu entry "Copy last run as command": no dialog, nothing is run
+    def request = macro ? requestFromMacro(found, macro, summary) : requestFromDialog(found, summary)
+    if (request.aborted) return request.result
+    return runRequest(request.app, request.tool, request.module, summary)
 }
-def failEarly(Map summary, String message) {
-    lcLog("ERROR", "macro call rejected: " + message)
-    if (hooks.interactive) IJ.error("LabConstrictor", message)
-    IJ.log("LabConstrictor: " + message)
-    return hooks.finish(summary + [error: message])
-}
+
 /** Entry point: anything unexpected is logged with its stack trace and shown with the log's location. */
 def labConstrictorMain() {
     lcLog("INFO", "---- session start: " + IJ.getFullVersion() + " java=" + System.getProperty("java.version") + " os=" + System.getProperty("os.name") + " LC_HOME=" + lcHome())
@@ -1404,4 +1411,5 @@ def labConstrictorMain() {
         return hooks.finish([error: problem.toString()])
     }
 }
+
 labConstrictorMain()
