@@ -25,12 +25,46 @@ import org.scijava.module.DefaultMutableModuleItem
 import org.scijava.module.MutableModuleInfo
 import java.nio.file.Files
 
-@Field final int CANCEL_GRACE_MS = 3000          // how long a tool gets to honour Cancel before its worker is killed
+// ---- constants (limits, timeouts, intervals): every number the script depends on is named and explained here
 @Field final String JOB_DIR_KEY = "_job_dir"     // reserved input: host-owned directory for outputs
-@Field final String TOOL_PREFIX = "lc:"
-@Field final List<Integer> SUPPORTED_PROTOCOLS = [1]
-@Field final int MAX_KEPT_LINES = 500            // worker output and progress events kept per run (the log has the rest)
+@Field final String TOOL_PREFIX = "lc:"          // task names the worker serves: "lc:<tool id>"
+@Field final List<Integer> SUPPORTED_PROTOCOLS = [1]   // schema protocol versions this script understands
+
+// timeouts and polling
+@Field final int CANCEL_GRACE_MS = 3000          // how long a tool gets to honour Cancel before its worker is killed
 @Field final int EXIT_WAIT_MS = 15000            // heavy interpreters (torch, numba) need a few seconds to exit after stdin closes
+@Field final int CANCEL_POLL_MS = 50             // while a task runs: how often Esc, the harness's cancel time and the task status are looked at
+@Field final int EXIT_POLL_MS = 100              // while a closed worker exits: how often it is looked at
+
+// limits on what is kept, shown or sent
+@Field final long LOG_MAX_BYTES = 1_000_000L     // the log file is rotated (to .log.1) above this size
+@Field final int MAX_KEPT_LINES = 500            // worker output and progress events kept per run (the log has the rest)
+@Field final int LOG_WORKER_LINES = 40           // last worker lines copied into the log when a task does not complete
+@Field final int OUTCOME_WORKER_LINES = 60       // last worker lines kept in the outcome (and the run record)
+@Field final int DIALOG_WORKER_LINES = 8         // last worker lines shown in the error dialog
+@Field final int DIALOG_LINE_CHARS = 300         // longer worker lines are cut in the error dialog (it must not outgrow the screen)
+@Field final int KEPT_RUN_RECORDS = 50           // newest run folders kept under <home>/runs
+@Field final int MAX_CHANNELS = 1000             // upper bound of the "channel" field of a PickChannel image
+@Field final int MAX_REGION_OBJECTS = 65535      // labels of the region image (16 bit)
+@Field final int MAX_SHAPES = 50000              // outlines shown on the image
+@Field final int MAX_MANAGER_SHAPES = 1000       // outlines also listed in the ROI Manager (it gets very slow with more)
+
+// numeric conventions
+@Field final double PIXEL_CENTRE = 0.5d          // ImageJ coordinates: the centre of pixel i is i + 0.5; tools send integer pixel centres
+@Field final double FLOAT_STEP = 0.0001d         // step of a float field in the dialog
+@Field final double SINGULAR_TOLERANCE = 1e-9d   // an alignment matrix whose determinant is below this (relative) cannot be inverted
+@Field final double MIN_REFERENCE_SUM = 1e-9d    // keeps relativeDifference finite when the reference warp is empty
+@Field final double NANOS_PER_SECOND = 1e9d
+@Field final double MS_PER_SECOND = 1000.0d
+
+// unix permission bits tested by the trust rules
+@Field final int MODE_OTHERS_WRITE = 02      // writable by others
+@Field final int MODE_STICKY = 01000         // in a directory: only the owner of a file may replace it
+
+// worker exit codes (POSIX shell convention: 128 + signal; Windows: NTSTATUS) that crashHint explains
+@Field final List<Long> EXIT_KILLED = [-9L, 137L]                    // SIGKILL (the OOM killer)
+@Field final List<Long> EXIT_SEGFAULT = [-11L, 139L, 3221225477L]    // SIGSEGV / access violation
+@Field final long EXIT_IMPORT_FAILED = 3L                            // the serve command's own code for "tool module failed to import"
 
 // ---- calibration sync: a dialog module that keeps pixel-size fields in step with the chosen image or file
 /** Module whose callbacks keep a calibration field in sync with the image chosen for it (schema: pixel_size_of). */
@@ -40,6 +74,7 @@ class LCModule extends DefaultMutableModule {
     void run() {}                              // all work happens after harvesting
 
     static Closure logger = { String level, String message, Throwable problem -> }   // set below to lcLog (a class cannot call the script's methods)
+    private static final double MICRONS_PER_INCH = 25400.0d    // 1 inch = 25.4 mm
     private static final Map<String, Double> MICRONS_PER_UNIT = [um: 1.0d, micron: 1.0d, microns: 1.0d, micrometer: 1.0d, micrometre: 1.0d,
                                                                   nm: 1e-3d, nanometer: 1e-3d, mm: 1e3d, millimeter: 1e3d, cm: 1e4d, m: 1e6d]
     /** Pixel size of an image in micrometres, or null when uncalibrated or in a unit we cannot convert (pixel, inch, ...). */
@@ -58,7 +93,7 @@ class LCModule extends DefaultMutableModule {
             if (!info || info[0].pixelWidth <= 0 || info[0].pixelWidth == 1.0d && !info[0].description) return null
             def unit = (info[0].description =~ /(?m)^unit=(.*)$/).with { it.find() ? it.group(1) : (info[0].unit ?: "") }
             unit = unit.toLowerCase().replace("\u00b5", "u").replace("\u03bc", "u").replace("\ufffd", "u").trim()
-            def factor = MICRONS_PER_UNIT[unit] ?: (unit == "cm" ? 1e4d : unit == "inch" ? 25400.0d : null)
+            def factor = MICRONS_PER_UNIT[unit] ?: (unit == "inch" ? MICRONS_PER_INCH : null)
             return factor == null ? null : info[0].pixelWidth * factor
         } catch (Exception problem) {      // not a TIFF / unreadable header (TiffDecoder throws IOException or runtime errors on garbage)
             // not "no calibration" but "could not read it": tell the user instead of silently leaving the field alone
@@ -127,7 +162,7 @@ void lcLog(String level, String message, Throwable problem = null) {
     try {
         def file = new File(lcHome(), "logs/labconstrictor.log")
         file.parentFile.mkdirs()
-        if (file.length() > 1_000_000L) file.renameTo(new File(file.parentFile, "labconstrictor.log.1"))
+        if (file.length() > LOG_MAX_BYTES) file.renameTo(new File(file.parentFile, "labconstrictor.log.1"))
         def stamp = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(new Date())
         def text = stamp + " " + level.padRight(7) + " pid=" + ProcessHandle.current().pid() + " fiji: " + message.replace("\r", "") + "\n"
         if (problem) { def w = new StringWriter(); problem.printStackTrace(new PrintWriter(w)); text += w.toString() }
@@ -190,7 +225,7 @@ boolean worldWritable(File file, boolean directory) {
     def mode = unixMode(path)
     if (mode == null)
         return java.nio.file.Files.getPosixFilePermissions(path).contains(java.nio.file.attribute.PosixFilePermission.OTHERS_WRITE)
-    return (mode & 2) != 0 && !(directory && (mode & 01000) != 0)
+    return (mode & MODE_OTHERS_WRITE) != 0 && !(directory && (mode & MODE_STICKY) != 0)
 }
 
 /** Ownership and permission policy for a file hosts read to decide what to start (same as registry._file_reason). */
@@ -376,7 +411,7 @@ List presentationOrder(List inputs) {
 void addChannelItem(MutableModuleInfo info, Map p, String defaultImageTitle, Map overrides) {
     def imp = defaultImageTitle ? WindowManager.getImage(defaultImageTitle) : null
     def start = overrides.containsKey(p.name + "_channel") ? overrides[p.name + "_channel"] : (imp != null && imp.getNChannels() > 1 ? imp.getChannel() : 1)
-    addItem(info, p.name + "_channel", Integer, [label: p.label + " channel", required: false, min: 1, max: 1000, step: 1, default: start as Integer,
+    addItem(info, p.name + "_channel", Integer, [label: p.label + " channel", required: false, min: 1, max: MAX_CHANNELS, step: 1, default: start as Integer,
                                                 description: "Channel of the image to use (1 = first). The tool receives only this channel" + (imp != null && imp.getNChannels() > 1 ? "; the chosen image has " + imp.getNChannels() : "")])
 }
 
@@ -512,7 +547,7 @@ void addFloatItem(MutableModuleInfo info, Map p, Map base, boolean overridden, d
     if (microns != null) value = microns                                                      // calibration prefill (unit-aware)
     if (p.pixel_size_of && value == null)
         IJ.log("LabConstrictor: no pixel size found for '" + p.label + "' (the image has no usable calibration): enter it by hand")
-    def floatItem = addItem(info, p.name, Double, base + [default: (value ?: 0) as Double, min: p.minimum as Double, max: p.maximum as Double, step: 0.0001d])
+    def floatItem = addItem(info, p.name, Double, base + [default: (value ?: 0) as Double, min: p.minimum as Double, max: p.maximum as Double, step: FLOAT_STEP])
     if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) floatItem.setWidgetStyle("slider")   // Widget("slider")
 }
 
@@ -632,7 +667,7 @@ Map requestFromDialog(Map found, Map summary) {
     def openImages = WindowManager.getImageTitles() as List<String>
     def dialogStarted = System.nanoTime()
     def (info, links) = buildToolDialog(tool, openImages, choiceListsFor(app, tool))
-    summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / 1e9
+    summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / NANOS_PER_SECOND
     describeDialog(summary, info)
     def module = harvest(info, tool.label, links)
     if (module == null) return [aborted: true, result: hooks.finish(summary + [cancelled: true])]
@@ -650,8 +685,6 @@ ImagePlus channelOf(ImagePlus imp, int channel, String label) {
     single.setCalibration(imp.getCalibration())
     return single
 }
-
-@groovy.transform.Field final int MAX_REGION_OBJECTS = 65535      // labels of the region image (16 bit)
 
 /** RegionOf: the ROIs selected in the ROI Manager (else the ROI of the image) as a label image the size of the image the region
  *  belongs to: labels 1..N, 0 outside. Whatever makes that impossible is said to the person, never guessed around. */
@@ -783,7 +816,7 @@ Long waitForTask(Service service, def task, long started) {
             service.kill()                                   // the tool ignored Cancel
             break
         }
-        Thread.sleep(50)
+        Thread.sleep(CANCEL_POLL_MS)
     }
     return cancelSent
 }
@@ -815,16 +848,16 @@ Map runTool(Map app, Map tool, Map inputs) {
     }
     def complete = task.status == Service.TaskStatus.COMPLETE
     if (complete) lcLog("INFO", "task COMPLETE tool=" + tool.id + " timings=" + task.outputs?.timings)
-    else lcLog("ERROR", "task " + task.status + " tool=" + tool.id + " error=" + (task.error ?: "") + (workerOutput ? "\n--- worker output ---\n" + workerOutput.takeRight(40).join("\n") : ""))
-    return [status: task.status.toString(), complete: complete, error: task.error, workerOutput: workerOutput.takeRight(60),
+    else lcLog("ERROR", "task " + task.status + " tool=" + tool.id + " error=" + (task.error ?: "") + (workerOutput ? "\n--- worker output ---\n" + workerOutput.takeRight(LOG_WORKER_LINES).join("\n") : ""))
+    return [status: task.status.toString(), complete: complete, error: task.error, workerOutput: workerOutput.takeRight(OUTCOME_WORKER_LINES),
             outputs: task.outputs, progress: progress, workerAlive: service.isAlive(), cancelRequested: cancelSent != null,
-            seconds: (System.currentTimeMillis() - started) / 1000.0]
+            seconds: (System.currentTimeMillis() - started) / MS_PER_SECOND]
 }
 
 /** After close(): wait for the worker to exit on its own, then kill it so no process is ever left behind. */
 void waitForExit(Service service, int timeoutMs) {
     def deadline = System.currentTimeMillis() + timeoutMs
-    while (service.isAlive() && System.currentTimeMillis() < deadline) Thread.sleep(100)
+    while (service.isAlive() && System.currentTimeMillis() < deadline) Thread.sleep(EXIT_POLL_MS)
     if (service.isAlive()) service.kill()
 }
 
@@ -836,9 +869,9 @@ String crashHint(Map outcome) {
     def text = (outcome.error ?: "") + "\n" + (outcome.workerOutput ?: []).join("\n")
     if (text.contains("ModuleNotFoundError") || text.contains("ImportError"))
         return "A Python package is missing or broken in the app's environment (see the traceback below)."
-    if (exit in [-9L, 137L]) return "The worker was killed (out of memory? the OS OOM killer ends big image jobs this way)."
-    if (exit in [-11L, 139L, 3221225477L]) return "The worker crashed natively (segmentation fault in a compiled library)."
-    if (exit == 3L) return "The app's tool module failed to import (see the traceback below)."
+    if (exit in EXIT_KILLED) return "The worker was killed (out of memory? the OS OOM killer ends big image jobs this way)."
+    if (exit in EXIT_SEGFAULT) return "The worker crashed natively (segmentation fault in a compiled library)."
+    if (exit == EXIT_IMPORT_FAILED) return "The app's tool module failed to import (see the traceback below)."
     return "The worker process stopped unexpectedly."
 }
 
@@ -846,13 +879,13 @@ String crashHint(Map outcome) {
 String failureMessage(Map outcome, Map summary) {
     // protocol chatter ("[SERVICE-n] {...}", raw JSON lines) is in the log, not for people; a long line would make the dialog wider than the screen
     def worker = (outcome.workerOutput ?: []).findAll { !(it =~ /^\[SERVICE-\d+\]/) && !it.trim().startsWith("{") }
-            .collect { it.length() > 300 ? it.substring(0, 300) + " …" : it }
+            .collect { it.length() > DIALOG_LINE_CHARS ? it.substring(0, DIALOG_LINE_CHARS) + " …" : it }
     return (outcome.status == "CRASHED" ? crashHint(outcome) + "\n\n" : "") + (outcome.error ?: "failed") +
-           (worker ? "\n\nWorker output (last lines):\n" + worker.takeRight(8).join("\n") : "") +
+           (worker ? "\n\nWorker output (last lines):\n" + worker.takeRight(DIALOG_WORKER_LINES).join("\n") : "") +
            "\n\nRun record: " + (summary.run_record ?: "(none)") + "\nLog file: " + new File(lcHome(), "logs/labconstrictor.log").path
 }
 
-/** One folder per run under <home>/runs (newest 50 kept): what was run, by which interpreter, what came back. */
+/** One folder per run under <home>/runs (the newest KEPT_RUN_RECORDS kept): what was run, by which interpreter, what came back. */
 String writeRunRecord(Map app, Map tool, Map inputs, Map outcome, Map summary) {
     try {
         def runs = new File(lcHome(), "runs")
@@ -864,7 +897,7 @@ String writeRunRecord(Map app, Map tool, Map inputs, Map outcome, Map summary) {
             app: app.name, app_version: app.version, tool: tool.id, host: "fiji", status: outcome.status, error: outcome.error,
             seconds: outcome.seconds, inputs: inputs, worker_output_tail: outcome.workerOutput, log_file: new File(lcHome(), "logs/labconstrictor.log").path, progress_events: outcome.progress, interpreter: outcome.outputs?.diagnostics,
             results: (outcome.outputs?.results ?: []).collect { it.findAll { k, v -> k != "matrix_yx" } }]))
-        (runs.listFiles({ File f -> f.isDirectory() } as FileFilter) ?: [] as File[]).sort().reverse().drop(50).each { removeFolder(it, "old run record") }
+        (runs.listFiles({ File f -> f.isDirectory() } as FileFilter) ?: [] as File[]).sort().reverse().drop(KEPT_RUN_RECORDS).each { removeFolder(it, "old run record") }
         return folder.path
     } catch (Exception problem) {                       // a record must never break a run, but its absence must be visible
         lcLog("WARNING", "could not write the run record: " + problem, problem)
@@ -884,7 +917,7 @@ void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
 }
 
 // ---- showing results (switch on result type only)
-@groovy.transform.Field def lastShownImage = null          // the image window this run showed last (points without an apply_to go on it)
+@Field def lastShownImage = null          // the image window this run showed last (points without an apply_to go on it)
 
 /** Show every result by its type; one that cannot be shown is reported and does not hide the others. Returns the summary entries for the harness. */
 Map showResults(Map app, List results, Map images, Map tool = null) {
@@ -953,7 +986,7 @@ void showPoints(Map app, Map r, Map images, Map summary, boolean replace) {
         return
     }
     def xs = new float[table.size()], ys = new float[table.size()]
-    for (int i = 0; i < table.size(); i++) { xs[i] = (float) (table.getValue("x", i) + 0.5d); ys[i] = (float) (table.getValue("y", i) + 0.5d) }   // pixel centres
+    for (int i = 0; i < table.size(); i++) { xs[i] = (float) (table.getValue("x", i) + PIXEL_CENTRE); ys[i] = (float) (table.getValue("y", i) + PIXEL_CENTRE) }   // pixel centres
     def roi = new ij.gui.PointRoi(xs, ys, xs.length)
     roi.setName(app.name + ":" + r.name)
     def manager = ij.plugin.frame.RoiManager.getRoiManager()
@@ -967,16 +1000,12 @@ void showPoints(Map app, Map r, Map images, Map summary, boolean replace) {
     summary["points_" + r.name] = [count: table.size(), image: target.getTitle(), columns: table.getHeadings() as List]
 }
 
-@groovy.transform.Field final int MAX_SHAPES = 50000       // outlines shown on the image
-
-@groovy.transform.Field final int MAX_MANAGER_SHAPES = 1000  // outlines also listed in the ROI Manager (it gets very slow with more)
-
 /** One polygon (rings of [x, y], pixel centres at integers; the first ring is the outline, the others holes) as a ShapeRoi. */
 ij.gui.ShapeRoi polygonRoi(List part) {
     def path = new java.awt.geom.Path2D.Double(java.awt.geom.Path2D.WIND_EVEN_ODD)
     part.each { ring ->
         ring.eachWithIndex { point, i ->
-            double x = (point[0] as double) + 0.5d, y = (point[1] as double) + 0.5d       // pixel centres
+            double x = (point[0] as double) + PIXEL_CENTRE, y = (point[1] as double) + PIXEL_CENTRE       // pixel centres
             if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
         }
         path.closePath()
@@ -1085,7 +1114,7 @@ FloatProcessor resample(ImagePlus source, int width, int height, List matrix) {
     double det = a * d - b * c
     if (!matrix.flatten().every { it instanceof Number && Double.isFinite(it as double) })
         throw new IllegalStateException("the alignment matrix contains values that are not finite numbers")
-    if (!(Math.abs(det) > 1e-9 * Math.max(1.0d, Math.abs(a * d) + Math.abs(b * c))))
+    if (!(Math.abs(det) > SINGULAR_TOLERANCE * Math.max(1.0d, Math.abs(a * d) + Math.abs(b * c))))
         throw new IllegalStateException("the alignment matrix is singular (determinant " + det + "): it cannot be applied")
     def input = source.getProcessor().convertToFloat()
     def output = new FloatProcessor(width, height)
@@ -1107,7 +1136,7 @@ double relativeDifference(FloatProcessor a, FloatProcessor b) {
         double x = a.getf(i), y = b.getf(i)
         if (x > 0 || y > 0) { sumDiff += Math.abs(x - y); sumRef += Math.abs(y) }
     }
-    return sumDiff / Math.max(sumRef, 1e-9)
+    return sumDiff / Math.max(sumRef, MIN_REFERENCE_SUM)
 }
 
 /** Say what became of a run: show the results of a complete one, a plain message for "nothing found", an error for a failure, a status line for the rest. */
@@ -1414,7 +1443,7 @@ def labConstrictorRun() {
     def started = System.nanoTime()
     def summary = [timings: [:]]
     def found = discoverApps()
-    summary.timings.discovery_s = (System.nanoTime() - started) / 1e9
+    summary.timings.discovery_s = (System.nanoTime() - started) / NANOS_PER_SECOND
     if (!found.apps) return reportNoApps(found, summary)
 
     def macro = macroOptions()
