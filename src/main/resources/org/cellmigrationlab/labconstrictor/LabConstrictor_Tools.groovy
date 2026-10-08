@@ -99,7 +99,7 @@ class LCModule extends DefaultMutableModule {
     }
 }
 
-// ---------------------------------------------------------------- hooks (no-ops unless a harness is supplied)
+// ---- logging and hooks (the hooks are no-ops unless a test harness is supplied)
 hooks = [
     interactive  : true,          // false: never block on modal error dialogs
     overrides    : [:],           // parameter name -> value used as dialog default
@@ -109,22 +109,14 @@ hooks = [
     cancelAfterMs: { null },
     finish       : { Map summary -> },
 ]
+
 def harnessPath = System.getenv("LC_FIJI_HARNESS")
+
 if (harnessPath) hooks += new GroovyShell(this.class.classLoader).evaluate(new File(harnessPath)) as Map
 
-// ---------------------------------------------------------------- discovery (same rules as labconstrictor_tools.registry)
 String lcHome() { System.getenv("LC_HOME") ?: (System.getProperty("user.home") + "/.labconstrictor") }
 
 LCModule.logger = { String level, String message, Throwable problem -> lcLog(level, message, problem) }
-
-/** Delete a temporary folder; a folder that cannot be removed is logged once (it stays on disk), never ignored. */
-void removeFolder(File folder, String what) {
-    try {
-        if (folder.exists() && !folder.deleteDir()) lcLog("WARN", "could not remove the " + what + " " + folder)
-    } catch (SecurityException problem) {
-        lcLog("WARN", "could not remove the " + what + " " + folder + ": " + problem, problem)
-    }
-}
 
 /** Append one line to the log shared with the Python tools (<LC_HOME>/logs/labconstrictor.log). Never throws. */
 void lcLog(String level, String message, Throwable problem = null) {
@@ -142,6 +134,16 @@ void lcLog(String level, String message, Throwable problem = null) {
     }
 }
 
+/** Delete a temporary folder; a folder that cannot be removed is logged once (it stays on disk), never ignored. */
+void removeFolder(File folder, String what) {
+    try {
+        if (folder.exists() && !folder.deleteDir()) lcLog("WARN", "could not remove the " + what + " " + folder)
+    } catch (SecurityException problem) {
+        lcLog("WARN", "could not remove the " + what + " " + folder + ": " + problem, problem)
+    }
+}
+
+// ---- registry and trust checks (same rules as labconstrictor_tools.registry)
 /** Directories searched, highest priority first: per-user, LC_APPS_PATH, system-wide. */
 List<File> registryDirs() {
     def dirs = [new File(lcHome(), "apps")]
@@ -156,8 +158,11 @@ List<File> registryDirs() {
 boolean plainName(def text) {
     return text instanceof String && text && text != "." && text != ".." && !text.any { it in ["/", "\\", "\0"] as Set } && text == text.trim()
 }
+
 boolean identifier(def text) { return text instanceof String && (text ==~ /[A-Za-z_][A-Za-z0-9_]*/) }
+
 boolean toolId(def text) { return text instanceof String && (text ==~ /[A-Za-z0-9_][A-Za-z0-9_.-]*/) }   // @tool(id=...) may contain - and .
+
 String slug(String text) { return text.replaceAll(/[^A-Za-z0-9_.-]+/, "_").replaceFirst(/^\.+/, "") ?: "x" }
 
 boolean isPosixHost() { return !System.getProperty("os.name").toLowerCase().contains("win") }
@@ -294,27 +299,16 @@ Map discoverApps() {
     return [home: lcHome(), apps: apps, problems: problems]
 }
 
-/** One folder per run under <home>/runs (newest 50 kept): what was run, by which interpreter, what came back. */
-String writeRunRecord(Map app, Map tool, Map inputs, Map outcome, Map summary) {
-    try {
-        def runs = new File(lcHome(), "runs")
-        def stamp = new java.text.SimpleDateFormat("yyyyMMdd'T'HHmmssSSS").format(new Date())
-        def folder = new File(runs, stamp + "_" + slug(app.name as String) + "_" + slug(tool.id as String))
-        if (folder.canonicalFile.parentFile != runs.canonicalFile) throw new IOException("run folder " + folder + " is not inside " + runs)
-        folder.mkdirs()
-        new File(folder, "run.json").text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
-            app: app.name, app_version: app.version, tool: tool.id, host: "fiji", status: outcome.status, error: outcome.error,
-            seconds: outcome.seconds, inputs: inputs, worker_output_tail: outcome.workerOutput, log_file: new File(lcHome(), "logs/labconstrictor.log").path, progress_events: outcome.progress, interpreter: outcome.outputs?.diagnostics,
-            results: (outcome.outputs?.results ?: []).collect { it.findAll { k, v -> k != "matrix_yx" } }]))
-        (runs.listFiles({ File f -> f.isDirectory() } as FileFilter) ?: [] as File[]).sort().reverse().drop(50).each { removeFolder(it, "old run record") }
-        return folder.path
-    } catch (Exception problem) {                       // a record must never break a run, but its absence must be visible
-        lcLog("WARNING", "could not write the run record: " + problem, problem)
-        return null
-    }
+/** No registered app can be used: say why (dialog and log) and finish. */
+def reportNoApps(Map found, Map summary) {
+    def why = found.problems ? "\n\nSkipped:\n" + found.problems.join("\n") : ""
+    lcLog("ERROR", "no usable apps in " + found.home + "/apps" + why.replace("\n", " | "))
+    if (hooks.interactive) IJ.error("LabConstrictor", "No LabConstrictor apps are registered in " + found.home + "/apps." + why +
+                                    "\n\nCheck with: labconstrictor-tools doctor   (log: " + new File(lcHome(), "logs/labconstrictor.log").path + ")")
+    return hooks.finish(summary + [error: "no apps registered"])
 }
 
-// ---------------------------------------------------------------- SciJava helpers
+// ---- the dialog
 MutableModuleInfo newInfo(String title) {
     def info = new DefaultMutableModuleInfo()
     info.setModuleClass(LCModule)
@@ -356,7 +350,6 @@ String pickOne(String title, String label, List<String> choices, String preferre
     return harvest(info, title)?.getInput("choice")
 }
 
-// ---------------------------------------------------------------- schema -> dialog
 /** Inputs in the order the dialog shows them: the parameters of a `group` together (where the group first appears), `advanced` ones
  *  after all the others. Without group/advanced hints the order is unchanged. (Same rule as the Napari form.) */
 List presentationOrder(List inputs) {
@@ -376,204 +369,142 @@ void addChannelItem(MutableModuleInfo info, Map p, String defaultImageTitle, Map
                                                 description: "Channel of the image to use (1 = first). The tool receives only this channel" + (imp != null && imp.getNChannels() > 1 ? "; the chosen image has " + imp.getNChannels() : "")])
 }
 
+/** The dialog's rows in order: [heading: text] for each group and for the advanced block, [parameter: p] for each parameter. */
+List dialogRows(List inputs) {
+    def rows = [], lastGroup = null, advancedShown = false
+    presentationOrder(inputs).each { p ->
+        if (p.advanced && !advancedShown) { advancedShown = true; rows << [heading: "Advanced settings"]; lastGroup = null }
+        if (p.group && p.group != lastGroup) rows << [heading: p.group as String]
+        lastGroup = p.group ?: lastGroup
+        rows << [parameter: p]
+    }
+    return rows
+}
+
+/** image parameter -> the pixel-size parameters that follow its calibration (schema: pixel_size_of). */
+Map pixelSizeLinks(Map tool) {
+    def links = [:]
+    tool.inputs.findAll { it.pixel_size_of }.each { links.get(it.pixel_size_of, []) << it.name }
+    return links
+}
+
+/** The window each image parameter starts on: the i-th image parameter defaults to the i-th open image (the last one repeats). */
+Map defaultImageTitles(Map tool, List<String> openImages) {
+    def titles = [:]
+    tool.inputs.findAll { it.type in ["image", "labels"] }.eachWithIndex { p, i ->
+        def given = hooks.overrides[p.name]
+        titles[p.name] = given ? given as String : (openImages ? openImages[Math.min(i, openImages.size() - 1)] : null)
+    }
+    return titles
+}
+
+/** The harness's value for a dialog key, or `fallback` when it did not set one. */
+def overrideOr(String key, def fallback) { return hooks.overrides.containsKey(key) ? hooks.overrides[key] : fallback }
+
 /** Build the tool dialog from the schema. Returns [info, links]. */
 List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
     def info = newInfo(tool.label)
-    def links = [:]                                          // image param -> [pixel-size params]
-    tool.inputs.findAll { it.pixel_size_of }.each { links.get(it.pixel_size_of, []) << it.name }
-    def linkedImages = links.keySet().toList()
-    def defaultTitle = [:]                                   // i-th image parameter defaults to the i-th open image (the last one repeats)
-    tool.inputs.findAll { it.type in ["image", "labels"] }.eachWithIndex { p, i ->
-        def given = hooks.overrides[p.name]
-        defaultTitle[p.name] = given ? given as String : (openImages ? openImages[Math.min(i, openImages.size() - 1)] : null)
-    }
+    def links = pixelSizeLinks(tool)                         // image param -> [pixel-size params]
+    def context = [openImages: openImages, choiceLists: choiceLists, linkedImages: links.keySet().toList(), defaultTitle: defaultImageTitles(tool, openImages)]
     if (openImages && tool.inputs.any { it.type in ["image", "labels"] }) {
         // also keeps SciJava from replacing a one-image dialog by a bare file chooser (the open image is auto-resolved)
         addItem(info, "image_source_note", String, [label: "Image source", message: true, required: false,
                                                     default: "Images are taken from the open windows. To use a file instead, choose it in the matching '(or file)' field."])
     }
-    def lastGroup = null, advancedShown = false, headings = 0
-    def heading = { String text -> addItem(info, "heading_" + (headings++), String, [label: text, message: true, required: false, default: "— " + text + " —"]) }
-    presentationOrder(tool.inputs).each { p ->
-        if (p.advanced && !advancedShown) { advancedShown = true; heading("Advanced settings"); lastGroup = null }
-        if (p.group && p.group != lastGroup) heading(p.group as String)
-        lastGroup = p.group ?: lastGroup
-        def base = [label: p.label + (p.unit ? " (" + p.unit + ")" : ""), description: p.description, required: p.required]
-        if (p.nullable && p.type in ["string", "integer", "float", "choice", "boolean"]) {   // optional with no default: "unset" must stay possible
-            addItem(info, "set_" + p.name, Boolean, [label: "Set " + p.label.toLowerCase(), required: false,
-                                                     default: hooks.overrides.containsKey("set_" + p.name) ? hooks.overrides["set_" + p.name] : false])
-        }
-        def overridden = hooks.overrides.containsKey(p.name)
-        def override = overridden ? hooks.overrides[p.name] : null
-        switch (p.type) {
-            case ["image", "labels"]:
-                def slot = linkedImages.indexOf(p.name)
-                def fileOverride = hooks.overrides[p.name + "_file"]
-                if (p.region_of) {                           // RegionOf: the ROI / ROI Manager selection of the named image can be the value
-                    addItem(info, "selection_" + p.name, Boolean, [label: "Use the selection as " + p.label.toLowerCase(), required: false,
-                                                                   description: "Send the ROI of the image (or the ROIs selected in the ROI Manager: several are labels 1, 2, 3...) as the region",
-                                                                   default: hooks.overrides.containsKey("selection_" + p.name) ? hooks.overrides["selection_" + p.name] : false])
-                }
-                if (openImages) {
-                    if (!p.required) {                       // SciJava image choosers cannot be empty
-                        addItem(info, "use_" + p.name, Boolean, [label: "Use " + p.label.toLowerCase(), required: false,
-                                                                 default: hooks.overrides.containsKey("use_" + p.name) ? hooks.overrides["use_" + p.name] : false])
-                    }
-                    addItem(info, p.name, String, base + [choices: openImages, default: defaultTitle[p.name], callback: slot >= 0 ? "syncImage" + slot : null])
-                    addItem(info, p.name + "_file", File, [label: p.label + " (or file)", required: false,
-                                                           description: "Read the image from a file instead of the open image above (leave empty to use the open image)",
-                                                           default: fileOverride ? new File(fileOverride as String) : null,
-                                                           callback: slot >= 0 ? "syncFile" + slot : null])
-                    if (p.pick_channel) addChannelItem(info, p, defaultTitle[p.name], hooks.overrides)
-                } else {                                     // nothing open: the file is the only way to give an image
-                    addItem(info, p.name + "_file", File, base + [description: p.description ?: "No image is open - choose a file",
-                                                                  default: fileOverride ? new File(fileOverride as String) : null,
-                                                                  callback: slot >= 0 ? "syncFile" + slot : null])
-                    if (p.pick_channel) addChannelItem(info, p, null, hooks.overrides)
-                }
-                break
-            case ["table", "file"]:
-                addItem(info, p.name, File, base + [default: override ? new File(override as String) : null]); break
-            case "folder":
-                addItem(info, p.name, File, base + [default: override ? new File(override as String) : null]).setWidgetStyle("directory"); break
-            case "string":
-                def options = choiceLists[p.name]                  // ChoicesFrom answered: a dropdown (otherwise the plain text field)
-                def held = (override ?: p.default) as String                // a value the parameter already holds (its default, or a remembered one) stays selectable even when the source does not list it: never silently replaced
-                if (options && held && !options.contains(held)) options = [held] + options
-                if (options && p.nullable) options = [""] + options    // no answer pre-selected: ticking "Set" with the blank entry is refused by the tool, not silently answered
-                if (options) addItem(info, p.name, String, base + [choices: options, default: options.contains(override) ? override : options.contains(p.default) ? p.default : options[0]])
-                else addItem(info, p.name, String, base + [default: override ?: p.default ?: ""])
-                break
-            case "boolean":
-                addItem(info, p.name, Boolean, base + [default: overridden ? override : (p.default ?: false)]); break
-            case "choice":
-                def choiceItem = addItem(info, p.name, String, base + [choices: p.choices, default: override ?: p.default ?: p.choices[0]])
-                if (p.widget == "radio" && !p.nullable) choiceItem.setWidgetStyle("radioButtonHorizontal")   // Widget("radio")
-                break
-            case "integer":
-                def intItem = addItem(info, p.name, Integer, base + [default: (overridden ? override : (p.default ?: 0)) as Integer,
-                                                                    min: p.minimum as Integer, max: p.maximum as Integer, step: 1])
-                if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) intItem.setWidgetStyle("slider")   // Widget("slider")
-                break
-            case "float":
-                def value = overridden ? override : p.default
-                def source = p.pixel_size_of && openImages ? WindowManager.getImage(defaultTitle[p.pixel_size_of] ?: openImages[0]) : null
-                def microns = LCModule.micronsPerPixel(source)
-                def fileSource = p.pixel_size_of ? hooks.overrides[p.pixel_size_of + "_file"] : null
-                if (microns == null && fileSource) microns = LCModule.micronsFromFile(new File(fileSource as String))
-                if (microns != null) value = microns                                                      // calibration prefill (unit-aware)
-                if (p.pixel_size_of && value == null)
-                    IJ.log("LabConstrictor: no pixel size found for '" + p.label + "' (the image has no usable calibration): enter it by hand")
-                def floatItem = addItem(info, p.name, Double, base + [default: (value ?: 0) as Double, min: p.minimum as Double, max: p.maximum as Double, step: 0.0001d])
-                if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) floatItem.setWidgetStyle("slider")   // Widget("slider")
-                break
-            default:
-                throw new IllegalArgumentException("parameter '" + p.name + "' has the unsupported type '" + p.type + "'")
-        }
+    int headings = 0
+    dialogRows(tool.inputs).each { row ->
+        if (row.heading) addItem(info, "heading_" + (headings++), String, [label: row.heading, message: true, required: false, default: "— " + row.heading + " —"])
+        else addParameterItems(info, row.parameter, context)
     }
     return [info, links]
 }
 
-// ---------------------------------------------------------------- dialog -> request
-/** Harvested values -> worker inputs. Images are saved as TIFF (calibration travels as explicit parameters). */
-/** One channel of a (hyper)stack as a plain image, at the current Z and T: what a tool declared with PickChannel receives. */
-ImagePlus channelOf(ImagePlus imp, int channel, String label) {
-    if (channel < 1 || channel > imp.getNChannels())
-        throw new IllegalArgumentException("'" + label + "': channel " + channel + " was asked for, but the image has " + imp.getNChannels() + " channel" + (imp.getNChannels() == 1 ? "" : "s"))
-    def plane = imp.getNChannels() == 1 ? imp.getProcessor() : imp.getStack().getProcessor(imp.getStackIndex(channel, imp.getSlice(), imp.getFrame()))
-    def single = new ImagePlus(imp.getTitle(), plane.duplicate())
-    single.setCalibration(imp.getCalibration())
-    return single
-}
-
-@groovy.transform.Field final int MAX_REGION_OBJECTS = 65535      // labels of the region image (16 bit)
-
-/** RegionOf: the ROIs selected in the ROI Manager (else the ROI of the image) as a label image the size of the image the region
- *  belongs to: labels 1..N, 0 outside. Whatever makes that impossible is said to the person, never guessed around. */
-File selectionMask(Map p, Map tool, def module, File jobDir) {
-    def label = p.label as String, owner = tool.inputs.find { it.name == p.region_of }
-    if (module.getInput(p.region_of + "_file"))
-        throw new IllegalArgumentException("'" + label + "': the selection belongs to an open image, but a file was chosen for '" + owner.label + "': open the image, or untick the selection")
-    def imp = LCModule.imageOf(module.getInput(p.region_of))
-    if (imp == null) throw new IllegalArgumentException("'" + label + "': choose the open image it belongs to ('" + owner.label + "')")
-    def manager = ij.plugin.frame.RoiManager.getInstance2()
-    def rois = (manager?.getSelectedIndexes() ?: [] as int[]).collect { manager.getRoi(it) }.findAll { it != null }
-    if (!rois && imp.getRoi() != null) rois = [imp.getRoi()]
-    if (!rois) throw new IllegalArgumentException("'" + label + "': nothing is selected: draw a region on '" + imp.getTitle() + "' or select entries in the ROI Manager, or untick the selection")
-    if (rois.size() > MAX_REGION_OBJECTS) throw new IllegalArgumentException("'" + label + "': " + rois.size() + " objects are selected; at most " + MAX_REGION_OBJECTS + " are supported")
-    def mask = new ij.process.ShortProcessor(imp.getWidth(), imp.getHeight())
-    rois.eachWithIndex { roi, i -> mask.setValue(i + 1); mask.fill(roi) }
-    if (mask.getStatistics().max == 0) throw new IllegalArgumentException("'" + label + "': the selection lies outside the image")
-    def file = new File(jobDir, p.name + ".tif")
-    new FileSaver(new ImagePlus(p.name, mask)).saveAsTiff(file.path)
-    return file
-}
-
-List exportInputs(Map tool, def module, File jobDir) {
-    def inputs = [:], images = [:]
-    tool.inputs.each { p ->
-        def value = module.getInput(p.name)
-        switch (p.type) {
-            case ["image", "labels"]:
-                if (p.region_of && module.getInput("selection_" + p.name)) {   // RegionOf: the selection is the value
-                    def maskFile = selectionMask(p, tool, module, jobDir)
-                    inputs[p.name] = maskFile.path
-                    images[p.name] = maskFile.path
-                    break
-                }
-                def chosen = module.getInput(p.name + "_file") as File
-                if (chosen) {                                                // a file wins over the open image: the worker reads it directly
-                    if (!chosen.isFile()) throw new IllegalArgumentException("'" + p.label + "': file not found: " + chosen.path)
-                    def opened = p.pick_channel ? IJ.openImage(chosen.path) : null
-                    if (opened != null) {                                     // PickChannel: the file's chosen channel is written for the worker
-                        def picked = channelOf(opened, (module.getInput(p.name + "_channel") ?: 1) as int, p.label as String)
-                        def channelFile = new File(jobDir, p.name + ".tif")
-                        new FileSaver(picked).saveAsTiff(channelFile.path)
-                        inputs[p.name] = channelFile.path
-                        images[p.name] = chosen.path
-                        break
-                    }
-                    inputs[p.name] = chosen.path
-                    images[p.name] = chosen.path                              // opened later only if a result needs it (see asImage)
-                    break
-                }
-                if (!p.required && !module.getInput("use_" + p.name)) break
-                def chosenImage = LCModule.imageOf(value)
-                if (chosenImage == null) throw new IllegalArgumentException("'" + p.label + "' is required: open an image or choose a file")
-                value = chosenImage
-                def file = new File(jobDir, p.name + ".tif")
-                if (file.canonicalFile.parentFile != jobDir.canonicalFile) throw new IllegalArgumentException("'" + p.label + "': refusing to write outside " + jobDir)
-                def imp = value as ImagePlus
-                if (p.pick_channel) {                                   // PickChannel: exactly the channel that was chosen, at the current Z and T
-                    imp = channelOf(imp, (module.getInput(p.name + "_channel") ?: 1) as int, p.label as String)
-                } else if (p.axes == "YX" && imp.getStackSize() > 1) {          // tool wants one plane: send the one on screen
-                    IJ.log("LabConstrictor: '" + p.label + "' needs a single 2D plane - using the current plane (" + imp.getCurrentSlice() + " of " + imp.getStackSize() + ")")
-                    imp = new ImagePlus(imp.getTitle(), imp.getProcessor().duplicate())
-                    imp.setCalibration(value.getCalibration())
-                }
-                new FileSaver(imp).saveAsTiff(file.path)
-                inputs[p.name] = file.path
-                images[p.name] = value as ImagePlus
-                break
-            case ["table", "file"]:
-                if (value) inputs[p.name] = (value as File).path
-                break
-            case "folder":
-                if (value) {
-                    if (!(value as File).isDirectory()) throw new IllegalArgumentException("'" + p.label + "': folder not found: " + (value as File).path)
-                    inputs[p.name] = (value as File).path
-                }
-                break
-            default:
-                if (p.nullable && !module.getInput("set_" + p.name)) break      // unset: the tool receives None
-                if (value != null) inputs[p.name] = value
-        }
+/** The dialog items of one parameter: an optional "Set" box for nullable ones, then the field(s) its type needs. */
+void addParameterItems(MutableModuleInfo info, Map p, Map context) {
+    def base = [label: p.label + (p.unit ? " (" + p.unit + ")" : ""), description: p.description, required: p.required]
+    if (p.nullable && p.type in ["string", "integer", "float", "choice", "boolean"]) {   // optional with no default: "unset" must stay possible
+        addItem(info, "set_" + p.name, Boolean, [label: "Set " + p.label.toLowerCase(), required: false, default: overrideOr("set_" + p.name, false)])
     }
-    inputs[JOB_DIR_KEY] = jobDir.path
-    return [inputs, images]
+    def overridden = hooks.overrides.containsKey(p.name)
+    def override = overridden ? hooks.overrides[p.name] : null
+    switch (p.type) {
+        case ["image", "labels"]: addImageItems(info, p, base, context); break
+        case ["table", "file"]:
+            addItem(info, p.name, File, base + [default: override ? new File(override as String) : null]); break
+        case "folder":
+            addItem(info, p.name, File, base + [default: override ? new File(override as String) : null]).setWidgetStyle("directory"); break
+        case "string": addStringItem(info, p, base, override, context.choiceLists); break
+        case "boolean":
+            addItem(info, p.name, Boolean, base + [default: overridden ? override : (p.default ?: false)]); break
+        case "choice":
+            def choiceItem = addItem(info, p.name, String, base + [choices: p.choices, default: override ?: p.default ?: p.choices[0]])
+            if (p.widget == "radio" && !p.nullable) choiceItem.setWidgetStyle("radioButtonHorizontal")   // Widget("radio")
+            break
+        case "integer":
+            def intItem = addItem(info, p.name, Integer, base + [default: (overridden ? override : (p.default ?: 0)) as Integer,
+                                                                min: p.minimum as Integer, max: p.maximum as Integer, step: 1])
+            if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) intItem.setWidgetStyle("slider")   // Widget("slider")
+            break
+        case "float": addFloatItem(info, p, base, overridden, override, context); break
+        default:
+            throw new IllegalArgumentException("parameter '" + p.name + "' has the unsupported type '" + p.type + "'")
+    }
 }
 
-// ---------------------------------------------------------------- remembered values and dynamic choices (ChoicesFrom)
+/** Image / labels parameter: the chooser of open windows, the "(or file)" field, and the extras (selection, "use" box, channel). */
+void addImageItems(MutableModuleInfo info, Map p, Map base, Map context) {
+    def openImages = context.openImages
+    def slot = context.linkedImages.indexOf(p.name)
+    def fileOverride = hooks.overrides[p.name + "_file"]
+    def defaultTitle = context.defaultTitle[p.name]
+    if (p.region_of) {                           // RegionOf: the ROI / ROI Manager selection of the named image can be the value
+        addItem(info, "selection_" + p.name, Boolean, [label: "Use the selection as " + p.label.toLowerCase(), required: false,
+                                                       description: "Send the ROI of the image (or the ROIs selected in the ROI Manager: several are labels 1, 2, 3...) as the region",
+                                                       default: overrideOr("selection_" + p.name, false)])
+    }
+    if (openImages) {
+        if (!p.required) {                       // SciJava image choosers cannot be empty
+            addItem(info, "use_" + p.name, Boolean, [label: "Use " + p.label.toLowerCase(), required: false, default: overrideOr("use_" + p.name, false)])
+        }
+        addItem(info, p.name, String, base + [choices: openImages, default: defaultTitle, callback: slot >= 0 ? "syncImage" + slot : null])
+        addItem(info, p.name + "_file", File, [label: p.label + " (or file)", required: false,
+                                               description: "Read the image from a file instead of the open image above (leave empty to use the open image)",
+                                               default: fileOverride ? new File(fileOverride as String) : null,
+                                               callback: slot >= 0 ? "syncFile" + slot : null])
+        if (p.pick_channel) addChannelItem(info, p, defaultTitle, hooks.overrides)
+    } else {                                     // nothing open: the file is the only way to give an image
+        addItem(info, p.name + "_file", File, base + [description: p.description ?: "No image is open - choose a file",
+                                                      default: fileOverride ? new File(fileOverride as String) : null,
+                                                      callback: slot >= 0 ? "syncFile" + slot : null])
+        if (p.pick_channel) addChannelItem(info, p, null, hooks.overrides)
+    }
+}
+
+/** String parameter: a dropdown when ChoicesFrom answered, otherwise the plain text field. */
+void addStringItem(MutableModuleInfo info, Map p, Map base, def override, Map choiceLists) {
+    def options = choiceLists[p.name]
+    def held = (override ?: p.default) as String                // a value the parameter already holds (its default, or a remembered one) stays selectable even when the source does not list it: never silently replaced
+    if (options && held && !options.contains(held)) options = [held] + options
+    if (options && p.nullable) options = [""] + options    // no answer pre-selected: ticking "Set" with the blank entry is refused by the tool, not silently answered
+    if (options) addItem(info, p.name, String, base + [choices: options, default: options.contains(override) ? override : options.contains(p.default) ? p.default : options[0]])
+    else addItem(info, p.name, String, base + [default: override ?: p.default ?: ""])
+}
+
+/** Float parameter, prefilled from the calibration of the image (or file) it is linked to. */
+void addFloatItem(MutableModuleInfo info, Map p, Map base, boolean overridden, def override, Map context) {
+    def openImages = context.openImages
+    def value = overridden ? override : p.default
+    def source = p.pixel_size_of && openImages ? WindowManager.getImage(context.defaultTitle[p.pixel_size_of] ?: openImages[0]) : null
+    def microns = LCModule.micronsPerPixel(source)
+    def fileSource = p.pixel_size_of ? hooks.overrides[p.pixel_size_of + "_file"] : null
+    if (microns == null && fileSource) microns = LCModule.micronsFromFile(new File(fileSource as String))
+    if (microns != null) value = microns                                                      // calibration prefill (unit-aware)
+    if (p.pixel_size_of && value == null)
+        IJ.log("LabConstrictor: no pixel size found for '" + p.label + "' (the image has no usable calibration): enter it by hand")
+    def floatItem = addItem(info, p.name, Double, base + [default: (value ?: 0) as Double, min: p.minimum as Double, max: p.maximum as Double, step: 0.0001d])
+    if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) floatItem.setWidgetStyle("slider")   // Widget("slider")
+}
+
 /** Names of the parameters that some ChoicesFrom of the app depends on: the only values kept between runs. */
 Set<String> dependsNames(Map app) {
     def names = [] as Set
@@ -608,58 +539,211 @@ void rememberDepends(Map app, Map tool, Map inputs) {
     } catch (Exception problem) { lcLog("WARNING", "could not remember the values (the next dialog will not know them): " + problem, problem) }
 }
 
+/** The values of the parameters a ChoicesFrom depends on (the harness's, else the remembered ones), or null while one of them is not known yet. */
+Map choiceRequest(Map tool, Map p, Map state) {
+    def request = [:]
+    for (name in p.choices_from.depends) {
+        def value = hooks.overrides.containsKey(name) ? hooks.overrides[name] : state[name]
+        def type = tool.inputs.find { it.name == name }?.type
+        if (!(value instanceof String) || !value || (type == "folder" && !new File(value).isDirectory())) {   // (d) intended fallback: not known yet, so a text field
+            lcLog("INFO", "choices of '" + p.name + "' not asked yet: '" + name + "' has no usable value (text field)")
+            return null
+        }
+        request[name] = value
+    }
+    return request
+}
+
+/** Run the source tool of a ChoicesFrom with `request` and return the options it answered, or null when it gave none. */
+List askSourceTool(Map app, Map source, Map p, Map request) {
+    def jobDir = Files.createTempDirectory("lcchoices_fiji_").toFile()
+    try {
+        request[JOB_DIR_KEY] = jobDir.path
+        def outcome = runTool(app, source, request)
+        if (!outcome.complete) { lcLog("WARNING", "choices of '" + p.name + "' not available: " + outcome.error); return null }
+        def found = outcome.outputs.results.find { it.type == "values" && it.values?.get(p.choices_from.field ?: "choices") instanceof List }
+        def options = found?.values?.get(p.choices_from.field ?: "choices")?.collect { it.toString() }
+        return options ?: null
+    } finally { removeFolder(jobDir, "job folder of the choices request") }
+}
+
+/** The options for one ChoicesFrom parameter, or null (it stays a text field). One failing source tool must not break the dialog. */
+List choicesFor(Map app, Map tool, Map p, Map state) {
+    def source = app.schema.tools.find { it.id == p.choices_from.tool }
+    def given = hooks.overrides.containsKey("_choices_" + p.name) ? hooks.overrides["_choices_" + p.name] : null
+    try {
+        if (given instanceof List) return given
+        if (source == null || !(p.choices_from.depends instanceof List)) {
+            lcLog("WARNING", "choices of '" + p.name + "' cannot be asked: the source tool '" + p.choices_from.tool + "' is not in the app or 'depends' is not a list (text field)")
+            return null
+        }
+        def request = choiceRequest(tool, p, state)
+        return request == null ? null : askSourceTool(app, source, p, request)
+    } catch (Exception problem) {          // broad on purpose: one failing source tool must not break the dialog; the field stays a text field
+        lcLog("WARNING", "could not get the choices of '" + p.name + "': " + problem, problem)
+        IJ.log("LabConstrictor: could not get the choices of '" + p.label + "' (" + problem + "); type the value instead")
+        return null
+    }
+}
+
 /** ChoicesFrom parameters of `tool` -> their options, asked of the source tool with the values of the previous run; unanswered ones are left out (text field). */
 Map choiceListsFor(Map app, Map tool) {
     def lists = [:]
     def state = null
     tool.inputs.findAll { it.choices_from instanceof Map }.each { p ->
         state = state ?: readState(app)
-        def source = app.schema.tools.find { it.id == p.choices_from.tool }
-        def given = hooks.overrides.containsKey("_choices_" + p.name) ? hooks.overrides["_choices_" + p.name] : null
-        try {
-            if (given instanceof List) { lists[p.name] = given; return }
-            if (source == null || !(p.choices_from.depends instanceof List)) {
-                lcLog("WARNING", "choices of '" + p.name + "' cannot be asked: the source tool '" + p.choices_from.tool + "' is not in the app or 'depends' is not a list (text field)")
-                return
-            }
-            def request = [:]
-            for (name in p.choices_from.depends) {
-                def value = hooks.overrides.containsKey(name) ? hooks.overrides[name] : state[name]
-                def type = tool.inputs.find { it.name == name }?.type
-                if (!(value instanceof String) || !value || (type == "folder" && !new File(value).isDirectory())) {   // (d) intended fallback: not known yet, so a text field
-                    lcLog("INFO", "choices of '" + p.name + "' not asked yet: '" + name + "' has no usable value (text field)")
-                    return
-                }
-                request[name] = value
-            }
-            def jobDir = Files.createTempDirectory("lcchoices_fiji_").toFile()
-            try {
-                request[JOB_DIR_KEY] = jobDir.path
-                def outcome = runTool(app, source, request)
-                if (!outcome.complete) { lcLog("WARNING", "choices of '" + p.name + "' not available: " + outcome.error); return }
-                def found = outcome.outputs.results.find { it.type == "values" && it.values?.get(p.choices_from.field ?: "choices") instanceof List }
-                def options = found?.values?.get(p.choices_from.field ?: "choices")?.collect { it.toString() }
-                if (options) lists[p.name] = options
-            } finally { removeFolder(jobDir, "job folder of the choices request") }
-        } catch (Exception problem) {          // broad on purpose: one failing source tool must not break the dialog; the field stays a text field
-            lcLog("WARNING", "could not get the choices of '" + p.name + "': " + problem, problem)
-            IJ.log("LabConstrictor: could not get the choices of '" + p.label + "' (" + problem + "); type the value instead")
-        }
+        def options = choicesFor(app, tool, p, state)
+        if (options != null) lists[p.name] = options
     }
     return lists
 }
 
-// ---------------------------------------------------------------- run
-/** Run one task through Appose; Esc (or the harness) requests cancel, a tool that ignores it is killed. */
-Map runTool(Map app, Map tool, Map inputs) {
+/** What the dialog offered, for the harness: item names, choices, widget styles and defaults. */
+void describeDialog(Map summary, def info) {
+    summary.dialog_inputs = info.inputs().collect { it.getName() }
+    summary.dialog_choices = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getChoices() as List] }
+    summary.dialog_styles = info.inputs().findAll { it.getWidgetStyle() }.collectEntries { [(it.getName()): it.getWidgetStyle()] }
+    summary.dialog_defaults = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getDefaultValue()] }
+}
+
+/** Interactive run: choose the app and tool, show the tool's dialog, record the run. Returns [app, tool, module], or [aborted: true, result: ...] when cancelled. */
+Map requestFromDialog(Map found, Map summary) {
+    def appName = pickOne("LabConstrictor", "Application", found.apps.keySet().toList(), hooks.preferred("app"))
+    if (appName == null) return [aborted: true, result: hooks.finish(summary + [cancelled: true])]
+    def app = found.apps[appName]
+    def toolLabel = pickOne("LabConstrictor: " + app.display_name, "Tool", app.schema.tools.collect { it.label }, hooks.preferred("tool"))
+    if (toolLabel == null) return [aborted: true, result: hooks.finish(summary + [cancelled: true])]
+    def tool = app.schema.tools.find { it.label == toolLabel }
+
+    def openImages = WindowManager.getImageTitles() as List<String>
+    def dialogStarted = System.nanoTime()
+    def (info, links) = buildToolDialog(tool, openImages, choiceListsFor(app, tool))
+    summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / 1e9
+    describeDialog(summary, info)
+    def module = harvest(info, tool.label, links)
+    if (module == null) return [aborted: true, result: hooks.finish(summary + [cancelled: true])]
+    recordRun(appName, tool, module)
+    return [app: app, tool: tool, module: module]
+}
+
+// ---- the request
+/** One channel of a (hyper)stack as a plain image, at the current Z and T: what a tool declared with PickChannel receives. */
+ImagePlus channelOf(ImagePlus imp, int channel, String label) {
+    if (channel < 1 || channel > imp.getNChannels())
+        throw new IllegalArgumentException("'" + label + "': channel " + channel + " was asked for, but the image has " + imp.getNChannels() + " channel" + (imp.getNChannels() == 1 ? "" : "s"))
+    def plane = imp.getNChannels() == 1 ? imp.getProcessor() : imp.getStack().getProcessor(imp.getStackIndex(channel, imp.getSlice(), imp.getFrame()))
+    def single = new ImagePlus(imp.getTitle(), plane.duplicate())
+    single.setCalibration(imp.getCalibration())
+    return single
+}
+
+@groovy.transform.Field final int MAX_REGION_OBJECTS = 65535      // labels of the region image (16 bit)
+
+/** RegionOf: the ROIs selected in the ROI Manager (else the ROI of the image) as a label image the size of the image the region
+ *  belongs to: labels 1..N, 0 outside. Whatever makes that impossible is said to the person, never guessed around. */
+File selectionMask(Map p, Map tool, def module, File jobDir) {
+    def label = p.label as String, owner = tool.inputs.find { it.name == p.region_of }
+    if (module.getInput(p.region_of + "_file"))
+        throw new IllegalArgumentException("'" + label + "': the selection belongs to an open image, but a file was chosen for '" + owner.label + "': open the image, or untick the selection")
+    def imp = LCModule.imageOf(module.getInput(p.region_of))
+    if (imp == null) throw new IllegalArgumentException("'" + label + "': choose the open image it belongs to ('" + owner.label + "')")
+    def manager = ij.plugin.frame.RoiManager.getInstance2()
+    def rois = (manager?.getSelectedIndexes() ?: [] as int[]).collect { manager.getRoi(it) }.findAll { it != null }
+    if (!rois && imp.getRoi() != null) rois = [imp.getRoi()]
+    if (!rois) throw new IllegalArgumentException("'" + label + "': nothing is selected: draw a region on '" + imp.getTitle() + "' or select entries in the ROI Manager, or untick the selection")
+    if (rois.size() > MAX_REGION_OBJECTS) throw new IllegalArgumentException("'" + label + "': " + rois.size() + " objects are selected; at most " + MAX_REGION_OBJECTS + " are supported")
+    def mask = new ij.process.ShortProcessor(imp.getWidth(), imp.getHeight())
+    rois.eachWithIndex { roi, i -> mask.setValue(i + 1); mask.fill(roi) }
+    if (mask.getStatistics().max == 0) throw new IllegalArgumentException("'" + label + "': the selection lies outside the image")
+    def file = new File(jobDir, p.name + ".tif")
+    new FileSaver(new ImagePlus(p.name, mask)).saveAsTiff(file.path)
+    return file
+}
+
+/** An image parameter's value for the worker: [file the worker reads, what to remember as the image (an ImagePlus, or the path to open later)],
+ *  or null when the parameter is optional and was not given. */
+List exportImage(Map p, Map tool, def module, File jobDir) {
+    if (p.region_of && module.getInput("selection_" + p.name)) {   // RegionOf: the selection is the value
+        def maskFile = selectionMask(p, tool, module, jobDir)
+        return [maskFile.path, maskFile.path]
+    }
+    def chosen = module.getInput(p.name + "_file") as File
+    if (chosen) return exportImageFile(p, module, chosen, jobDir)   // a file wins over the open image: the worker reads it directly
+    if (!p.required && !module.getInput("use_" + p.name)) return null
+    return exportOpenImage(p, module, jobDir)
+}
+
+/** An image given as a file: the worker reads it directly, except that PickChannel writes the chosen channel of it for the worker. */
+List exportImageFile(Map p, def module, File chosen, File jobDir) {
+    if (!chosen.isFile()) throw new IllegalArgumentException("'" + p.label + "': file not found: " + chosen.path)
+    def opened = p.pick_channel ? IJ.openImage(chosen.path) : null
+    if (opened != null) {                                     // PickChannel: the file's chosen channel is written for the worker
+        def picked = channelOf(opened, (module.getInput(p.name + "_channel") ?: 1) as int, p.label as String)
+        def channelFile = new File(jobDir, p.name + ".tif")
+        new FileSaver(picked).saveAsTiff(channelFile.path)
+        return [channelFile.path, chosen.path]
+    }
+    return [chosen.path, chosen.path]                         // opened later only if a result needs it (see asImage)
+}
+
+/** An image chosen from the open windows, saved into the job folder as TIFF (one channel for PickChannel, one plane for axes "YX"). */
+List exportOpenImage(Map p, def module, File jobDir) {
+    def chosenImage = LCModule.imageOf(module.getInput(p.name))
+    if (chosenImage == null) throw new IllegalArgumentException("'" + p.label + "' is required: open an image or choose a file")
+    def file = new File(jobDir, p.name + ".tif")
+    if (file.canonicalFile.parentFile != jobDir.canonicalFile) throw new IllegalArgumentException("'" + p.label + "': refusing to write outside " + jobDir)
+    def imp = chosenImage
+    if (p.pick_channel) {                                   // PickChannel: exactly the channel that was chosen, at the current Z and T
+        imp = channelOf(imp, (module.getInput(p.name + "_channel") ?: 1) as int, p.label as String)
+    } else if (p.axes == "YX" && imp.getStackSize() > 1) {          // tool wants one plane: send the one on screen
+        IJ.log("LabConstrictor: '" + p.label + "' needs a single 2D plane - using the current plane (" + imp.getCurrentSlice() + " of " + imp.getStackSize() + ")")
+        imp = new ImagePlus(imp.getTitle(), imp.getProcessor().duplicate())
+        imp.setCalibration(chosenImage.getCalibration())
+    }
+    new FileSaver(imp).saveAsTiff(file.path)
+    return [file.path, chosenImage]
+}
+
+/** Harvested values -> worker inputs. Images are saved as TIFF (calibration travels as explicit parameters). Returns [inputs, images]. */
+List exportInputs(Map tool, def module, File jobDir) {
+    def inputs = [:], images = [:]
+    tool.inputs.each { p ->
+        def value = module.getInput(p.name)
+        switch (p.type) {
+            case ["image", "labels"]:
+                def exported = exportImage(p, tool, module, jobDir)
+                if (exported != null) { inputs[p.name] = exported[0]; images[p.name] = exported[1] }
+                break
+            case ["table", "file"]:
+                if (value) inputs[p.name] = (value as File).path
+                break
+            case "folder":
+                if (value) {
+                    if (!(value as File).isDirectory()) throw new IllegalArgumentException("'" + p.label + "': folder not found: " + (value as File).path)
+                    inputs[p.name] = (value as File).path
+                }
+                break
+            default:
+                if (p.nullable && !module.getInput("set_" + p.name)) break      // unset: the tool receives None
+                if (value != null) inputs[p.name] = value
+        }
+    }
+    inputs[JOB_DIR_KEY] = jobDir.path
+    return [inputs, images]
+}
+
+// ---- running the worker
+/** The worker process of an app (not started yet); its stderr goes to the log and, as a tail, into `workerOutput`. */
+Service newWorkerService(Map app, List<String> workerOutput) {
     def command = [app.python, "-m", "labconstrictor_tools", "serve", "--module", app.module] + app.pythonpath.collectMany { ["--pythonpath", it] }
     def env = [PYTHONPATH: app.runtime_path, PYTHONNOUSERSITE: "1", PYTHONIOENCODING: "utf-8", PYTHONUNBUFFERED: "1"]
     def service = new Service(new File(app.prefix), env, command as String[])
-    def workerOutput = new LinkedList<String>()              // the worker's stderr tail: tracebacks, import errors, native crashes
     service.debug { String line -> synchronized (workerOutput) { workerOutput << line; if (workerOutput.size() > MAX_KEPT_LINES) workerOutput.removeFirst() }; lcLog("DEBUG", "worker " + line) }
-    lcLog("INFO", "starting worker for " + app.name + " python=" + app.python + " module=" + app.module + " tool=" + tool.id)
-    def progress = []
-    def task = service.task(TOOL_PREFIX + tool.id, inputs)
+    return service
+}
+
+/** Show the tool's progress updates in Fiji's status bar and keep the last ones in `progress`. */
+void listenForProgress(def task, List progress) {
     task.listen { event ->
         if (event.responseType == Service.ResponseType.UPDATE) {
             synchronized (progress) { progress << [event.message, event.current, event.maximum]; if (progress.size() > MAX_KEPT_LINES) progress.remove(0) }
@@ -667,10 +751,12 @@ Map runTool(Map app, Map tool, Map inputs) {
             if (event.maximum > 0) IJ.showProgress(event.current / (double) event.maximum)
         }
     }
-    def started = System.currentTimeMillis()
+}
+
+/** Wait for a started task. Esc (or the harness) sends Cancel; a tool that ignores it for CANCEL_GRACE_MS is killed.
+ *  Returns when Cancel was sent (epoch ms), or null if it never was. */
+Long waitForTask(Service service, def task, long started) {
     Long cancelSent = null
-    try {
-    task.start()
     IJ.resetEscape()
     def cancelAfter = hooks.cancelAfterMs()
     while (!task.status.isFinished()) {
@@ -685,12 +771,33 @@ Map runTool(Map app, Map tool, Map inputs) {
         }
         Thread.sleep(50)
     }
-    } finally {                                              // also when interrupted or when anything above throws: no worker left behind
-        IJ.showProgress(1.0)
-        try { service.close(); waitForExit(service, EXIT_WAIT_MS) }
-        catch (Throwable problem) {                          // cleanup: broad on purpose, whatever close() throws the worker must still be killed
-            lcLog("ERROR", "could not close the worker cleanly: " + problem, problem); service.kill()
-        }
+    return cancelSent
+}
+
+/** Close the worker and make sure it is gone: no worker is ever left behind. */
+void closeWorker(Service service) {
+    IJ.showProgress(1.0)
+    try { service.close(); waitForExit(service, EXIT_WAIT_MS) }
+    catch (Throwable problem) {                          // cleanup: broad on purpose, whatever close() throws the worker must still be killed
+        lcLog("ERROR", "could not close the worker cleanly: " + problem, problem); service.kill()
+    }
+}
+
+/** Run one task through Appose; Esc (or the harness) requests cancel, a tool that ignores it is killed. */
+Map runTool(Map app, Map tool, Map inputs) {
+    def workerOutput = new LinkedList<String>()              // the worker's stderr tail: tracebacks, import errors, native crashes
+    def service = newWorkerService(app, workerOutput)
+    lcLog("INFO", "starting worker for " + app.name + " python=" + app.python + " module=" + app.module + " tool=" + tool.id)
+    def progress = []
+    def task = service.task(TOOL_PREFIX + tool.id, inputs)
+    listenForProgress(task, progress)
+    def started = System.currentTimeMillis()
+    Long cancelSent = null
+    try {
+        task.start()
+        cancelSent = waitForTask(service, task, started)
+    } finally {                                              // also when interrupted or when anything above throws
+        closeWorker(service)
     }
     def complete = task.status == Service.TaskStatus.COMPLETE
     if (complete) lcLog("INFO", "task COMPLETE tool=" + tool.id + " timings=" + task.outputs?.timings)
@@ -698,6 +805,13 @@ Map runTool(Map app, Map tool, Map inputs) {
     return [status: task.status.toString(), complete: complete, error: task.error, workerOutput: workerOutput.takeRight(60),
             outputs: task.outputs, progress: progress, workerAlive: service.isAlive(), cancelRequested: cancelSent != null,
             seconds: (System.currentTimeMillis() - started) / 1000.0]
+}
+
+/** After close(): wait for the worker to exit on its own, then kill it so no process is ever left behind. */
+void waitForExit(Service service, int timeoutMs) {
+    def deadline = System.currentTimeMillis() + timeoutMs
+    while (service.isAlive() && System.currentTimeMillis() < deadline) Thread.sleep(100)
+    if (service.isAlive()) service.kill()
 }
 
 /** One line saying the likely cause of a worker that died (same wording as labconstrictor_tools.log.hint_for_exit). */
@@ -723,15 +837,40 @@ String failureMessage(Map outcome, Map summary) {
            "\n\nRun record: " + (summary.run_record ?: "(none)") + "\nLog file: " + new File(lcHome(), "logs/labconstrictor.log").path
 }
 
-/** After close(): wait for the worker to exit on its own, then kill it so no process is ever left behind. */
-void waitForExit(Service service, int timeoutMs) {
-    def deadline = System.currentTimeMillis() + timeoutMs
-    while (service.isAlive() && System.currentTimeMillis() < deadline) Thread.sleep(100)
-    if (service.isAlive()) service.kill()
+/** One folder per run under <home>/runs (newest 50 kept): what was run, by which interpreter, what came back. */
+String writeRunRecord(Map app, Map tool, Map inputs, Map outcome, Map summary) {
+    try {
+        def runs = new File(lcHome(), "runs")
+        def stamp = new java.text.SimpleDateFormat("yyyyMMdd'T'HHmmssSSS").format(new Date())
+        def folder = new File(runs, stamp + "_" + slug(app.name as String) + "_" + slug(tool.id as String))
+        if (folder.canonicalFile.parentFile != runs.canonicalFile) throw new IOException("run folder " + folder + " is not inside " + runs)
+        folder.mkdirs()
+        new File(folder, "run.json").text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
+            app: app.name, app_version: app.version, tool: tool.id, host: "fiji", status: outcome.status, error: outcome.error,
+            seconds: outcome.seconds, inputs: inputs, worker_output_tail: outcome.workerOutput, log_file: new File(lcHome(), "logs/labconstrictor.log").path, progress_events: outcome.progress, interpreter: outcome.outputs?.diagnostics,
+            results: (outcome.outputs?.results ?: []).collect { it.findAll { k, v -> k != "matrix_yx" } }]))
+        (runs.listFiles({ File f -> f.isDirectory() } as FileFilter) ?: [] as File[]).sort().reverse().drop(50).each { removeFolder(it, "old run record") }
+        return folder.path
+    } catch (Exception problem) {                       // a record must never break a run, but its absence must be visible
+        lcLog("WARNING", "could not write the run record: " + problem, problem)
+        return null
+    }
 }
 
-// ---------------------------------------------------------------- results (switch on result type only)
+/** Run the tool, then keep the command and the run record and show the outcome. */
+void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
+    def outcome = runTool(app, tool, inputs)
+    summary << [request: inputs, status: outcome.status, error: outcome.error, progress_events: outcome.progress,
+                worker_alive_after: outcome.workerAlive, cancel_requested: outcome.cancelRequested]
+    summary.timings.worker_run_s = outcome.seconds
+    rememberCommand(app, tool, inputs, images, summary)
+    summary.run_record = writeRunRecord(app, tool, inputs, outcome, summary)
+    reportOutcome(app, tool, outcome, images, summary)
+}
+
+// ---- showing results (switch on result type only)
 @groovy.transform.Field def lastShownImage = null          // the image window this run showed last (points without an apply_to go on it)
+
 Map showResults(Map app, List results, Map images, Map tool = null) {
     def summary = [:]
     def replaced = (tool?.outputs ?: []).findAll { it.replace }.collect { it.name } as Set
@@ -812,7 +951,47 @@ void showPoints(Map app, Map r, Map images, Map summary, boolean replace) {
 }
 
 @groovy.transform.Field final int MAX_SHAPES = 50000       // outlines shown on the image
+
 @groovy.transform.Field final int MAX_MANAGER_SHAPES = 1000  // outlines also listed in the ROI Manager (it gets very slow with more)
+
+/** One polygon (rings of [x, y], pixel centres at integers; the first ring is the outline, the others holes) as a ShapeRoi. */
+ij.gui.ShapeRoi polygonRoi(List part) {
+    def path = new java.awt.geom.Path2D.Double(java.awt.geom.Path2D.WIND_EVEN_ODD)
+    part.each { ring ->
+        ring.eachWithIndex { point, i ->
+            double x = (point[0] as double) + 0.5d, y = (point[1] as double) + 0.5d       // pixel centres
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        path.closePath()
+    }
+    return new ij.gui.ShapeRoi(path)
+}
+
+/** The ROIs of a GeoJSON feature collection (at most MAX_SHAPES, named `prefix label[.n]`), how many polygons it had and how many have holes. */
+Map outlinesOf(def collection, String prefix) {
+    def rois = [], holes = 0, total = 0
+    collection.features.each { feature ->
+        def geometry = feature.geometry
+        def parts = geometry.type == "Polygon" ? [geometry.coordinates] : geometry.coordinates
+        parts.each { part ->
+            total++
+            if (rois.size() >= MAX_SHAPES) return
+            if (part.size() > 1) holes++
+            def roi = polygonRoi(part)
+            def label = feature.properties?.label
+            roi.setName(prefix + " " + (label != null ? label : rois.size() + 1) + (parts.size() > 1 ? "." + (rois.size() + 1) : ""))
+            rois << roi
+        }
+    }
+    return [rois: rois, holes: holes, total: total]
+}
+
+/** Replace(): remove the earlier outlines of this output (named `prefix ...`) from the overlay and the ROI Manager. */
+void removeEarlierOutlines(def overlay, def manager, String prefix) {
+    for (int i = overlay.size() - 1; i >= 0; i--) if (overlay.get(i).getName()?.startsWith(prefix + " ")) overlay.remove(i)
+    def indexes = (0..<manager.getCount()).findAll { manager.getRoi(it).getName()?.startsWith(prefix + " ") } as int[]
+    if (indexes) manager.setSelectedIndexes(indexes).with { manager.runCommand("Delete") }
+}
 
 /** Outlines (GeoJSON Polygon / MultiPolygon, [x, y] with pixel centres at integers) in the frame of the image named by apply_to
  *  (else the first image of this run, else the current image): an overlay on that image with holes kept (composite ROIs), and the
@@ -822,28 +1001,8 @@ void showShapes(Map app, Map r, Map images, Map summary, boolean replace) {
     def target = images[r.apply_to]
     if (!(target instanceof ImagePlus)) target = lastShownImage ?: WindowManager.getCurrentImage()
     def prefix = app.name + ":" + r.name
-    def rois = [], holes = 0, total = 0
-    collection.features.each { feature ->
-        def geometry = feature.geometry
-        def parts = geometry.type == "Polygon" ? [geometry.coordinates] : geometry.coordinates
-        parts.each { part ->
-            total++
-            if (rois.size() >= MAX_SHAPES) return
-            def path = new java.awt.geom.Path2D.Double(java.awt.geom.Path2D.WIND_EVEN_ODD)
-            part.each { ring ->
-                ring.eachWithIndex { point, i ->
-                    double x = (point[0] as double) + 0.5d, y = (point[1] as double) + 0.5d       // pixel centres
-                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-                }
-                path.closePath()
-            }
-            if (part.size() > 1) holes++
-            def roi = new ij.gui.ShapeRoi(path)
-            def label = feature.properties?.label
-            roi.setName(prefix + " " + (label != null ? label : rois.size() + 1) + (parts.size() > 1 ? "." + (rois.size() + 1) : ""))
-            rois << roi
-        }
-    }
+    def outlines = outlinesOf(collection, prefix)
+    def rois = outlines.rois, holes = outlines.holes, total = outlines.total
     if (!(target instanceof ImagePlus)) {
         IJ.log("LabConstrictor: '" + r.name + "' has " + total + " outline(s) but no image is open to place them on (open an image and run again)")
         summary["shapes_" + r.name] = [count: total, shown: 0, image: null]
@@ -851,11 +1010,7 @@ void showShapes(Map app, Map r, Map images, Map summary, boolean replace) {
     }
     def overlay = target.getOverlay() ?: new ij.gui.Overlay()
     def manager = ij.plugin.frame.RoiManager.getRoiManager()
-    if (replace) {                                           // Replace(): the previous outlines of this output make way
-        for (int i = overlay.size() - 1; i >= 0; i--) if (overlay.get(i).getName()?.startsWith(prefix + " ")) overlay.remove(i)
-        def indexes = (0..<manager.getCount()).findAll { manager.getRoi(it).getName()?.startsWith(prefix + " ") } as int[]
-        if (indexes) manager.setSelectedIndexes(indexes).with { manager.runCommand("Delete") }
-    }
+    if (replace) removeEarlierOutlines(overlay, manager, prefix)
     rois.each { overlay.add(it) }
     target.setOverlay(overlay)
     overlay.setStrokeColor(java.awt.Color.YELLOW)
@@ -873,7 +1028,7 @@ void showTable(Map r, Map summary) {
     summary["table_" + r.name] = [rows: table.size(), cols: table.getHeadings() as List, first: table.getRowAsString(0)]
 }
 
-/** Resample `source` into the `target` frame with the returned matrix (maps source px -> target px) and show an overlay. */
+/** An input image of the run: the image itself, or the file it was given as (opened only when a result needs it). */
 ImagePlus asImage(def image) {                          // inputs given as files are opened only when a result needs them
     if (image instanceof ImagePlus) return image
     def imp = IJ.openImage(image as String)
@@ -881,6 +1036,7 @@ ImagePlus asImage(def image) {                          // inputs given as files
     return imp
 }
 
+/** Resample `apply_to` into the `relative_to` frame with the returned matrix (maps source px -> target px) and show a green/magenta overlay. */
 void showAffine(Map r, Map images, List results, Map summary, boolean replace = false) {
     def source = asImage(images[r.apply_to]), target = asImage(images[r.relative_to ?: r.apply_to])
     def warped = resample(source, target.getWidth(), target.getHeight(), r.matrix_yx)
@@ -934,8 +1090,28 @@ double relativeDifference(FloatProcessor a, FloatProcessor b) {
     return sumDiff / Math.max(sumRef, 1e-9)
 }
 
+/** Say what became of a run: show the results of a complete one, a plain message for "nothing found", an error for a failure, a status line for the rest. */
+void reportOutcome(Map app, Map tool, Map outcome, Map images, Map summary) {
+    if (outcome.complete) {
+        summary.interpreter = outcome.outputs.diagnostics
+        summary << showResults(app, outcome.outputs.results, images, tool)
+        if (summary.display_errors && hooks.interactive)
+            IJ.error("LabConstrictor: " + app.display_name, "The tool finished, but not everything could be shown:\n" + summary.display_errors.join("\n"))
+    } else if (outcome.status == "FAILED" && !outcome.cancelRequested && (outcome.error ?: "") =~ /^\[(no_match|no_result)\] /) {
+        // an outcome ("nothing found"), not a fault: a plain message, not an error dialog
+        summary.no_match_message = outcome.error.replaceFirst(/^\[[a-z_]+\] /, "")
+        if (hooks.interactive) IJ.showMessage("LabConstrictor: " + app.display_name, summary.no_match_message)
+        IJ.showStatus("LabConstrictor: " + summary.no_match_message)
+    } else if (outcome.status in ["FAILED", "CRASHED"] && !outcome.cancelRequested) {
+        summary.failure_message = failureMessage(outcome, summary)
+        if (hooks.interactive) IJ.error("LabConstrictor: " + app.display_name, summary.failure_message)
+    } else {
+        IJ.showStatus("LabConstrictor: " + outcome.status.toLowerCase())
+        IJ.log("LabConstrictor: the run was " + (outcome.cancelRequested ? "cancelled" : outcome.status.toLowerCase()))
+    }
+}
 
-// ---------------------------------------------------------------- macro recording / replay
+// ---- macro replay
 /** Module stand-in for a macro call: same getInput(name) contract as the harvested dialog module, values from the options string. */
 class MacroModule {
     Map values = [:]
@@ -1010,148 +1186,98 @@ def macroNumber(Map p, String text) {
     return number
 }
 
+/** The option names a replayed call may use for `tool`. */
+List<String> allowedMacroKeys(Map tool) {
+    return ["app", "tool"] + tool.inputs.collectMany { p -> [p.name] + (p.type in ["image", "labels"] ? [p.name + "_file"] : []) + (p.pick_channel ? [p.name + "_channel"] : []) + (p.region_of ? ["selection_" + p.name] : []) }
+}
+
+/** An image option of a replayed call: a file, the selection, or the window called `text`. */
+void takeMacroImage(MacroModule module, Map p, String text, String fileText) {
+    if (p.region_of && module.values["selection_" + p.name]) return          // the selection is the value (taken when the run starts)
+    if (fileText) { module.values[p.name + "_file"] = new File(fileText); module.values["use_" + p.name] = true; return }
+    if (text == null && !p.required) return
+    if (text == null) throw new IllegalArgumentException("'" + p.label + "' is required: give " + p.name + "=<window title> or " + p.name + "_file=<path> (a macro never guesses the current image)")
+    def imp = WindowManager.getImage(text)
+    if (imp == null) throw new IllegalArgumentException("'" + p.label + "': no open image" + (text ? " called '" + text + "'" : "") + " (use " + p.name + "=<window title> or " + p.name + "_file=<path>)")
+    module.values[p.name] = imp; module.values["use_" + p.name] = true
+}
+
+/** A boolean option of a replayed call: absent is the default, a bare flag counts as true (macro convention). */
+def macroBoolean(Map p, String text) {
+    if (text == null) return p.default ?: false
+    if (text.toLowerCase() in ["", "true", "1", "yes"]) return true
+    if (text.toLowerCase() in ["false", "0", "no"]) return false
+    throw new IllegalArgumentException("'" + p.label + "' must be true or false, got '" + text + "'")
+}
+
+/** The options of a replayed call that belong to parameter `p`, as the values the dialog would have given. */
+void takeMacroParameter(MacroModule module, Map p, String options) {
+    def text = Macro.getValue(options, p.name, null)
+    def fileText = Macro.getValue(options, p.name + "_file", null)
+    if (p.pick_channel) {                                                  // PickChannel: the channel to hand the tool (1 = first)
+        def channelText = Macro.getValue(options, p.name + "_channel", null)
+        module.values[p.name + "_channel"] = channelText == null ? 1 : macroNumber([type: "integer", label: p.label + " channel", minimum: 1], channelText)
+    }
+    if (p.nullable && p.type in ["string", "integer", "float", "choice", "boolean"]) {   // optional, no default: not in the macro = unset
+        module.values["set_" + p.name] = text != null
+        if (text == null) return
+    }
+    if (p.region_of) module.values["selection_" + p.name] = (Macro.getValue(options, "selection_" + p.name, "false") ?: "true").toLowerCase() in ["true", "1", "yes"]   // a bare flag counts as true
+    switch (p.type) {
+        case ["image", "labels"]: takeMacroImage(module, p, text, fileText); break
+        case ["table", "file", "folder"]:
+            if (text) module.values[p.name] = new File(text)
+            break
+        case "boolean": module.values[p.name] = macroBoolean(p, text); break
+        case "integer":
+            module.values[p.name] = text == null ? (p.default ?: 0) as Integer : macroNumber(p, text)
+            break
+        case "float":
+            module.values[p.name] = text == null ? (p.default ?: 0) as Double : macroNumber(p, text)
+            break
+        case "choice":
+            if (text != null && !(text in p.choices)) throw new IllegalArgumentException("'" + p.label + "' must be one of " + p.choices + ", got '" + text + "'")
+            module.values[p.name] = text == null ? (p.default ?: p.choices[0]) : text
+            break
+        default:
+            module.values[p.name] = text == null ? (p.default ?: "") : text
+    }
+}
+
 /** Build the module values for a replayed call; unknown options, tools or parameters, missing images and invalid values raise IllegalArgumentException (shown, logged). */
 MacroModule moduleFromMacro(Map tool, String options) {
-    def allowed = ["app", "tool"] + tool.inputs.collectMany { p -> [p.name] + (p.type in ["image", "labels"] ? [p.name + "_file"] : []) + (p.pick_channel ? [p.name + "_channel"] : []) + (p.region_of ? ["selection_" + p.name] : []) }
+    def allowed = allowedMacroKeys(tool)
     def unknown = macroKeys(options).findAll { !(it in allowed) }
     if (unknown) throw new IllegalArgumentException("unknown option" + (unknown.size() > 1 ? "s " : " ") + unknown.collect { "'" + it + "'" }.join(", ") +
                                                     " (the tool accepts: " + allowed.findAll { it != "app" && it != "tool" }.join(", ") + ")")
     def module = new MacroModule()
-    tool.inputs.each { p ->
-        def text = Macro.getValue(options, p.name, null)
-        def fileText = Macro.getValue(options, p.name + "_file", null)
-        if (p.pick_channel) {                                                  // PickChannel: the channel to hand the tool (1 = first)
-            def channelText = Macro.getValue(options, p.name + "_channel", null)
-            module.values[p.name + "_channel"] = channelText == null ? 1 : macroNumber([type: "integer", label: p.label + " channel", minimum: 1], channelText)
-        }
-        if (p.nullable && p.type in ["string", "integer", "float", "choice", "boolean"]) {   // optional, no default: not in the macro = unset
-            module.values["set_" + p.name] = text != null
-            if (text == null) return
-        }
-        if (p.region_of) module.values["selection_" + p.name] = (Macro.getValue(options, "selection_" + p.name, "false") ?: "true").toLowerCase() in ["true", "1", "yes"]   // a bare flag counts as true
-        switch (p.type) {
-            case ["image", "labels"]:
-                if (p.region_of && module.values["selection_" + p.name]) break          // the selection is the value (taken when the run starts)
-                if (fileText) { module.values[p.name + "_file"] = new File(fileText); module.values["use_" + p.name] = true; break }
-                if (text == null && !p.required) break
-                if (text == null) throw new IllegalArgumentException("'" + p.label + "' is required: give " + p.name + "=<window title> or " + p.name + "_file=<path> (a macro never guesses the current image)")
-                def imp = WindowManager.getImage(text)
-                if (imp == null) throw new IllegalArgumentException("'" + p.label + "': no open image" + (text ? " called '" + text + "'" : "") + " (use " + p.name + "=<window title> or " + p.name + "_file=<path>)")
-                module.values[p.name] = imp; module.values["use_" + p.name] = true
-                break
-            case ["table", "file", "folder"]:
-                if (text) module.values[p.name] = new File(text)
-                break
-            case "boolean":
-                if (text == null) module.values[p.name] = p.default ?: false
-                else if (text.toLowerCase() in ["", "true", "1", "yes"]) module.values[p.name] = true       // a bare flag counts as true (macro convention)
-                else if (text.toLowerCase() in ["false", "0", "no"]) module.values[p.name] = false
-                else throw new IllegalArgumentException("'" + p.label + "' must be true or false, got '" + text + "'")
-                break
-            case "integer":
-                module.values[p.name] = text == null ? (p.default ?: 0) as Integer : macroNumber(p, text)
-                break
-            case "float":
-                module.values[p.name] = text == null ? (p.default ?: 0) as Double : macroNumber(p, text)
-                break
-            case "choice":
-                if (text != null && !(text in p.choices)) throw new IllegalArgumentException("'" + p.label + "' must be one of " + p.choices + ", got '" + text + "'")
-                module.values[p.name] = text == null ? (p.default ?: p.choices[0]) : text
-                break
-            default:
-                module.values[p.name] = text == null ? (p.default ?: "") : text
-        }
-    }
+    tool.inputs.each { p -> takeMacroParameter(module, p, options) }
     return module
 }
 
-// ---------------------------------------------------------------- main
-def labConstrictorRun() {
-    hooks.setup()
-    def started = System.nanoTime()
-    def summary = [timings: [:]]
-    def found = discoverApps()
-    summary.timings.discovery_s = (System.nanoTime() - started) / 1e9
-    if (!found.apps) {
-        def why = found.problems ? "\n\nSkipped:\n" + found.problems.join("\n") : ""
-        lcLog("ERROR", "no usable apps in " + found.home + "/apps" + why.replace("\n", " | "))
-        if (hooks.interactive) IJ.error("LabConstrictor", "No LabConstrictor apps are registered in " + found.home + "/apps." + why +
-                                        "\n\nCheck with: labconstrictor-tools doctor   (log: " + new File(lcHome(), "logs/labconstrictor.log").path + ")")
-        return hooks.finish(summary + [error: "no apps registered"])
-    }
-
-    def macro = macroOptions()
-    if (macro && macro =~ /(^|\s)copy_last(=|\s|$)/) {         // menu entry "Copy last run as command": no dialog, nothing is run
-        def file = new File(new File(lcHome(), "state"), "last_command.json")
-        if (!file.isFile()) return failEarly(summary, "nothing to copy yet: run a tool first")
-        def last = new JsonSlurper().parseText(file.getText("UTF-8"))
-        def kind = Macro.getValue(macro, "kind", "terminal")
-        def text = kind == "python" ? last.python : last.terminal
-        boolean copied = true
-        try {
-            java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new java.awt.datatransfer.StringSelection(text), null)
-        } catch (java.awt.HeadlessException | IllegalStateException | SecurityException problem) {    // no clipboard here (headless, locked by another program)
-            copied = false
-            lcLog("WARN", "clipboard not available: " + problem, problem)
-            summary.clipboard_error = problem.toString()
-        }
-        if (copied) {
-            IJ.log("LabConstrictor: copied the " + kind + " command of the last run (" + last.app + ": " + last.tool + "):\n" + text)
-            IJ.showStatus("LabConstrictor: copied the last run as a " + kind + " command")
-        } else {
-            IJ.log("LabConstrictor: could not copy to the clipboard (" + summary.clipboard_error + "); the " + kind + " command of the last run (" + last.app + ": " + last.tool + ") is:\n" + text)
-        }
-        return hooks.finish(summary + [copied_last: text, copied_kind: kind])
-    }
-    def appName, toolLabel, app, tool, module
-    if (macro) {                                               // replay of a recorded macro: no choosers, no dialog
-        appName = found.apps.keySet().find { it.equalsIgnoreCase(Macro.getValue(macro, "app", "") ?: "") }
-        if (appName == null) return failEarly(summary, "unknown app '" + Macro.getValue(macro, "app", "") + "' (registered: " + found.apps.keySet().join(", ") + ")")
-        app = found.apps[appName]
-        tool = app.schema.tools.find { it.label.equalsIgnoreCase(Macro.getValue(macro, "tool", "") ?: "") || it.id == Macro.getValue(macro, "tool", "") }
-        if (tool == null) return failEarly(summary, "unknown tool '" + Macro.getValue(macro, "tool", "") + "' in " + appName + " (tools: " + app.schema.tools.collect { it.label }.join(", ") + ")")
-        try { module = moduleFromMacro(tool, macro) } catch (IllegalArgumentException | NumberFormatException problem) { return failEarly(summary, problem.message ?: problem.toString()) }
-        summary.replayed_from_macro = true
-    } else {
-        appName = pickOne("LabConstrictor", "Application", found.apps.keySet().toList(), hooks.preferred("app"))
-        if (appName == null) return hooks.finish(summary + [cancelled: true])
-        app = found.apps[appName]
-        toolLabel = pickOne("LabConstrictor: " + app.display_name, "Tool", app.schema.tools.collect { it.label }, hooks.preferred("tool"))
-        if (toolLabel == null) return hooks.finish(summary + [cancelled: true])
-        tool = app.schema.tools.find { it.label == toolLabel }
-
-        def openImages = WindowManager.getImageTitles() as List<String>
-        def dialogStarted = System.nanoTime()
-        def (info, links) = buildToolDialog(tool, openImages, choiceListsFor(app, tool))
-        summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / 1e9
-        summary.dialog_inputs = info.inputs().collect { it.getName() }
-        summary.dialog_choices = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getChoices() as List] }
-        summary.dialog_styles = info.inputs().findAll { it.getWidgetStyle() }.collectEntries { [(it.getName()): it.getWidgetStyle()] }
-        summary.dialog_defaults = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getDefaultValue()] }
-        module = harvest(info, tool.label, links)
-        if (module == null) return hooks.finish(summary + [cancelled: true])
-        recordRun(appName, tool, module)
-    }
-
-    def jobDir = Files.createTempDirectory("lcjob_fiji_").toFile()
-    try {                                                        // the folder goes whatever happens from here on
-        List exported
-        try {
-            exported = exportInputs(tool, module, jobDir)
-        } catch (IllegalArgumentException problem) {           // missing file, nothing chosen for a required image
-            if (hooks.interactive) IJ.error("LabConstrictor", problem.message)
-            return hooks.finish(summary + [error: problem.message])
-        }
-        def (inputs, images) = exported
-        runAndShow(app, tool, inputs, images, summary)
-        if (summary.status == "COMPLETE") rememberDepends(app, tool, inputs)
-    } finally {
-        removeFolder(jobDir, "job folder of the run")
-    }
-    hooks.finish(summary)
+/** Replay of a recorded macro: no choosers, no dialog. Returns [app, tool, module], or [aborted: true, result: ...] after reporting why not. */
+Map requestFromMacro(Map found, String macro, Map summary) {
+    def appText = Macro.getValue(macro, "app", "") ?: ""
+    def toolText = Macro.getValue(macro, "tool", "") ?: ""
+    def appName = found.apps.keySet().find { it.equalsIgnoreCase(appText) }
+    if (appName == null) return [aborted: true, result: failEarly(summary, "unknown app '" + Macro.getValue(macro, "app", "") + "' (registered: " + found.apps.keySet().join(", ") + ")")]
+    def app = found.apps[appName]
+    def tool = app.schema.tools.find { it.label.equalsIgnoreCase(toolText) || it.id == Macro.getValue(macro, "tool", "") }
+    if (tool == null) return [aborted: true, result: failEarly(summary, "unknown tool '" + Macro.getValue(macro, "tool", "") + "' in " + appName + " (tools: " + app.schema.tools.collect { it.label }.join(", ") + ")")]
+    def module
+    try { module = moduleFromMacro(tool, macro) } catch (IllegalArgumentException | NumberFormatException problem) { return [aborted: true, result: failEarly(summary, problem.message ?: problem.toString())] }
+    summary.replayed_from_macro = true
+    return [app: app, tool: tool, module: module]
 }
 
-// ---------------------------------------------------------------- Copy as command (same text as labconstrictor_tools.command)
+def failEarly(Map summary, String message) {
+    lcLog("ERROR", "macro call rejected: " + message)
+    if (hooks.interactive) IJ.error("LabConstrictor", message)
+    IJ.log("LabConstrictor: " + message)
+    return hooks.finish(summary + [error: message])
+}
+
+// ---- copy as command (same text as labconstrictor_tools.command)
 @Field final Map<String, String> FILE_PLACEHOLDERS = [image: "image.tif", labels: "labels.tif", table: "table.csv", file: "file", folder: "folder"]
 
 String shellQuote(String text, boolean windows) {
@@ -1194,12 +1320,38 @@ String commandText(String kind, Map app, Map tool, Map inputs, Map images) {
     return note + parts.join(" ")
 }
 
-void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
-    def outcome = runTool(app, tool, inputs)
-    summary << [request: inputs, status: outcome.status, error: outcome.error, progress_events: outcome.progress,
-                worker_alive_after: outcome.workerAlive, cancel_requested: outcome.cancelRequested]
-    summary.timings.worker_run_s = outcome.seconds
-    try {                                                    // Copy as command: the Log carries what repeats this run outside Fiji
+/** Put `text` on the system clipboard. Returns null, or what went wrong (no clipboard here: headless, or locked by another program). */
+String putOnClipboard(String text) {
+    try {
+        java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new java.awt.datatransfer.StringSelection(text), null)
+        return null
+    } catch (java.awt.HeadlessException | IllegalStateException | SecurityException problem) {
+        lcLog("WARN", "clipboard not available: " + problem, problem)
+        return problem.toString()
+    }
+}
+
+/** Menu entry "Copy last run as command": the command of the last run (kind=terminal or kind=python) goes on the clipboard; nothing is run. */
+def copyLastRun(String macro, Map summary) {
+    def file = new File(new File(lcHome(), "state"), "last_command.json")
+    if (!file.isFile()) return failEarly(summary, "nothing to copy yet: run a tool first")
+    def last = new JsonSlurper().parseText(file.getText("UTF-8"))
+    def kind = Macro.getValue(macro, "kind", "terminal")
+    def text = kind == "python" ? last.python : last.terminal
+    def clipboardError = putOnClipboard(text)
+    if (clipboardError == null) {
+        IJ.log("LabConstrictor: copied the " + kind + " command of the last run (" + last.app + ": " + last.tool + "):\n" + text)
+        IJ.showStatus("LabConstrictor: copied the last run as a " + kind + " command")
+    } else {
+        summary.clipboard_error = clipboardError
+        IJ.log("LabConstrictor: could not copy to the clipboard (" + clipboardError + "); the " + kind + " command of the last run (" + last.app + ": " + last.tool + ") is:\n" + text)
+    }
+    return hooks.finish(summary + [copied_last: text, copied_kind: kind])
+}
+
+/** Log the command that repeats this run outside Fiji and keep it for "Copy last run as command". Never breaks a run. */
+void rememberCommand(Map app, Map tool, Map inputs, Map images, Map summary) {
+    try {
         summary.command_line = commandText("terminal", app, tool, inputs, images)
         summary.python_snippet = commandText("python", app, tool, inputs, images)
         IJ.log("LabConstrictor: to repeat this run outside Fiji, copy from here:\n" + summary.command_line + "\n--- or in Python:\n" + summary.python_snippet)
@@ -1210,31 +1362,44 @@ void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
         IJ.log("LabConstrictor: could not build the command to repeat this run (" + problem + ")")
         summary.command_error = problem.toString()
     }
-    summary.run_record = writeRunRecord(app, tool, inputs, outcome, summary)
-    if (outcome.complete) {
-        summary.interpreter = outcome.outputs.diagnostics
-        summary << showResults(app, outcome.outputs.results, images, tool)
-        if (summary.display_errors && hooks.interactive)
-            IJ.error("LabConstrictor: " + app.display_name, "The tool finished, but not everything could be shown:\n" + summary.display_errors.join("\n"))
-    } else if (outcome.status == "FAILED" && !outcome.cancelRequested && (outcome.error ?: "") =~ /^\[(no_match|no_result)\] /) {
-        // an outcome ("nothing found"), not a fault: a plain message, not an error dialog
-        summary.no_match_message = outcome.error.replaceFirst(/^\[[a-z_]+\] /, "")
-        if (hooks.interactive) IJ.showMessage("LabConstrictor: " + app.display_name, summary.no_match_message)
-        IJ.showStatus("LabConstrictor: " + summary.no_match_message)
-    } else if (outcome.status in ["FAILED", "CRASHED"] && !outcome.cancelRequested) {
-        summary.failure_message = failureMessage(outcome, summary)
-        if (hooks.interactive) IJ.error("LabConstrictor: " + app.display_name, summary.failure_message)
-    } else {
-        IJ.showStatus("LabConstrictor: " + outcome.status.toLowerCase())
-        IJ.log("LabConstrictor: the run was " + (outcome.cancelRequested ? "cancelled" : outcome.status.toLowerCase()))
+}
+
+// ---- entry point
+/** Export the inputs into a job folder (removed whatever happens), run the tool and show what came back. */
+def runRequest(Map app, Map tool, def module, Map summary) {
+    def jobDir = Files.createTempDirectory("lcjob_fiji_").toFile()
+    try {                                                        // the folder goes whatever happens from here on
+        List exported
+        try {
+            exported = exportInputs(tool, module, jobDir)
+        } catch (IllegalArgumentException problem) {           // missing file, nothing chosen for a required image
+            if (hooks.interactive) IJ.error("LabConstrictor", problem.message)
+            return hooks.finish(summary + [error: problem.message])
+        }
+        def (inputs, images) = exported
+        runAndShow(app, tool, inputs, images, summary)
+        if (summary.status == "COMPLETE") rememberDepends(app, tool, inputs)
+    } finally {
+        removeFolder(jobDir, "job folder of the run")
     }
+    hooks.finish(summary)
 }
-def failEarly(Map summary, String message) {
-    lcLog("ERROR", "macro call rejected: " + message)
-    if (hooks.interactive) IJ.error("LabConstrictor", message)
-    IJ.log("LabConstrictor: " + message)
-    return hooks.finish(summary + [error: message])
+
+def labConstrictorRun() {
+    hooks.setup()
+    def started = System.nanoTime()
+    def summary = [timings: [:]]
+    def found = discoverApps()
+    summary.timings.discovery_s = (System.nanoTime() - started) / 1e9
+    if (!found.apps) return reportNoApps(found, summary)
+
+    def macro = macroOptions()
+    if (macro && macro =~ /(^|\s)copy_last(=|\s|$)/) return copyLastRun(macro, summary)   // menu entry "Copy last run as command": no dialog, nothing is run
+    def request = macro ? requestFromMacro(found, macro, summary) : requestFromDialog(found, summary)
+    if (request.aborted) return request.result
+    return runRequest(request.app, request.tool, request.module, summary)
 }
+
 /** Entry point: anything unexpected is logged with its stack trace and shown with the log's location. */
 def labConstrictorMain() {
     lcLog("INFO", "---- session start: " + IJ.getFullVersion() + " java=" + System.getProperty("java.version") + " os=" + System.getProperty("os.name") + " LC_HOME=" + lcHome())
@@ -1246,4 +1411,5 @@ def labConstrictorMain() {
         return hooks.finish([error: problem.toString()])
     }
 }
+
 labConstrictorMain()
