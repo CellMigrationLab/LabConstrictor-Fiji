@@ -1,85 +1,125 @@
-# LabConstrictor-Fiji
+# LabConstrictor for Fiji
 
-A Fiji command that runs **any installed LabConstrictor app's tools** from **Plugins > LabConstrictor > LabConstrictor Tools...**.
-The dialog for each tool is generated from the tool's declared schema (see
-[LabConstrictor-Tools](https://github.com/CellMigrationLab/LabConstrictor-Tools)); the tool runs in the app's own Python
-environment through [Appose](https://github.com/apposed/appose), so Fiji never imports the app's packages.
+**Run registered Python analysis tools from Fiji.**
 
-* Parameters become native SciJava dialog fields: numbers with ranges and units, choices, checkboxes, file and folder fields. A value that is optional and has no default (a seed, a time limit) has a **"Set <name>"** checkbox: unticked, the tool receives `None`.
-* **Group headings and advanced settings**: parameters of a `group` are shown together under a "— Group —" heading and `advanced` ones last under "— Advanced settings —". `enabled_when` is not applied (SciJava dialogs cannot grey fields out dynamically): all parameters stay editable and the tool must accept them either way. The Napari widget implements all three.
-* **Interaction hints**: `choices_from` (a string parameter whose options another tool provides) becomes a dropdown. Fiji builds the dialog before anything is typed, so it asks the source tool with the values the app used in its previous run (kept in `<LC_HOME>/state/<app>.json`) and shows a plain text field until there are some. `replace` on an output closes the previous window of that result (images, tables, and the alignment overlay) before showing the new one. `clear_after_run` needs nothing (every run opens a fresh dialog) and `group_collapsed` is shown as a normal heading: SciJava dialogs cannot fold sections.
-* **Message and points outputs**: a `message` result goes to the Log and, when a person runs the tool, into a dialog (markdown emphasis removed). `points` become a multi-point ROI on the image they belong to (the `apply_to` image, else the last image of the run, else the current one), are kept in the ROI Manager as `<app>:<name>` (replaced by the next run when the output declares `Replace()`), and their properties appear in a results table.
-* **Channel selector**: an image input declared with `PickChannel()` gets a "channel" number next to it (1 = first); the tool receives only that channel (at the current Z and T), from an open image or from a file. A channel the image does not have is refused with a clear message. In a macro: `image_channel=2`.
-* **Run on the selection** (`RegionOf`): a "Use the selection as ..." box next to the region input sends the ROIs selected in the ROI Manager (else the ROI of the image) as a label image the size of the image (several are labels 1, 2, 3...). Nothing selected, a selection outside the image, or a file chosen for the image are refused with a clear message. In a macro: `selection_region=true`.
-* **Outlines** (`ShapesOut`, GeoJSON): drawn as an overlay on the image the outlines belong to, with holes kept (composite ROIs); the first 1000 are also listed in the ROI Manager (it becomes very slow with more); up to 50 000 are shown. Replace() swaps the previous outlines of the same output.
-* **Copy as command**: after every run the Log window carries the terminal line and the Python snippet that repeat it outside Fiji (the file behind each open image is used; an image that was never saved gets a placeholder and a note). **Plugins > LabConstrictor > Copy last run as command** puts the terminal line of the last run on the clipboard (macro: `run("Copy last run as command")`, or `run("Copy last run as command", "kind=python")` for the Python snippet).
-* **Images from an open window *or* a file**: each image parameter has the open-image chooser and an "(or file)" field (a file
-  wins). With no image open, the file field is the only input. TIFF always; other formats if the app has `imageio`.
-* Pixel size follows the chosen image (units converted to micrometres), or the TIFF header for files.
-* Typed results: images/labels open as windows (`<app>:<result name>`), alignments as an overlay window, values in the Log window, tables as a Results window named after the output, files by path in the Log.
-* **"No match" is a message, not an error**: a tool that fails with the code `no_match` / `no_result` opens a plain message window instead of the red error dialog.
-* Progress bar, Esc to cancel (tools that ignore cancel are killed after 3 s), no worker left behind.
-* Failures show the tool's error, the worker's last output and the log location; unexpected script errors are logged with their
-  stack trace. All front-ends share `~/.labconstrictor/logs/labconstrictor.log`.
+LabConstrictor adds a Fiji command that discovers tools from installed LabConstrictor applications. Choose an application, choose a tool and fill in the form. Fiji sends the images and parameters to the application's own Python environment, then brings the results back into Fiji.
+
+You do not have to install each application's Python dependencies into Fiji or write a Fiji plugin for every analysis.
+
+This bridge is **in testing**. It has been exercised on Linux; native Windows and macOS testing is still needed.
+
+## Run a tool
+
+1. Open your image in Fiji, or have a TIFF file ready.
+2. Choose **Plugins > LabConstrictor > LabConstrictor Tools...**.
+3. Select an installed application and one of its tools.
+4. Pick the image or file, set the parameters and run.
+5. Inspect the returned images, tables, ROIs, alignment overlay or messages in Fiji.
+
+The form is built from the tool's Python declaration. A tool can ask for a number, a choice, a file, an image or a region. It can also report progress, and you can press **Esc** to cancel a running tool.
+
+### Example: image relocalisation
+
+The repository's real-application tests include NucleiSky's **Relocalize 2D** tool. Give it a reference image and a query image, along with the calibration and other parameters the tool requests. The returned alignment can be inspected in Fiji.
+
+This is an example of how an *installed* scientific application becomes available through the bridge; NucleiSky is not bundled with this repository.
+
+### Images, channels and selections
+
+- **Open image or file:** an image parameter accepts a Fiji window or a file path. When both are supplied, the file takes precedence.
+- **Channels:** tools declaring `PickChannel()` offer a numbered channel choice. The selected channel, at the current Z and T, is sent to the tool.
+- **Selection as region:** tools declaring `RegionOf(...)` can use the current ROI or selected ROIs in the ROI Manager. The selection is passed as a labelled region image; it is not a general-purpose crop option for every tool.
+- **Calibration:** pixel size is taken from the selected image or, when possible, the TIFF metadata. Check the value before running measurements that depend on physical units.
+
+## What comes back to Fiji
+
+| Tool result | Fiji presentation |
+|---|---|
+| Image or label image | A new image window |
+| Points | Multi-point ROI and ROI Manager entry, with properties in a table |
+| Outlines | Image overlay; up to 1,000 are also placed in the ROI Manager |
+| Table | Results window |
+| Alignment | Overlay window |
+| File, values or message | File path or text in the Log; messages may also appear in a dialog |
+
+A tool can mark an output for replacement so that repeated runs update the previous result instead of accumulating windows. There are limits to how many outlines can be displayed; the bridge reports them rather than pretending all objects were added.
 
 ## Install
-1. On the machine, the LabConstrictor apps must be installed and registered (the installer does it; check with
-   `labconstrictor-tools list` / `labconstrictor-tools doctor`). Tools repo: `pip install git+https://github.com/CellMigrationLab/LabConstrictor-Tools`.
-2. Build and copy the jar (Java 8+ bytecode, runs on any Fiji):
 
-        mvn package
-        cp target/labconstrictor-fiji-0.1.0.jar <Fiji.app>/plugins/      # restart Fiji
+First install and register the LabConstrictor application you want to use. The application's installer normally handles registration. The toolkit provides commands to inspect it:
 
-   (Alternatively copy `src/main/resources/org/cellmigrationlab/labconstrictor/LabConstrictor_Tools.groovy` to
-   `<Fiji.app>/scripts/Plugins/LabConstrictor/` to run the script without the jar.)
+```bash
+labconstrictor-tools list
+labconstrictor-tools doctor
+```
 
-Fiji update-site publication is not set up yet.
+If you are installing the toolkit manually:
 
-## How it works
-`LabConstrictorCommand.java` (the menu entry, reports start-up failures) starts `LabConstrictor_Tools.groovy`, which reads the registry
-(`~/.labconstrictor/apps`, `LC_APPS_PATH`, system folder; entries are trust-checked), builds a SciJava `ModuleInfo` from the schema, lets
-Fiji's own input harvester show the dialog, exports images as TIFF (or passes file paths), and drives the worker with Appose's Java
-client using the restricted `lc:<tool>` protocol. The Groovy script is interpreted at run time; the jar is a packaging shell, not a port.
+```bash
+python -m pip install https://github.com/CellMigrationLab/LabConstrictor-Tools/archive/refs/heads/main.zip
+```
 
-## Macro replay (prototype; the Macro Recorder does not record this plugin yet)
-A macro line typed by hand, e.g.
+Build the Fiji jar from this repository:
 
-    run("LabConstrictor Tools...", "app=NucleiSky tool=[Relocalize 2D] reference=ref.tif query=crop.tif reference_pixel_size_um=0.65 query_pixel_size_um=0.325 segmentation=threshold");
+```bash
+mvn package
+```
 
-runs the tool without any dialog. Images are given by window title (`name=title`) or by file
-(`name_file=path`); tables, files and folders by path; an optional value that was not set is simply absent from the line (replay leaves it unset); unknown apps/tools/images are reported with the valid choices. Not yet: headless mode,
-keeping the worker alive between several calls in a loop, a menu entry per tool. Needs the jar (the menu command receives the options).
+Copy `target/labconstrictor-fiji-0.1.0.jar` into `Fiji.app/plugins/` and restart Fiji. The alternative is to place `src/main/resources/org/cellmigrationlab/labconstrictor/LabConstrictor_Tools.groovy` in `Fiji.app/scripts/Plugins/LabConstrictor/`.
 
-## Fallbacks (intended)
-These are deliberate: the host does something simpler instead of failing, writes one line to the shared log
-(`<LC_HOME>/logs/labconstrictor.log`) when it happens, and never does it silently.
+There is **no Fiji update site yet**. The jar is a small Java command that launches the bundled Groovy bridge; the scientific analysis stays in the registered application's Python environment.
 
-| Where | What happens | What the person sees |
-|---|---|---|
-| ChoicesFrom parameter whose source answers nothing yet (a depended-on value is empty, or no earlier run is remembered) | The parameter stays a plain text field | A text field instead of a drop-down |
-| ChoicesFrom source tool fails or is missing | The parameter stays a text field; the failure is logged with its stack trace | A text field, and a line in the Log window ("could not get the choices of ...") |
-| Remembered values (`state/`) cannot be read or written | The dialog starts without them | Empty fields where a previous value would have been offered |
-| Points result and no image is open | The points are shown as a table | The table and a line in the Log window saying to open an image to see them on it |
-| Pixel size of a file cannot be read from its header | The field is left for you to fill in | A line in the Log window ("could not read the pixel size from ...; enter it by hand") |
-| No clipboard (headless, or locked) for "copy last run" | The command is printed instead of copied | The command in the Log window with the reason |
-| File system without POSIX permissions | The permission checks of the trust check cannot apply to that entry | Nothing (logged as a warning) |
+## Reuse a run outside Fiji
 
-## Tests
-`tests/run_cases.py` drives desktop Fiji on a virtual screen (Linux: `xvfb-run`), answering the real SciJava dialogs with
-`tests/test_harness.groovy` (the only place with test hooks) and writing JSON reports and screenshots to `evidence/`.
+After a run, the Log includes a command-line version and a Python snippet. Choose **Plugins > LabConstrictor > Copy last run as command** to copy the terminal command.
 
-    pip install git+https://github.com/CellMigrationLab/LabConstrictor-Tools numpy pandas tifffile
-    export LC_FIJI_HOME=/path/to/Fiji.app
-    python tests/run_cases.py                      # 21 portable cases (example app and small test apps), loose script
-    LC_FIJI_MODE=jar python tests/run_cases.py     # the same 21 through the built jar (needs mvn); about 5 minutes each
-    python tests/run_cases.py --real-apps          # cases for NucleiSky, CellTracksColab, VLab4Mic: need them installed/registered
-                                                   # (LC_HOME) and LC_REAL_FIXTURES=<folder with nucleisky/ celltracks/ vlab4mic/ data>
-                                                   # (4 cases; the blur and VLab4Mic cases fail or time out when those apps are not installed)
+An unsaved Fiji image cannot be represented as a reusable file path; the generated command will say so and include a placeholder. Save the input first if you want to reproduce the run outside Fiji.
 
-Lint: `tests/lint_groovy.sh` runs `npm-groovy-lint` (pinned) on the script with `.groovylintrc.json` (needs node and Java); CI runs it as the `lint` job.
+### Macros
 
-Cases are JSON (`tests/cases/*.json`): the app and tool, images to preload, dialog overrides, optional cancel timing, expectations.
+You can write a macro call manually, for example:
 
-Status: **testing phase**. Tested on Linux only (Fiji with Java 21, Xvfb); to help on Windows or macOS (and on a real desktop) follow the
-[human test protocol](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md). Windows and macOS are untested; SciJava Command generation
-(a menu command per tool, headless use) is not implemented. License: MIT.
+```javascript
+run("LabConstrictor Tools...", "app=NucleiSky tool=[Relocalize 2D] reference=ref.tif query=crop.tif reference_pixel_size_um=0.65 query_pixel_size_um=0.325 segmentation=threshold");
+```
+
+The **Macro Recorder does not record this plugin**. Headless execution and persistent workers across macro calls are not implemented. Use the Toolkit's command-line interface for batch runs that do not require Fiji.
+
+## Current limitations
+
+Fiji uses SciJava dialogs, so some presentation hints work differently from Napari:
+
+- Advanced and grouped parameters appear under headings, not collapsible sections.
+- Fields cannot be dynamically disabled using `enabled_when`; the tool must still validate its inputs.
+- Dynamic choices can depend on values remembered from a previous run. If the choices are not available, Fiji shows a text field and reports a source-tool failure in the Log.
+- Some results require an open image to be placed on it; otherwise they are reported as tables or messages.
+
+For errors, inspect Fiji's Log and the shared log at `~/.labconstrictor/logs/labconstrictor.log`. The Toolkit also provides `labconstrictor-tools support-bundle`.
+
+For more detail, see [Fiji workflow and results](docs/USING_FIJI.md).
+
+## Applications
+
+Fiji discovers tools through the registered LabConstrictor manifest. Applications do **not** need their own Fiji plugin: if an installed application exposes supported tool declarations, its tools can appear in the same command.
+
+Examples include [Guess the Condition](https://github.com/CellMigrationLab/GuessTheCondition) for blinded image classification, [VLab4Mic](https://github.com/CellMigrationLab/LabConstrictor-VLab4Mic) for simulation and [NucleiSky](https://github.com/CellMigrationLab/NucleiSky) for image registration. [Playground](https://github.com/CellMigrationLab/LabConstrictor-Playground) provides synthetic test cases. These examples are not a compatibility allowlist.
+
+See the [Toolkit](https://github.com/CellMigrationLab/LabConstrictor-Tools) for more application repositories. Choose tools based on whether their input data and results are useful in Fiji; host-specific presentation still has limits.
+
+## For developers and testers
+
+The main bridge lives in `src/main/resources/org/cellmigrationlab/labconstrictor/LabConstrictor_Tools.groovy`; `LabConstrictorCommand.java` provides the Fiji menu entry. The Java side uses Fiji's Appose integration to communicate with the restricted LabConstrictor worker.
+
+The real-dialog test harness is in `tests/run_cases.py`. On a Linux machine with Fiji installed and a virtual display:
+
+```bash
+export LC_FIJI_HOME=/path/to/Fiji.app
+python tests/run_cases.py
+LC_FIJI_MODE=jar python tests/run_cases.py
+```
+
+Real-application tests require their applications and fixtures to be installed separately. See the [human testing protocol](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md) for Windows and macOS checks.
+
+Related projects: [Toolkit](https://github.com/CellMigrationLab/LabConstrictor-Tools) · [Napari](https://github.com/CellMigrationLab/napari-labconstrictor) · [QuPath](https://github.com/CellMigrationLab/LabConstrictor-QuPath) · [Playground](https://github.com/CellMigrationLab/LabConstrictor-Playground)
+
+License: MIT.
