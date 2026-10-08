@@ -1,6 +1,6 @@
 # LabConstrictor for Fiji
 
-**Run Python analysis on the images you already have open in Fiji.**
+**Run registered Python analysis tools from Fiji.**
 
 LabConstrictor adds a Fiji command that discovers tools from installed LabConstrictor applications. Choose an application, choose a tool and fill in the form. Fiji sends the images and parameters to the application's own Python environment, then brings the results back into Fiji.
 
@@ -8,7 +8,7 @@ You do not have to install each application's Python dependencies into Fiji or w
 
 This bridge is **in testing**. It has been exercised on Linux; native Windows and macOS testing is still needed.
 
-## What a run looks like
+## Run a tool
 
 1. Open your image in Fiji, or have a TIFF file ready.
 2. Choose **Plugins > LabConstrictor > LabConstrictor Tools...**.
@@ -20,7 +20,7 @@ The form is built from the tool's Python declaration. A tool can ask for a numbe
 
 ### Example: image relocalisation
 
-The Fiji bridge has been exercised with NucleiSky's **Relocalize 2D** tool. Give it a reference image and a query image, along with the calibration and other parameters the tool requests. The returned alignment can be inspected in Fiji.
+The repository's real-application tests include NucleiSky's **Relocalize 2D** tool. Give it a reference image and a query image, along with the calibration and other parameters the tool requests. The returned alignment can be inspected in Fiji.
 
 This is an example of how an *installed* scientific application becomes available through the bridge; NucleiSky is not bundled with this repository.
 
@@ -75,7 +75,7 @@ After a run, the Log includes a command-line version and a Python snippet. Choos
 
 An unsaved Fiji image cannot be represented as a reusable file path; the generated command will say so and include a placeholder. Save the input first if you want to reproduce the run outside Fiji.
 
-### Macros: useful, but still a prototype
+### Macros
 
 You can write a macro call manually, for example:
 
@@ -83,7 +83,7 @@ You can write a macro call manually, for example:
 run("LabConstrictor Tools...", "app=NucleiSky tool=[Relocalize 2D] reference=ref.tif query=crop.tif reference_pixel_size_um=0.65 query_pixel_size_um=0.325 segmentation=threshold");
 ```
 
-The **Macro Recorder does not yet record this plugin**. Headless execution and persistent workers across macro calls are not implemented. Use the Toolkit's command-line interface for batch runs that do not require Fiji.
+The **Macro Recorder does not record this plugin**. Headless execution and persistent workers across macro calls are not implemented. Use the Toolkit's command-line interface for batch runs that do not require Fiji.
 
 ## Current limitations
 
