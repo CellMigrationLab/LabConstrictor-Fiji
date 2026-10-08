@@ -1,0 +1,33 @@
+{
+ "app": "interactions",
+ "tool": "Mean of a channel",
+ "register": [
+  {
+   "name": "interactions",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.interactions",
+   "pythonpath": []
+  }
+ ],
+ "script_mode_only": true,
+ "preload": [
+  {
+   "path": "${FIXTURES}/three_channels.tif",
+   "title": "three_channels.tif"
+  }
+ ],
+ "select": [
+  "three_channels.tif"
+ ],
+ "overrides": {
+  "image": "three_channels.tif",
+  "image_channel": 2
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "match": {
+   "command_line": "# image: the host sent only channel 2; the command sends the whole file",
+   "python_snippet": "three_channels.tif"
+  }
+ }
+}

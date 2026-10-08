@@ -810,12 +810,12 @@ File selectionMask(Map p, Map tool, def module, File jobDir) {
     return file
 }
 
-/** An image parameter's value for the worker: [file the worker reads, what to remember as the image (an ImagePlus, or the path to open later)],
- *  or null when the parameter is optional and was not given. */
+/** An image parameter's value for the worker: [file the worker reads, what to remember as the image (an ImagePlus, or the path to open later), what the
+ *  worker did not get that a command line cannot say (`[selection: true]` or `[channel: n]`, or null)], or null when the parameter is optional and was not given. */
 List exportImage(Map p, Map tool, def module, File jobDir) {
     if (p.region_of && module.getInput("selection_" + p.name)) {   // RegionOf: the selection is the value
         def maskFile = selectionMask(p, tool, module, jobDir)
-        return [maskFile.path, maskFile.path]
+        return [maskFile.path, maskFile.path, [selection: true]]
     }
     def chosen = module.getInput(p.name + "_file") as File
     if (chosen) return exportImageFile(p, module, chosen, jobDir)   // a file wins over the open image: the worker reads it directly
@@ -853,9 +853,9 @@ List exportImageFile(Map p, def module, File chosen, File jobDir) {
         def picked = channelOf(opened, channelNumber, p.label as String)
         def channelFile = new File(jobDir, p.name + ".tif")
         new FileSaver(picked).saveAsTiff(channelFile.path)
-        return [channelFile.path, workerPath(chosen)]
+        return [channelFile.path, workerPath(chosen), opened.getNChannels() > 1 ? [channel: channelNumber] : null]
     }
-    return [workerPath(chosen), workerPath(chosen)]           // opened later only if a result needs it (see asImage)
+    return [workerPath(chosen), workerPath(chosen), null]     // opened later only if a result needs it (see asImage)
 }
 
 /** `message` with its error code in front, the way the worker words its own refusals: `[code] message`. */
@@ -905,18 +905,19 @@ List exportOpenImage(Map p, def module, File jobDir) {
     checkAxes(p, imp)
     checkExportSize(imp)
     new FileSaver(imp).saveAsTiff(file.path)
-    return [file.path, chosenImage]
+    return [file.path, chosenImage, p.pick_channel && chosenImage.getNChannels() > 1 ? [channel: (module.getInput(p.name + "_channel") ?: 1) as int] : null]
 }
 
-/** Harvested values -> worker inputs. Images are saved as TIFF (calibration travels as explicit parameters). Returns [inputs, images]. */
+/** Harvested values -> worker inputs. Images are saved as TIFF (calibration travels as explicit parameters). Returns [inputs, images, modifiers]:
+ *  `modifiers` names, per image parameter, what the worker got that a command line cannot repeat (the selection, one channel). */
 List exportInputs(Map tool, def module, File jobDir) {
-    def inputs = [:], images = [:]
+    def inputs = [:], images = [:], modifiers = [:]
     tool.inputs.each { p ->
         def value = module.getInput(p.name)
         switch (p.type) {
             case ["image", "labels"]:
                 def exported = exportImage(p, tool, module, jobDir)
-                if (exported != null) { inputs[p.name] = exported[0]; images[p.name] = exported[1] }
+                if (exported != null) { inputs[p.name] = exported[0]; images[p.name] = exported[1]; if (exported[2]) modifiers[p.name] = exported[2] }
                 break
             case ["table", "file"]:
                 if (value) inputs[p.name] = workerPath(value as File)
@@ -934,7 +935,7 @@ List exportInputs(Map tool, def module, File jobDir) {
         }
     }
     inputs[JOB_DIR_KEY] = jobDir.path
-    return [inputs, images]
+    return [inputs, images, modifiers]
 }
 
 // ---- running the worker
@@ -1554,6 +1555,7 @@ def failEarly(Map summary, String message) {
                                                   Character.LINE_SEPARATOR, Character.PARAGRAPH_SEPARATOR, Character.SPACE_SEPARATOR].collect { it as int }
 @Field final Map<Integer, String> PYTHON_ESCAPES = [(0x5c): "\\\\", (0x27): "\\'", (0x0a): "\\n", (0x0d): "\\r", (0x09): "\\t"]   // backslash, quote, newline, return, tab
 @Field final int SPACE_CODE_POINT = 0x20
+@Field final String REGION_PLACEHOLDER = "region.tif"   // what a command line names for a selection the host sent as a label image
 @Field final Map<String, String> FILE_PLACEHOLDERS = [image: "image.tif", labels: "labels.tif", table: "table.csv", file: "file", folder: "folder"]
 
 /** `text` quoted for a POSIX shell, or for Windows cmd when `windows` (same rules as labconstrictor_tools.command._quote). */
@@ -1562,20 +1564,27 @@ String shellQuote(String text, boolean windows) {
     return (text && text ==~ /[A-Za-z0-9_@%+=:,.\/-]+/) ? text : "'" + text.replace("'", "'\"'\"'") + "'"
 }
 
-/** The values a command line needs: the file behind each image (its own file, or the file the open image came from), else a placeholder. */
-Map commandValues(Map tool, Map inputs, Map images) {
-    def values = [:], missing = []
+/** The values a command line needs: the file behind each image (its own file, or the file the open image came from), else a placeholder; the notes
+ *  for what a command line cannot say (a selection, one channel). Same sentences as the QuPath form. */
+Map commandValues(Map tool, Map inputs, Map images, Map modifiers) {
+    def values = [:], missing = [], notes = []
     tool.inputs.each { p ->
         def value = inputs[p.name]
         if (p.type in ["image", "labels"]) {
             def source = images[p.name]
             def path = source instanceof ImagePlus ? ((source.getOriginalFileInfo()?.directory && source.getOriginalFileInfo()?.fileName) ? new File(source.getOriginalFileInfo().directory, source.getOriginalFileInfo().fileName).path : null)
                      : source instanceof String ? source : null
+            if (modifiers[p.name]?.selection) {
+                path = REGION_PLACEHOLDER
+                notes << ("# " + p.name + ": the selection cannot be copied; save it as a label image and put its path here")
+            }
+            if (modifiers[p.name]?.channel != null)
+                notes << ("# " + p.name + ": the host sent only channel " + modifiers[p.name].channel + "; the command sends the whole file")
             if (path != null) values[p.name] = path
         } else if (value != null) values[p.name] = value
         if (p.type in FILE_PLACEHOLDERS.keySet() && p.required && values[p.name] == null) { values[p.name] = FILE_PLACEHOLDERS[p.type]; missing << p.name }
     }
-    return [values: values, missing: missing]
+    return [values: values, missing: missing, notes: notes]
 }
 
 /** One character of a Python string literal the way `repr` writes it: \n \r \t, quote and backslash escaped, other characters that are not printable
@@ -1616,9 +1625,9 @@ String terminalLine(Map app, Map tool, List given, Map values, String note) {
 }
 
 /** The text that repeats a run outside Fiji: kind "terminal" (one command line) or "python" (a client.run_once snippet), with a note line when a file had to be a placeholder. */
-String commandText(String kind, Map app, Map tool, Map inputs, Map images) {
-    def built = commandValues(tool, inputs, images)
-    def note = built.missing ? "# replace the file for: " + built.missing.join(", ") + "\n" : ""
+String commandText(String kind, Map app, Map tool, Map built) {
+    def head = (built.missing ? ["# replace the file for: " + built.missing.join(", ")] : []) + built.notes
+    def note = head ? head.join("\n") + "\n" : ""
     def given = tool.inputs.findAll { built.values.containsKey(it.name) }
     return kind == "python" ? pythonSnippet(app, tool, given, built.values, note) : terminalLine(app, tool, given, built.values, note)
 }
@@ -1655,8 +1664,9 @@ def copyLastRun(String macro, Map summary) {
 /** Log the command that repeats this run outside Fiji and keep it for "Copy last run as command". Never breaks a run. */
 void rememberCommand(Map app, Map tool, Map inputs, Map images, Map summary) {
     try {
-        summary.command_line = commandText("terminal", app, tool, inputs, images)
-        summary.python_snippet = commandText("python", app, tool, inputs, images)
+        def built = commandValues(tool, inputs, images, summary.modifiers ?: [:])
+        summary.command_line = commandText("terminal", app, tool, built)
+        summary.python_snippet = commandText("python", app, tool, built)
         IJ.log("LabConstrictor: to repeat this run outside Fiji, copy from here:\n" + summary.command_line + "\n--- or in Python:\n" + summary.python_snippet)
         def stateDir = new File(lcHome(), "state"); stateDir.mkdirs()
         new File(stateDir, "last_command.json").setText(groovy.json.JsonOutput.toJson([app: app.name, tool: tool.id, terminal: summary.command_line, python: summary.python_snippet]), "UTF-8")
@@ -1680,7 +1690,8 @@ def runRequest(Map app, Map tool, def module, Map summary) {
             if (hooks.interactive) IJ.error("LabConstrictor", problem.message)
             return hooks.finish(summary + [error: problem.message])
         }
-        def (inputs, images) = exported
+        def (inputs, images, modifiers) = exported
+        summary.modifiers = modifiers
         runAndShow(app, tool, inputs, images, summary)
         if (summary.status == "COMPLETE") rememberDepends(app, tool, inputs)
     } finally {
