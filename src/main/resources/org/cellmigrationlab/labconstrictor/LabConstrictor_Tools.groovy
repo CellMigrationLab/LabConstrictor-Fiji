@@ -1352,24 +1352,37 @@ Map commandValues(Map tool, Map inputs, Map images) {
     return [values: values, missing: missing]
 }
 
+/** `value` as a Python literal (True / False, a number, or a quoted string): the only quoting used in the Python snippet. */
+String pythonLiteral(def value) {
+    if (value instanceof Boolean) return value ? "True" : "False"
+    if (value instanceof Number) return value.toString()
+    return "'" + value.toString().replace("\\", "\\\\").replace("'", "\\'") + "'"
+}
+
+/** A client.run_once snippet that repeats the run; every name and value goes through pythonLiteral. */
+String pythonSnippet(Map app, Map tool, List given, Map values, String note) {
+    def body = given ? "{\n" + given.collect { "    " + pythonLiteral(it.name) + ": " + pythonLiteral(values[it.name]) + "," }.join("\n") + "\n}" : "{}"
+    return note + "from labconstrictor_tools import client\n\ntask = client.run_once(" + pythonLiteral(app.name) + ", " + pythonLiteral(tool.id) + ", " + body + ")\n" +
+           'print(task.status, task.outputs if task.status == "COMPLETE" else task.error)'
+}
+
+/** One terminal command line that repeats the run; every word of it goes through shellQuote (never string-built any other way). */
+String terminalLine(Map app, Map tool, List given, Map values, String note) {
+    boolean windows = !isPosixHost()
+    def parts = [app.python as String, "-m", "labconstrictor_tools", "run", app.name as String, tool.id as String].collect { shellQuote(it, windows) }
+    given.each { p ->
+        def v = values[p.name]
+        parts << shellQuote(p.name + "=" + (v instanceof Boolean ? (v ? "true" : "false") : v.toString()), windows)
+    }
+    return note + parts.join(" ")
+}
+
 /** The text that repeats a run outside Fiji: kind "terminal" (one command line) or "python" (a client.run_once snippet), with a note line when a file had to be a placeholder. */
 String commandText(String kind, Map app, Map tool, Map inputs, Map images) {
     def built = commandValues(tool, inputs, images)
     def note = built.missing ? "# replace the file for: " + built.missing.join(", ") + "\n" : ""
     def given = tool.inputs.findAll { built.values.containsKey(it.name) }
-    if (kind == "python") {
-        def literal = { v -> v instanceof Boolean ? (v ? "True" : "False") : v instanceof Number ? v.toString() : "'" + v.toString().replace("\\", "\\\\").replace("'", "\\'") + "'" }
-        def body = given ? "{\n" + given.collect { "    '" + it.name + "': " + literal(built.values[it.name]) + "," }.join("\n") + "\n}" : "{}"
-        return note + "from labconstrictor_tools import client\n\ntask = client.run_once('" + app.name + "', '" + tool.id + "', " + body + ")\n" +
-               'print(task.status, task.outputs if task.status == "COMPLETE" else task.error)'
-    }
-    boolean windows = System.getProperty("os.name").toLowerCase().contains("win")
-    def parts = [app.python as String, "-m", "labconstrictor_tools", "run", app.name as String, tool.id as String].collect { shellQuote(it, windows) }
-    given.each { p ->
-        def v = built.values[p.name]
-        parts << shellQuote(p.name + "=" + (v instanceof Boolean ? (v ? "true" : "false") : v.toString()), windows)
-    }
-    return note + parts.join(" ")
+    return kind == "python" ? pythonSnippet(app, tool, given, built.values, note) : terminalLine(app, tool, given, built.values, note)
 }
 
 /** Put `text` on the system clipboard. Returns null, or what went wrong (no clipboard here: headless, or locked by another program). */
