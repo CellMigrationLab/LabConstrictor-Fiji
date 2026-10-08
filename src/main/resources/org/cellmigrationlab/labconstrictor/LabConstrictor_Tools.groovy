@@ -734,12 +734,30 @@ List exportImage(Map p, Map tool, def module, File jobDir) {
     return exportOpenImage(p, module, jobDir)
 }
 
+/** The file as an image, or null when Fiji cannot read it. ImageJ's own error dialog for an unreadable file is redirected to the Log window
+ *  (a modal dialog would block the run), where the reason stays. */
+ImagePlus openForChannel(File file) {
+    IJ.redirectErrorMessages()
+    try {
+        return IJ.openImage(file.path)
+    } finally {
+        IJ.redirectErrorMessages(false)
+    }
+}
+
 /** An image given as a file: the worker reads it directly, except that PickChannel writes the chosen channel of it for the worker. */
 List exportImageFile(Map p, def module, File chosen, File jobDir) {
     if (!chosen.isFile()) throw new IllegalArgumentException("'" + p.label + "': file not found: " + chosen.path)
-    def opened = p.pick_channel ? IJ.openImage(chosen.path) : null
-    if (opened != null) {                                     // PickChannel: the file's chosen channel is written for the worker
-        def picked = channelOf(opened, (module.getInput(p.name + "_channel") ?: 1) as int, p.label as String)
+    if (p.pick_channel) {                                     // PickChannel: the file's chosen channel is written for the worker
+        def channelNumber = (module.getInput(p.name + "_channel") ?: 1) as int
+        def opened = openForChannel(chosen)
+        if (opened == null) {                                 // never fall back to the whole file: the channel the person chose would be ignored
+            def message = "'" + p.label + "': could not open " + chosen.path + " to read channel " + channelNumber +
+                          "; the file is not an image Fiji can read (the reason is in the Log window): choose another file or open the image"
+            lcLog("ERROR", message)
+            throw new IllegalArgumentException(message)
+        }
+        def picked = channelOf(opened, channelNumber, p.label as String)
         def channelFile = new File(jobDir, p.name + ".tif")
         new FileSaver(picked).saveAsTiff(channelFile.path)
         return [channelFile.path, chosen.path]
