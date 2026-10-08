@@ -1135,73 +1135,60 @@ MacroModule moduleFromMacro(Map tool, String options) {
 }
 
 // ---------------------------------------------------------------- main
-def labConstrictorRun() {
-    hooks.setup()
-    def started = System.nanoTime()
-    def summary = [timings: [:]]
-    def found = discoverApps()
-    summary.timings.discovery_s = (System.nanoTime() - started) / 1e9
-    if (!found.apps) {
-        def why = found.problems ? "\n\nSkipped:\n" + found.problems.join("\n") : ""
-        lcLog("ERROR", "no usable apps in " + found.home + "/apps" + why.replace("\n", " | "))
-        if (hooks.interactive) IJ.error("LabConstrictor", "No LabConstrictor apps are registered in " + found.home + "/apps." + why +
-                                        "\n\nCheck with: labconstrictor-tools doctor   (log: " + new File(lcHome(), "logs/labconstrictor.log").path + ")")
-        return hooks.finish(summary + [error: "no apps registered"])
-    }
+/** No registered app can be used: say why (dialog and log) and finish. */
+def reportNoApps(Map found, Map summary) {
+    def why = found.problems ? "\n\nSkipped:\n" + found.problems.join("\n") : ""
+    lcLog("ERROR", "no usable apps in " + found.home + "/apps" + why.replace("\n", " | "))
+    if (hooks.interactive) IJ.error("LabConstrictor", "No LabConstrictor apps are registered in " + found.home + "/apps." + why +
+                                    "\n\nCheck with: labconstrictor-tools doctor   (log: " + new File(lcHome(), "logs/labconstrictor.log").path + ")")
+    return hooks.finish(summary + [error: "no apps registered"])
+}
 
-    def macro = macroOptions()
-    if (macro && macro =~ /(^|\s)copy_last(=|\s|$)/) {         // menu entry "Copy last run as command": no dialog, nothing is run
-        def file = new File(new File(lcHome(), "state"), "last_command.json")
-        if (!file.isFile()) return failEarly(summary, "nothing to copy yet: run a tool first")
-        def last = new JsonSlurper().parseText(file.getText("UTF-8"))
-        def kind = Macro.getValue(macro, "kind", "terminal")
-        def text = kind == "python" ? last.python : last.terminal
-        boolean copied = true
-        try {
-            java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new java.awt.datatransfer.StringSelection(text), null)
-        } catch (java.awt.HeadlessException | IllegalStateException | SecurityException problem) {    // no clipboard here (headless, locked by another program)
-            copied = false
-            lcLog("WARN", "clipboard not available: " + problem, problem)
-            summary.clipboard_error = problem.toString()
-        }
-        if (copied) {
-            IJ.log("LabConstrictor: copied the " + kind + " command of the last run (" + last.app + ": " + last.tool + "):\n" + text)
-            IJ.showStatus("LabConstrictor: copied the last run as a " + kind + " command")
-        } else {
-            IJ.log("LabConstrictor: could not copy to the clipboard (" + summary.clipboard_error + "); the " + kind + " command of the last run (" + last.app + ": " + last.tool + ") is:\n" + text)
-        }
-        return hooks.finish(summary + [copied_last: text, copied_kind: kind])
-    }
-    def appName, toolLabel, app, tool, module
-    if (macro) {                                               // replay of a recorded macro: no choosers, no dialog
-        appName = found.apps.keySet().find { it.equalsIgnoreCase(Macro.getValue(macro, "app", "") ?: "") }
-        if (appName == null) return failEarly(summary, "unknown app '" + Macro.getValue(macro, "app", "") + "' (registered: " + found.apps.keySet().join(", ") + ")")
-        app = found.apps[appName]
-        tool = app.schema.tools.find { it.label.equalsIgnoreCase(Macro.getValue(macro, "tool", "") ?: "") || it.id == Macro.getValue(macro, "tool", "") }
-        if (tool == null) return failEarly(summary, "unknown tool '" + Macro.getValue(macro, "tool", "") + "' in " + appName + " (tools: " + app.schema.tools.collect { it.label }.join(", ") + ")")
-        try { module = moduleFromMacro(tool, macro) } catch (IllegalArgumentException | NumberFormatException problem) { return failEarly(summary, problem.message ?: problem.toString()) }
-        summary.replayed_from_macro = true
-    } else {
-        appName = pickOne("LabConstrictor", "Application", found.apps.keySet().toList(), hooks.preferred("app"))
-        if (appName == null) return hooks.finish(summary + [cancelled: true])
-        app = found.apps[appName]
-        toolLabel = pickOne("LabConstrictor: " + app.display_name, "Tool", app.schema.tools.collect { it.label }, hooks.preferred("tool"))
-        if (toolLabel == null) return hooks.finish(summary + [cancelled: true])
-        tool = app.schema.tools.find { it.label == toolLabel }
+/** Replay of a recorded macro: no choosers, no dialog. Returns [app, tool, module], or [aborted: true, result: ...] after reporting why not. */
+Map requestFromMacro(Map found, String macro, Map summary) {
+    def appText = Macro.getValue(macro, "app", "") ?: ""
+    def toolText = Macro.getValue(macro, "tool", "") ?: ""
+    def appName = found.apps.keySet().find { it.equalsIgnoreCase(appText) }
+    if (appName == null) return [aborted: true, result: failEarly(summary, "unknown app '" + Macro.getValue(macro, "app", "") + "' (registered: " + found.apps.keySet().join(", ") + ")")]
+    def app = found.apps[appName]
+    def tool = app.schema.tools.find { it.label.equalsIgnoreCase(toolText) || it.id == Macro.getValue(macro, "tool", "") }
+    if (tool == null) return [aborted: true, result: failEarly(summary, "unknown tool '" + Macro.getValue(macro, "tool", "") + "' in " + appName + " (tools: " + app.schema.tools.collect { it.label }.join(", ") + ")")]
+    def module
+    try { module = moduleFromMacro(tool, macro) } catch (IllegalArgumentException | NumberFormatException problem) { return [aborted: true, result: failEarly(summary, problem.message ?: problem.toString())] }
+    summary.replayed_from_macro = true
+    return [app: app, tool: tool, module: module]
+}
 
-        def openImages = WindowManager.getImageTitles() as List<String>
-        def dialogStarted = System.nanoTime()
-        def (info, links) = buildToolDialog(tool, openImages, choiceListsFor(app, tool))
-        summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / 1e9
-        summary.dialog_inputs = info.inputs().collect { it.getName() }
-        summary.dialog_choices = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getChoices() as List] }
-        summary.dialog_styles = info.inputs().findAll { it.getWidgetStyle() }.collectEntries { [(it.getName()): it.getWidgetStyle()] }
-        summary.dialog_defaults = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getDefaultValue()] }
-        module = harvest(info, tool.label, links)
-        if (module == null) return hooks.finish(summary + [cancelled: true])
-        recordRun(appName, tool, module)
-    }
+/** What the dialog offered, for the harness: item names, choices, widget styles and defaults. */
+void describeDialog(Map summary, def info) {
+    summary.dialog_inputs = info.inputs().collect { it.getName() }
+    summary.dialog_choices = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getChoices() as List] }
+    summary.dialog_styles = info.inputs().findAll { it.getWidgetStyle() }.collectEntries { [(it.getName()): it.getWidgetStyle()] }
+    summary.dialog_defaults = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getDefaultValue()] }
+}
 
+/** Interactive run: choose the app and tool, show the tool's dialog, record the run. Returns [app, tool, module], or [aborted: true, result: ...] when cancelled. */
+Map requestFromDialog(Map found, Map summary) {
+    def appName = pickOne("LabConstrictor", "Application", found.apps.keySet().toList(), hooks.preferred("app"))
+    if (appName == null) return [aborted: true, result: hooks.finish(summary + [cancelled: true])]
+    def app = found.apps[appName]
+    def toolLabel = pickOne("LabConstrictor: " + app.display_name, "Tool", app.schema.tools.collect { it.label }, hooks.preferred("tool"))
+    if (toolLabel == null) return [aborted: true, result: hooks.finish(summary + [cancelled: true])]
+    def tool = app.schema.tools.find { it.label == toolLabel }
+
+    def openImages = WindowManager.getImageTitles() as List<String>
+    def dialogStarted = System.nanoTime()
+    def (info, links) = buildToolDialog(tool, openImages, choiceListsFor(app, tool))
+    summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / 1e9
+    describeDialog(summary, info)
+    def module = harvest(info, tool.label, links)
+    if (module == null) return [aborted: true, result: hooks.finish(summary + [cancelled: true])]
+    recordRun(appName, tool, module)
+    return [app: app, tool: tool, module: module]
+}
+
+/** Export the inputs into a job folder (removed whatever happens), run the tool and show what came back. */
+def runRequest(Map app, Map tool, def module, Map summary) {
     def jobDir = Files.createTempDirectory("lcjob_fiji_").toFile()
     try {                                                        // the folder goes whatever happens from here on
         List exported
@@ -1218,6 +1205,21 @@ def labConstrictorRun() {
         removeFolder(jobDir, "job folder of the run")
     }
     hooks.finish(summary)
+}
+
+def labConstrictorRun() {
+    hooks.setup()
+    def started = System.nanoTime()
+    def summary = [timings: [:]]
+    def found = discoverApps()
+    summary.timings.discovery_s = (System.nanoTime() - started) / 1e9
+    if (!found.apps) return reportNoApps(found, summary)
+
+    def macro = macroOptions()
+    if (macro && macro =~ /(^|\s)copy_last(=|\s|$)/) return copyLastRun(macro, summary)   // menu entry "Copy last run as command": no dialog, nothing is run
+    def request = macro ? requestFromMacro(found, macro, summary) : requestFromDialog(found, summary)
+    if (request.aborted) return request.result
+    return runRequest(request.app, request.tool, request.module, summary)
 }
 
 // ---------------------------------------------------------------- Copy as command (same text as labconstrictor_tools.command)
@@ -1263,12 +1265,38 @@ String commandText(String kind, Map app, Map tool, Map inputs, Map images) {
     return note + parts.join(" ")
 }
 
-void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
-    def outcome = runTool(app, tool, inputs)
-    summary << [request: inputs, status: outcome.status, error: outcome.error, progress_events: outcome.progress,
-                worker_alive_after: outcome.workerAlive, cancel_requested: outcome.cancelRequested]
-    summary.timings.worker_run_s = outcome.seconds
-    try {                                                    // Copy as command: the Log carries what repeats this run outside Fiji
+/** Put `text` on the system clipboard. Returns null, or what went wrong (no clipboard here: headless, or locked by another program). */
+String putOnClipboard(String text) {
+    try {
+        java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new java.awt.datatransfer.StringSelection(text), null)
+        return null
+    } catch (java.awt.HeadlessException | IllegalStateException | SecurityException problem) {
+        lcLog("WARN", "clipboard not available: " + problem, problem)
+        return problem.toString()
+    }
+}
+
+/** Menu entry "Copy last run as command": the command of the last run (kind=terminal or kind=python) goes on the clipboard; nothing is run. */
+def copyLastRun(String macro, Map summary) {
+    def file = new File(new File(lcHome(), "state"), "last_command.json")
+    if (!file.isFile()) return failEarly(summary, "nothing to copy yet: run a tool first")
+    def last = new JsonSlurper().parseText(file.getText("UTF-8"))
+    def kind = Macro.getValue(macro, "kind", "terminal")
+    def text = kind == "python" ? last.python : last.terminal
+    def clipboardError = putOnClipboard(text)
+    if (clipboardError == null) {
+        IJ.log("LabConstrictor: copied the " + kind + " command of the last run (" + last.app + ": " + last.tool + "):\n" + text)
+        IJ.showStatus("LabConstrictor: copied the last run as a " + kind + " command")
+    } else {
+        summary.clipboard_error = clipboardError
+        IJ.log("LabConstrictor: could not copy to the clipboard (" + clipboardError + "); the " + kind + " command of the last run (" + last.app + ": " + last.tool + ") is:\n" + text)
+    }
+    return hooks.finish(summary + [copied_last: text, copied_kind: kind])
+}
+
+/** Log the command that repeats this run outside Fiji and keep it for "Copy last run as command". Never breaks a run. */
+void rememberCommand(Map app, Map tool, Map inputs, Map images, Map summary) {
+    try {
         summary.command_line = commandText("terminal", app, tool, inputs, images)
         summary.python_snippet = commandText("python", app, tool, inputs, images)
         IJ.log("LabConstrictor: to repeat this run outside Fiji, copy from here:\n" + summary.command_line + "\n--- or in Python:\n" + summary.python_snippet)
@@ -1279,7 +1307,10 @@ void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
         IJ.log("LabConstrictor: could not build the command to repeat this run (" + problem + ")")
         summary.command_error = problem.toString()
     }
-    summary.run_record = writeRunRecord(app, tool, inputs, outcome, summary)
+}
+
+/** Say what became of a run: show the results of a complete one, a plain message for "nothing found", an error for a failure, a status line for the rest. */
+void reportOutcome(Map app, Map tool, Map outcome, Map images, Map summary) {
     if (outcome.complete) {
         summary.interpreter = outcome.outputs.diagnostics
         summary << showResults(app, outcome.outputs.results, images, tool)
@@ -1297,6 +1328,17 @@ void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
         IJ.showStatus("LabConstrictor: " + outcome.status.toLowerCase())
         IJ.log("LabConstrictor: the run was " + (outcome.cancelRequested ? "cancelled" : outcome.status.toLowerCase()))
     }
+}
+
+/** Run the tool, then keep the command and the run record and show the outcome. */
+void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
+    def outcome = runTool(app, tool, inputs)
+    summary << [request: inputs, status: outcome.status, error: outcome.error, progress_events: outcome.progress,
+                worker_alive_after: outcome.workerAlive, cancel_requested: outcome.cancelRequested]
+    summary.timings.worker_run_s = outcome.seconds
+    rememberCommand(app, tool, inputs, images, summary)
+    summary.run_record = writeRunRecord(app, tool, inputs, outcome, summary)
+    reportOutcome(app, tool, outcome, images, summary)
 }
 def failEarly(Map summary, String message) {
     lcLog("ERROR", "macro call rejected: " + message)
