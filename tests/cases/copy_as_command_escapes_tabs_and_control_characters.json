@@ -1,0 +1,29 @@
+{
+ "app": "parity",
+ "tool": "Echo text",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "overrides": {
+  "text": "a\tb\u0001é'q\\z​"
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "match": {
+   "python_snippet": "'text': 'a\\tb\\x01é\\'q\\\\z\\u200b',"
+  },
+  "approx": {
+   "values_values.length": [
+    10,
+    0
+   ]
+  }
+ }
+}

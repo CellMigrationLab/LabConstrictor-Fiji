@@ -1499,6 +1499,11 @@ def failEarly(Map summary, String message) {
 }
 
 // ---- copy as command (same text as labconstrictor_tools.command)
+// the Unicode categories Python's str.isprintable() refuses (everything except the ASCII space among the separators)
+@Field final List<Integer> NOT_PRINTABLE_TYPES = [Character.CONTROL, Character.FORMAT, Character.SURROGATE, Character.PRIVATE_USE, Character.UNASSIGNED,
+                                                  Character.LINE_SEPARATOR, Character.PARAGRAPH_SEPARATOR, Character.SPACE_SEPARATOR].collect { it as int }
+@Field final Map<Integer, String> PYTHON_ESCAPES = [(0x5c): "\\\\", (0x27): "\\'", (0x0a): "\\n", (0x0d): "\\r", (0x09): "\\t"]   // backslash, quote, newline, return, tab
+@Field final int SPACE_CODE_POINT = 0x20
 @Field final Map<String, String> FILE_PLACEHOLDERS = [image: "image.tif", labels: "labels.tif", table: "table.csv", file: "file", folder: "folder"]
 
 /** `text` quoted for a POSIX shell, or for Windows cmd when `windows` (same rules as labconstrictor_tools.command._quote). */
@@ -1523,11 +1528,23 @@ Map commandValues(Map tool, Map inputs, Map images) {
     return [values: values, missing: missing]
 }
 
+/** One character of a Python string literal the way `repr` writes it: \n \r \t, quote and backslash escaped, other characters that are not printable
+ *  (controls, format characters, line separators, unassigned code points) as \xNN, \uNNNN or \UNNNNNNNN. */
+String pythonEscaped(int codePoint) {
+    if (PYTHON_ESCAPES.containsKey(codePoint)) return PYTHON_ESCAPES[codePoint]
+    boolean printable = codePoint == SPACE_CODE_POINT || !(Character.getType(codePoint) in NOT_PRINTABLE_TYPES)
+    if (printable) return new String(Character.toChars(codePoint))
+    return codePoint <= 0xff ? String.format("\\x%02x", codePoint) : codePoint <= 0xffff ? String.format("\\u%04x", codePoint) : String.format("\\U%08x", codePoint)
+}
+
 /** `value` as a Python literal (True / False, a number, or a quoted string): the only quoting used in the Python snippet. */
 String pythonLiteral(def value) {
     if (value instanceof Boolean) return value ? "True" : "False"
     if (value instanceof Number) return value.toString()
-    return "'" + value.toString().replace("\\", "\\\\").replace("'", "\\'") + "'"
+    def text = value.toString()
+    def literal = new StringBuilder("'")
+    text.codePoints().forEach { int codePoint -> literal.append(pythonEscaped(codePoint)) }
+    return literal.append("'").toString()
 }
 
 /** A client.run_once snippet that repeats the run; every name and value goes through pythonLiteral. */

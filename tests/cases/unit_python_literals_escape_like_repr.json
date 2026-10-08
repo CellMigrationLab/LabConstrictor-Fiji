@@ -1,0 +1,14 @@
+{
+ "unit_checks": [
+  "python_literals"
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 15
+  }
+ }
+}
