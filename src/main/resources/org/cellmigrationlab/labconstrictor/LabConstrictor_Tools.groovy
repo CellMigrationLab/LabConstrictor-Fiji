@@ -1083,7 +1083,7 @@ Map showResults(Map app, List results, Map images, Map tool = null) {
         try {
             switch (r.type) {
                 case ["image", "labels"]: showImage(app, r, summary, r.name in replaced); break
-                case "table": showTable(r, summary); break
+                case "table": showTable(r, summary, r.name in replaced); break
                 case "values": IJ.log(app.display_name + " " + r.name + ": " + r.values); summary["values_" + r.name] = r.values; break
                 case "message": showMessage(app, r, summary); break
                 case "points": showPoints(app, r, images, summary, r.name in replaced); break
@@ -1151,7 +1151,7 @@ void showPoints(Map app, Map r, Map images, Map summary, boolean replace) {
     def table = ResultsTable.open(r.path)
     def target = resultTarget(r, images)
     if (target == null) {                                    // nothing to place them on: the table is still the result
-        table.show(app.name + ":" + r.name)
+        showTableWindow(table, app.name + ":" + r.name, replace)
         lcLog("INFO", "points '" + r.name + "' shown as a table: " + noWindowReason(images) + " (" + table.size() + " point(s))")
         IJ.log("LabConstrictor: '" + r.name + "' has " + table.size() + " point(s) but " + noWindowReason(images) + ": shown as a table (open an image and run again to see them on it)")
         summary["points_" + r.name] = [count: table.size(), image: null, columns: table.getHeadings() as List]
@@ -1168,7 +1168,7 @@ void showPoints(Map app, Map r, Map images, Map summary, boolean replace) {
     }
     target.setRoi(roi)
     manager.addRoi(roi)
-    table.show(app.name + ":" + r.name)
+    showTableWindow(table, app.name + ":" + r.name, replace)
     summary["points_" + r.name] = [count: table.size(), image: target.getTitle(), columns: table.getHeadings() as List]
 }
 
@@ -1239,11 +1239,20 @@ void showShapes(Map app, Map r, Map images, Map summary, boolean replace) {
     summary["shapes_" + r.name] = [count: total, shown: rois.size(), holes: holes, image: target.getTitle(), overlay_size: overlay.size(), manager_count: manager.getCount()]
 }
 
-/** A table result: opened as a results window named after the output. */
-void showTable(Map r, Map summary) {
+/** Show `table` in a results window called `title`. ImageJ would overwrite an open window of that name, so a table that does not replace its
+ *  previous result gets a new window `title [n]` (the manifest: add, unless the output declares Replace). Returns the title shown. */
+String showTableWindow(ResultsTable table, String title, boolean replace) {
+    def shown = title
+    if (!replace) for (int n = 1; WindowManager.getFrame(shown) != null; n++) shown = title + " [" + n + "]"
+    table.show(shown)
+    return shown
+}
+
+/** A table result: opened as a results window named after the output (`name [n]` when that one is open, unless the output replaces its previous result). */
+void showTable(Map r, Map summary, boolean replace) {
     def table = ResultsTable.open(r.path)
-    table.show(r.name)
-    summary["table_" + r.name] = [rows: table.size(), cols: table.getHeadings() as List, first: table.getRowAsString(0)]
+    def title = showTableWindow(table, r.name as String, replace)
+    summary["table_" + r.name] = [rows: table.size(), cols: table.getHeadings() as List, first: table.getRowAsString(0), title: title]
 }
 
 /** An input image of the run: the image itself, or the file it was given as (opened only when a result needs it). */

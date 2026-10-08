@@ -1,0 +1,32 @@
+{
+ "app": "parity",
+ "tool": "Table out, replacing",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "preload_tables": [
+  {
+   "title": "rows"
+  }
+ ],
+ "expect": {
+  "status": "COMPLETE",
+  "contains": {
+   "open_tables": [
+    "rows"
+   ]
+  },
+  "not_contains": {
+   "open_tables": [
+    "rows [1]"
+   ]
+  }
+ }
+}
