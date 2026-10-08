@@ -102,7 +102,7 @@ For more detail, see [Fiji workflow and results](docs/USING_FIJI.md).
 
 Install an application before opening the Fiji command. Examples with documented Fiji bridge workflows include [Guess the Condition](https://github.com/CellMigrationLab/GuessTheCondition) (blinded image classification), [VLab4Mic](https://github.com/CellMigrationLab/LabConstrictor-VLab4Mic) (image simulation) and [NucleiSky](https://github.com/CellMigrationLab/NucleiSky) (image registration). [Playground](https://github.com/CellMigrationLab/LabConstrictor-Playground) exercises the bridge with synthetic data.
 
-For other applications, including CellTracksColab, and direct installer links, see the [Toolkit application list](https://github.com/CellMigrationLab/LabConstrictor-Tools#applications). Only tools registered by the installed application appear in Fiji.
+For other applications, including CellTracksColab, and direct installer links, see the [Toolkit application list](https://github.com/CellMigrationLab/LabConstrictor-Tools). Only tools registered by the installed application appear in Fiji.
 
 ## For developers and testers
 
