@@ -31,7 +31,8 @@ public class LabConstrictorCommand implements Command {
 	static final String SCRIPT = "/org/cellmigrationlab/labconstrictor/LabConstrictor_Tools.groovy";
 	private static final Object HANDOFF = new Object();
 	private static final String OPTIONS_PROPERTY = "lc.macro.options";
-	private static final long HANDOFF_TIMEOUT_MS = 30000;
+	private static final long HANDOFF_TIMEOUT_MS = 30000;   // how long the script gets to read the macro options
+	private static final long HANDOFF_POLL_MS = 20;          // how often the property is looked at while waiting
 
 	@Parameter
 	private Context context;
@@ -60,7 +61,7 @@ public class LabConstrictorCommand implements Command {
 				else System.clearProperty(OPTIONS_PROPERTY);
 				running = scriptService.run(script, true);
 				final long deadline = System.currentTimeMillis() + HANDOFF_TIMEOUT_MS;
-				while (System.getProperty(OPTIONS_PROPERTY) != null && System.currentTimeMillis() < deadline) Thread.sleep(20);
+				while (System.getProperty(OPTIONS_PROPERTY) != null && System.currentTimeMillis() < deadline) Thread.sleep(HANDOFF_POLL_MS);
 				if (System.getProperty(OPTIONS_PROPERTY) != null) {
 					System.clearProperty(OPTIONS_PROPERTY);
 					log.warn("LabConstrictor: the script did not read the macro options within " + HANDOFF_TIMEOUT_MS + " ms");
@@ -87,6 +88,7 @@ public class LabConstrictorCommand implements Command {
 		return p != null && p.getImplementationVersion() != null ? p.getImplementationVersion() : "development";
 	}
 
+	/** The bundled script as text (UTF-8, newline-normalised). */
 	private static String readScript() throws IOException {
 		try (InputStream in = LabConstrictorCommand.class.getResourceAsStream(SCRIPT)) {
 			if (in == null) throw new IOException("bundled script not found: " + SCRIPT);

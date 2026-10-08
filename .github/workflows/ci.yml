@@ -1,4 +1,4 @@
-# First run still pending. Builds the jar; the GUI cases need a Fiji installation and a display (see README).
+# First run still pending. `build` builds the jar and `lint` lints the Groovy script (tests/lint_groovy.sh); the GUI cases need a Fiji installation and a display (see README).
 name: ci
 on: [push, pull_request]
 jobs:
@@ -11,3 +11,12 @@ jobs:
       - run: mvn -B package
       - uses: actions/upload-artifact@v4
         with: { name: labconstrictor-fiji-jar, path: target/*.jar }
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: tests/lint_groovy.sh
