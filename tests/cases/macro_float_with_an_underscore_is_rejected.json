@@ -1,0 +1,21 @@
+{
+ "app": "parity",
+ "tool": "Bounded numbers",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "script_macro": "app=parity tool=[Bounded numbers] above=6 below=-1_0 around=0 free=1",
+ "script_mode_only": true,
+ "expect": {
+  "match": {
+   "error": "'Below' must be a number, got '-1_0'"
+  }
+ }
+}

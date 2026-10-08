@@ -51,7 +51,7 @@ A macro line typed by hand, e.g.
 
     run("LabConstrictor Tools...", "app=NucleiSky tool=[Relocalize 2D] reference=ref.tif query=crop.tif reference_pixel_size_um=0.65 query_pixel_size_um=0.325 segmentation=threshold");
 
-runs the tool without any dialog. Images are given by window title (`name=title`) or by file
+runs the tool without any dialog. Numbers follow the grammar shared by every host: an optional sign, digits with an optional fraction (or only a fraction) and an optional exponent, nothing else (no spaces, `1.5f`, `1_0` or hex floats; `NaN` and `Infinity` are refused as not finite); an integer without bounds must fit 32 bits. Images are given by window title (`name=title`) or by file
 (`name_file=path`); tables, files and folders by path; an optional value that was not set is simply absent from the line (replay leaves it unset); unknown apps/tools/images are reported with the valid choices. Not yet: headless mode,
 keeping the worker alive between several calls in a loop, a menu entry per tool. Needs the jar (the menu command receives the options).
 

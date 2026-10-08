@@ -51,6 +51,9 @@ import java.nio.file.Files
 @Field final int RGB_SAMPLES = 3                 // red, green, blue
 @Field final long MAX_EXPORT_BYTES = 4L * 1024 * 1024 * 1024   // an open image larger than this (all planes, channels and samples) is not written for the worker (same limit as the Napari form)
 @Field final double BYTES_PER_GB = 1024.0d * 1024.0d * 1024.0d
+@Field final String INTEGER_TEXT = /[+-]?[0-9]+/                                                  // the number grammar shared by every host (labconstrictor_tools conformance)
+@Field final String FLOAT_TEXT = /[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?/
+@Field final List<String> NON_FINITE_WORDS = ["nan", "inf", "infinity"]                              // refused as "not a finite number", like the worker does after parsing them
 @Field final int MAX_CHANNELS = 1000             // upper bound of the "channel" field of a PickChannel image
 @Field final int MAX_REGION_OBJECTS = 65535      // labels of the region image (16 bit)
 @Field final int MAX_SHAPES = 50000              // outlines shown on the image
@@ -1408,21 +1411,26 @@ List<String> macroKeys(String options) {
     return keys
 }
 
-/** Strict number parsing for macro values: no truncation, no NaN/Infinity, within the declared bounds. */
+/** Strict number parsing for macro values: the shared grammar (optional sign, digits with an optional fraction or only a fraction, optional
+ *  exponent: nothing else, no spaces, no 1.5f, 1_0, hex floats), no NaN/Infinity, within the declared bounds (or the 32-bit range of an unbounded integer).
+ *  The refusals are the worker's sentences with `, got 'x'` after them. */
 def macroNumber(Map p, String text) {
     def number
+    def minimum = p.minimum, maximum = p.maximum
     if (p.type == "integer") {
-        if (!(text.trim() ==~ /[+-]?\d+/)) throw new IllegalArgumentException("'" + p.label + "' must be a whole number, got '" + text + "'")
-        number = new BigInteger(text.trim().replaceFirst(/^\+/, ""))
-        if (number > Integer.MAX_VALUE || number < Integer.MIN_VALUE) throw new IllegalArgumentException("'" + p.label + "' is out of range: " + text)
-        number = number.intValue()
+        if (!(text ==~ INTEGER_TEXT)) throw new IllegalArgumentException("'" + p.label + "' must be a whole number, got '" + text + "'")
+        number = new BigInteger(text.replaceFirst(/^\+/, ""))
+        minimum = minimum != null ? minimum : Integer.MIN_VALUE
+        maximum = maximum != null ? maximum : Integer.MAX_VALUE
     } else {
-        try { number = Double.parseDouble(text.trim()) } catch (NumberFormatException ignored) { throw new IllegalArgumentException("'" + p.label + "' must be a number, got '" + text + "'") }
+        if (text.replaceFirst(/^[+-]/, "").toLowerCase() in NON_FINITE_WORDS) throw new IllegalArgumentException("'" + p.label + "' must be a finite number, got '" + text + "'")
+        if (!(text ==~ FLOAT_TEXT)) throw new IllegalArgumentException("'" + p.label + "' must be a number, got '" + text + "'")
+        number = Double.parseDouble(text)
         if (!Double.isFinite(number)) throw new IllegalArgumentException("'" + p.label + "' must be a finite number, got '" + text + "'")
     }
-    if (p.minimum != null && number < p.minimum) throw new IllegalArgumentException("'" + p.label + "' must be >= " + p.minimum + ", got " + text)
-    if (p.maximum != null && number > p.maximum) throw new IllegalArgumentException("'" + p.label + "' must be <= " + p.maximum + ", got " + text)
-    return number
+    if (minimum != null && number < minimum) throw new IllegalArgumentException("'" + p.label + "' must be >= " + minimum + ", got " + text)
+    if (maximum != null && number > maximum) throw new IllegalArgumentException("'" + p.label + "' must be <= " + maximum + ", got " + text)
+    return p.type == "integer" ? number.intValue() : number
 }
 
 /** The option names a replayed call may use for `tool`. */
@@ -1475,7 +1483,7 @@ void takeMacroParameter(MacroModule module, Map p, String options) {
             module.values[p.name] = text == null ? (p.default ?: 0) as Double : macroNumber(p, text)
             break
         case "choice":
-            if (text != null && declaredChoice(p, text) == null) throw new IllegalArgumentException("'" + p.label + "' must be one of " + p.choices + ", got '" + text + "'")
+            if (text != null && declaredChoice(p, text) == null) throw new IllegalArgumentException("'" + p.name + "' must be one of " + p.choices + ", got '" + text + "'")
             module.values[p.name] = text == null ? (p.default != null ? p.default : p.choices[0]) : declaredChoice(p, text)
             break
         default:
