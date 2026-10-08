@@ -87,6 +87,7 @@ public class LabConstrictorCommand implements Command {
 		return p != null && p.getImplementationVersion() != null ? p.getImplementationVersion() : "development";
 	}
 
+	/** The bundled script as text (UTF-8, newline-normalised). */
 	private static String readScript() throws IOException {
 		try (InputStream in = LabConstrictorCommand.class.getResourceAsStream(SCRIPT)) {
 			if (in == null) throw new IOException("bundled script not found: " + SCRIPT);

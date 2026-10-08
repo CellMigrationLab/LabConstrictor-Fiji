@@ -32,6 +32,7 @@ import java.nio.file.Files
 @Field final int MAX_KEPT_LINES = 500            // worker output and progress events kept per run (the log has the rest)
 @Field final int EXIT_WAIT_MS = 15000            // heavy interpreters (torch, numba) need a few seconds to exit after stdin closes
 
+// ---- calibration sync: a dialog module that keeps pixel-size fields in step with the chosen image or file
 /** Module whose callbacks keep a calibration field in sync with the image chosen for it (schema: pixel_size_of). */
 class LCModule extends DefaultMutableModule {
     Map<String, List<String>> links = [:]     // image parameter -> [pixel-size parameters]
@@ -59,7 +60,7 @@ class LCModule extends DefaultMutableModule {
             unit = unit.toLowerCase().replace("\u00b5", "u").replace("\u03bc", "u").replace("\ufffd", "u").trim()
             def factor = MICRONS_PER_UNIT[unit] ?: (unit == "cm" ? 1e4d : unit == "inch" ? 25400.0d : null)
             return factor == null ? null : info[0].pixelWidth * factor
-        } catch (Exception problem) {      // (a) not a TIFF / unreadable header (TiffDecoder throws IOException or runtime errors on garbage)
+        } catch (Exception problem) {      // not a TIFF / unreadable header (TiffDecoder throws IOException or runtime errors on garbage)
             // not "no calibration" but "could not read it": tell the user instead of silently leaving the field alone
             logger("WARN", "could not read the pixel size from " + file.path + ": " + problem, problem)
             IJ.log("LabConstrictor: could not read the pixel size from " + file.name + " (" + problem + "); enter it by hand")
@@ -85,12 +86,14 @@ class LCModule extends DefaultMutableModule {
     void syncFile7() { syncFromFile(7) }
     /** The image a chooser names: a window title (dialog) or the image itself (macro replay). */
     static ImagePlus imageOf(def value) { return value instanceof ImagePlus ? value : (value ? WindowManager.getImage(value as String) : null) }
+    /** Callback body: copy the pixel size of the file chosen next to image parameter number `slot` into its linked fields. */
     private void syncFromFile(int slot) {
         def imageName = links.keySet().toList()[slot]
         def file = getInput(imageName + "_file") as File
         def microns = file ? micronsFromFile(file) : null
         if (microns != null) links[imageName].each { setInput(it, microns) }
     }
+    /** Callback body: copy the pixel size of the image chosen for image parameter number `slot` into its linked fields. */
     private void sync(int slot) {
         def imageName = links.keySet().toList()[slot]
         def imp = imageOf(getInput(imageName))
@@ -103,22 +106,23 @@ class LCModule extends DefaultMutableModule {
 hooks = [
     interactive  : true,          // false: never block on modal error dialogs
     overrides    : [:],           // parameter name -> value used as dialog default
-    preferred    : { String kind -> null },
-    setup        : { },
-    beforeDialog : { String title -> },
-    cancelAfterMs: { null },
-    finish       : { Map summary -> },
+    preferred    : { String kind -> null },   // "app" / "tool" -> the entry a chooser starts on (null: the first)
+    setup        : { },                       // called once when a run starts
+    beforeDialog : { String title -> },       // called just before each dialog is shown
+    cancelAfterMs: { null },                  // ms after the start at which Cancel is sent on its own (null: never)
+    finish       : { Map summary -> },        // called with the run's summary on every way out; its value is the script's result
 ]
 
 def harnessPath = System.getenv("LC_FIJI_HARNESS")
 
 if (harnessPath) hooks += new GroovyShell(this.class.classLoader).evaluate(new File(harnessPath)) as Map
 
+/** The LabConstrictor home folder: $LC_HOME, else ~/.labconstrictor (registry, state, runs and the log live under it). */
 String lcHome() { System.getenv("LC_HOME") ?: (System.getProperty("user.home") + "/.labconstrictor") }
 
 LCModule.logger = { String level, String message, Throwable problem -> lcLog(level, message, problem) }
 
-/** Append one line to the log shared with the Python tools (<LC_HOME>/logs/labconstrictor.log). Never throws. */
+/** Append one entry to the log shared with the Python tools (<LC_HOME>/logs/labconstrictor.log, rotated to .log.1 at 1 MB). Never throws. */
 void lcLog(String level, String message, Throwable problem = null) {
     try {
         def file = new File(lcHome(), "logs/labconstrictor.log")
@@ -159,12 +163,16 @@ boolean plainName(def text) {
     return text instanceof String && text && text != "." && text != ".." && !text.any { it in ["/", "\\", "\0"] as Set } && text == text.trim()
 }
 
+/** A SciJava item name / Python identifier: parameter names must pass this before they become dialog items. */
 boolean identifier(def text) { return text instanceof String && (text ==~ /[A-Za-z_][A-Za-z0-9_]*/) }
 
+/** A tool id from the schema (it becomes part of the `lc:<id>` task name and of file names). */
 boolean toolId(def text) { return text instanceof String && (text ==~ /[A-Za-z0-9_][A-Za-z0-9_.-]*/) }   // @tool(id=...) may contain - and .
 
+/** `text` made safe for a file name: runs of other characters become "_", no leading dots. */
 String slug(String text) { return text.replaceAll(/[^A-Za-z0-9_.-]+/, "_").replaceFirst(/^\.+/, "") ?: "x" }
 
+/** False on Windows, where the owner / mode checks of the trust rules cannot be made. */
 boolean isPosixHost() { return !System.getProperty("os.name").toLowerCase().contains("win") }
 
 /** unix permission bits of `path`, or null where the file system has no such notion (then the POSIX checks cannot apply). */
@@ -266,6 +274,7 @@ String schemaProblem(def schema) {
     return null
 }
 
+/** Read every registry directory and return [home, apps (name -> entry + schema), problems]: one broken or untrusted app never hides the others. */
 Map discoverApps() {
     def slurper = new JsonSlurper()
     def apps = [:], problems = [], skip = [] as Set
@@ -309,6 +318,7 @@ def reportNoApps(Map found, Map summary) {
 }
 
 // ---- the dialog
+/** An empty module description (title = label = name) that the dialog items are added to. */
 MutableModuleInfo newInfo(String title) {
     def info = new DefaultMutableModuleInfo()
     info.setModuleClass(LCModule)
@@ -317,6 +327,7 @@ MutableModuleInfo newInfo(String title) {
     return info
 }
 
+/** Add one dialog item to `info`; `o` carries label, description, required, default, min, max, step, choices, callback or message (a read-only note). */
 def addItem(MutableModuleInfo info, String name, Class type, Map o) {
     def item = new DefaultMutableModuleItem(info, name, type)
     item.setLabel(o.label ?: name)
@@ -505,6 +516,7 @@ void addFloatItem(MutableModuleInfo info, Map p, Map base, boolean overridden, d
     if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) floatItem.setWidgetStyle("slider")   // Widget("slider")
 }
 
+// ---- remembered values and ChoicesFrom (dropdowns filled by asking another tool of the app)
 /** Names of the parameters that some ChoicesFrom of the app depends on: the only values kept between runs. */
 Set<String> dependsNames(Map app) {
     def names = [] as Set
@@ -512,15 +524,17 @@ Set<String> dependsNames(Map app) {
     return names
 }
 
+/** Where the remembered ChoicesFrom values of an app are kept (<home>/state/<app>.json). */
 File stateFile(Map app) { return new File(new File(lcHome(), "state"), slug(app.name as String) + ".json") }
 
+/** The remembered values of an app, or an empty map when there are none or the file cannot be read (logged). */
 Map readState(Map app) {
     try {
         def file = stateFile(app)
         def data = file.isFile() ? new JsonSlurper().parseText(file.text) : [:]
         return data instanceof Map ? data : [:]
     } catch (Exception problem) {
-        // (d) intended fallback: no remembered values (ChoicesFrom then shows a text field); broad because the file is whatever was left on disk
+        // intended fallback: no remembered values (ChoicesFrom then shows a text field); broad because the file is whatever was left on disk
         lcLog("WARNING", "could not read the remembered values (starting without them): " + problem, problem)
         return [:]
     }
@@ -545,7 +559,7 @@ Map choiceRequest(Map tool, Map p, Map state) {
     for (name in p.choices_from.depends) {
         def value = hooks.overrides.containsKey(name) ? hooks.overrides[name] : state[name]
         def type = tool.inputs.find { it.name == name }?.type
-        if (!(value instanceof String) || !value || (type == "folder" && !new File(value).isDirectory())) {   // (d) intended fallback: not known yet, so a text field
+        if (!(value instanceof String) || !value || (type == "folder" && !new File(value).isDirectory())) {   // intended fallback: not known yet, so a text field
             lcLog("INFO", "choices of '" + p.name + "' not asked yet: '" + name + "' has no usable value (text field)")
             return null
         }
@@ -626,7 +640,7 @@ Map requestFromDialog(Map found, Map summary) {
     return [app: app, tool: tool, module: module]
 }
 
-// ---- the request
+// ---- the request: harvested values -> files and values for the worker
 /** One channel of a (hyper)stack as a plain image, at the current Z and T: what a tool declared with PickChannel receives. */
 ImagePlus channelOf(ImagePlus imp, int channel, String label) {
     if (channel < 1 || channel > imp.getNChannels())
@@ -814,6 +828,7 @@ void waitForExit(Service service, int timeoutMs) {
     if (service.isAlive()) service.kill()
 }
 
+// ---- what became of a run: failure text, run record
 /** One line saying the likely cause of a worker that died (same wording as labconstrictor_tools.log.hint_for_exit). */
 String crashHint(Map outcome) {
     if (outcome.cancelRequested) return "The tool did not stop when Cancel was pressed, so its worker was stopped."
@@ -871,6 +886,7 @@ void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
 // ---- showing results (switch on result type only)
 @groovy.transform.Field def lastShownImage = null          // the image window this run showed last (points without an apply_to go on it)
 
+/** Show every result by its type; one that cannot be shown is reported and does not hide the others. Returns the summary entries for the harness. */
 Map showResults(Map app, List results, Map images, Map tool = null) {
     def summary = [:]
     def replaced = (tool?.outputs ?: []).findAll { it.replace }.collect { it.name } as Set
@@ -899,6 +915,7 @@ Map showResults(Map app, List results, Map images, Map tool = null) {
     return summary
 }
 
+/** An image / labels result: opened as a new window `<app>:<name>` (numbered when the title is taken; replace=true closes the previous one first). */
 void showImage(Map app, Map r, Map summary, boolean replace = false) {
     def imp = IJ.openImage(r.path)
     if (imp == null) { IJ.error("LabConstrictor", "Fiji cannot open result image " + r.name); return }
@@ -1022,6 +1039,7 @@ void showShapes(Map app, Map r, Map images, Map summary, boolean replace) {
     summary["shapes_" + r.name] = [count: total, shown: rois.size(), holes: holes, image: target.getTitle(), overlay_size: overlay.size(), manager_count: manager.getCount()]
 }
 
+/** A table result: opened as a results window named after the output. */
 void showTable(Map r, Map summary) {
     def table = ResultsTable.open(r.path)
     table.show(r.name)
@@ -1029,7 +1047,7 @@ void showTable(Map r, Map summary) {
 }
 
 /** An input image of the run: the image itself, or the file it was given as (opened only when a result needs it). */
-ImagePlus asImage(def image) {                          // inputs given as files are opened only when a result needs them
+ImagePlus asImage(def image) {
     if (image instanceof ImagePlus) return image
     def imp = IJ.openImage(image as String)
     if (imp == null) throw new IllegalStateException("Fiji cannot open " + image)
@@ -1060,6 +1078,7 @@ void showAffine(Map r, Map images, List results, Map summary, boolean replace = 
     summary.overlay_title = overlay.getTitle()
 }
 
+/** `source` mapped through the 2x3 matrix [[a, b, ty], [c, d, tx]] (source px -> target px) onto a width x height plane; refuses non-finite or singular matrices. */
 FloatProcessor resample(ImagePlus source, int width, int height, List matrix) {
     def (a, b, ty) = matrix[0]
     def (c, d, tx) = matrix[1]
@@ -1081,6 +1100,7 @@ FloatProcessor resample(ImagePlus source, int width, int height, List matrix) {
     return output
 }
 
+/** Sum |a - b| over the pixels where either is positive, relative to the sum of |b|: how far two warps of the same image are apart. */
 double relativeDifference(FloatProcessor a, FloatProcessor b) {
     double sumDiff = 0, sumRef = 0
     for (int i = 0; i < a.getWidth() * a.getHeight(); i++) {
@@ -1270,6 +1290,7 @@ Map requestFromMacro(Map found, String macro, Map summary) {
     return [app: app, tool: tool, module: module]
 }
 
+/** A call that cannot start (bad macro options): say why in the log, the Log window and (interactively) a dialog, and finish with the error. */
 def failEarly(Map summary, String message) {
     lcLog("ERROR", "macro call rejected: " + message)
     if (hooks.interactive) IJ.error("LabConstrictor", message)
@@ -1280,6 +1301,7 @@ def failEarly(Map summary, String message) {
 // ---- copy as command (same text as labconstrictor_tools.command)
 @Field final Map<String, String> FILE_PLACEHOLDERS = [image: "image.tif", labels: "labels.tif", table: "table.csv", file: "file", folder: "folder"]
 
+/** `text` quoted for a POSIX shell, or for Windows cmd when `windows` (same rules as labconstrictor_tools.command._quote). */
 String shellQuote(String text, boolean windows) {
     if (windows) return (text && text ==~ /[A-Za-z0-9_.:\/\\=+,-]+/) ? text : '"' + text.replace('"', '\\"') + '"'
     return (text && text ==~ /[A-Za-z0-9_@%+=:,.\/-]+/) ? text : "'" + text.replace("'", "'\"'\"'") + "'"
@@ -1301,6 +1323,7 @@ Map commandValues(Map tool, Map inputs, Map images) {
     return [values: values, missing: missing]
 }
 
+/** The text that repeats a run outside Fiji: kind "terminal" (one command line) or "python" (a client.run_once snippet), with a note line when a file had to be a placeholder. */
 String commandText(String kind, Map app, Map tool, Map inputs, Map images) {
     def built = commandValues(tool, inputs, images)
     def note = built.missing ? "# replace the file for: " + built.missing.join(", ") + "\n" : ""
@@ -1385,6 +1408,7 @@ def runRequest(Map app, Map tool, def module, Map summary) {
     hooks.finish(summary)
 }
 
+/** One run of the plugin: find the apps, take the request from the macro options or the dialogs, then run it. */
 def labConstrictorRun() {
     hooks.setup()
     def started = System.nanoTime()
