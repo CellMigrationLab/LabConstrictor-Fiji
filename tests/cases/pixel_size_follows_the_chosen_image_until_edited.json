@@ -1,0 +1,39 @@
+{
+ "app": "parity",
+ "tool": "Calibrated",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "a.tif",
+   "pixel_size": 0.5
+  },
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "b.tif",
+   "pixel_size": 0.25
+  }
+ ],
+ "select": [
+  "b.tif"
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "approx": {
+   "request.scale": [
+    0.25,
+    1e-06
+   ]
+  }
+ }
+}

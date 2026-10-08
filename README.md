@@ -17,7 +17,7 @@ environment through [Appose](https://github.com/apposed/appose), so Fiji never i
 * **Choices that are numbers** (`Literal[1, 2, 3]`): the dropdown shows the numbers as text and the tool receives the declared number (a macro `count=2` as well; `count=7` is refused with the list of options). Before, the text `"1"` went out and the worker refused it.
 * **Images from an open window *or* a file**: each image parameter has the open-image chooser and an "(or file)" field (a file
   wins). With no image open, the file field is the only input. TIFF always; other formats if the app has `imageio`.
-* Pixel size follows the chosen image (units converted to micrometres), or the TIFF header for files.
+* Pixel size follows the chosen image (units converted to micrometres), or the TIFF header for files (the ImageJ unit text, else the TIFF resolution unit: inch or centimetre), until you type a value in the field: a value you typed is never overwritten when you pick another image. Pixels that are not square are warned about in the Log (`pixel size differs: Y .. µm, X .. µm - the tool takes one value and gets X`): the tool receives X.
 * Typed results: images/labels open as windows (`<app>:<result name>`), alignments as an overlay window, values in the Log window, tables as a Results window named after the output, files by path in the Log.
 * **"No match" is a message, not an error**: a tool that fails with the code `no_match` / `no_result` opens a plain message window instead of the red error dialog.
 * Progress bar, Esc to cancel (tools that ignore cancel are killed after 3 s), no worker left behind.

@@ -1,0 +1,26 @@
+{
+ "app": "parity",
+ "tool": "Calibrated",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "overrides": {
+  "image_file": "${FIXTURES}/cm_resolution.tif"
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "approx": {
+   "request.scale": [
+    0.25,
+    1e-06
+   ]
+  }
+ }
+}

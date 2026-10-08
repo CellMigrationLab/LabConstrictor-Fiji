@@ -80,16 +80,33 @@ class LCModule extends DefaultMutableModule {
     private static final double MICRONS_PER_INCH = 25400.0d    // 1 inch = 25.4 mm
     private static final Map<String, Double> MICRONS_PER_UNIT = [um: 1.0d, micron: 1.0d, microns: 1.0d, micrometer: 1.0d, micrometre: 1.0d,
                                                                   nm: 1e-3d, nanometer: 1e-3d, mm: 1e3d, millimeter: 1e3d, cm: 1e4d, m: 1e6d]
-    /** Pixel size of an image in micrometres, or null when uncalibrated or in a unit we cannot convert (pixel, inch, ...). */
-    static Double micronsPerPixel(ImagePlus imp) {
+    private static final double SQUARE_PIXEL_TOLERANCE = 1e-3d    // Y and X pixel sizes closer than this (relative) count as square: no warning
+    private static final int SIGNIFICANT_DIGITS = 6               // digits of a pixel size in the warning
+    private static final double TYPED_TOLERANCE = 1e-6d           // a field that differs from the value this module put there (relative) was typed by the person
+    Map<String, Double> synced = [:]          // pixel-size parameter -> the value this module last put there itself
+    /** Pixel size of an image as [y, x] micrometres, or null when uncalibrated or in a unit we cannot convert (pixel, inch, ...). */
+    static List<Double> micronsYX(ImagePlus imp) {
         def calibration = imp?.getCalibration()
         if (calibration == null || !calibration.scaled()) return null
         def unit = (calibration.getUnit() ?: "").toLowerCase().replace("\u00b5", "u").replace("\u03bc", "u").replace("\ufffd", "u")
         def factor = MICRONS_PER_UNIT[unit]
-        return factor == null ? null : calibration.pixelWidth * factor
+        return factor == null ? null : [calibration.pixelHeight * factor, calibration.pixelWidth * factor]
     }
-    /** Pixel size (um) stored in a TIFF file's header (ImageJ description or TIFF resolution tags), without loading the pixels. */
-    static Double micronsFromFile(File file) {
+    /** Pixel size of an image in micrometres along X (what a tool with one pixel-size parameter gets), or null. */
+    static Double micronsPerPixel(ImagePlus imp) { return micronsYX(imp)?.getAt(1) }
+    /** The sentence for a pixel that is not square (one value cannot describe it; the tool gets X), or null (same words as the Napari form). */
+    static String anisotropyNote(List<Double> yx) {
+        if (yx == null || Math.abs(yx[0] - yx[1]) <= SQUARE_PIXEL_TOLERANCE * Math.max(Math.abs(yx[0]), Math.abs(yx[1]))) return null
+        return "pixel size differs: Y " + significant(yx[0]) + " \u00b5m, X " + significant(yx[1]) + " \u00b5m - the tool takes one value and gets X"
+    }
+    /** `value` with six significant digits and no trailing zeros (Python's %.6g for the sizes a pixel can have): 0.5, 0.325, 0.123457. */
+    static String significant(double value) {
+        return new BigDecimal(value).round(new java.math.MathContext(SIGNIFICANT_DIGITS)).stripTrailingZeros().toPlainString()
+    }
+    /** Pixel size (um) along X stored in a TIFF file's header, or null. */
+    static Double micronsFromFile(File file) { return micronsYXFromFile(file)?.getAt(1) }
+    /** Pixel size [y, x] (um) stored in a TIFF file's header (ImageJ description or TIFF resolution tags: inch and centimetre), without loading the pixels. */
+    static List<Double> micronsYXFromFile(File file) {
         if (!file.isFile()) return null            // a path that is still being typed: nothing to read, nothing to complain about
         try {
             def info = new ij.io.TiffDecoder(file.parent + File.separator, file.name).getTiffInfo()
@@ -97,7 +114,9 @@ class LCModule extends DefaultMutableModule {
             def unit = (info[0].description =~ /(?m)^unit=(.*)$/).with { it.find() ? it.group(1) : (info[0].unit ?: "") }
             unit = unit.toLowerCase().replace("\u00b5", "u").replace("\u03bc", "u").replace("\ufffd", "u").trim()
             def factor = MICRONS_PER_UNIT[unit] ?: (unit == "inch" ? MICRONS_PER_INCH : null)
-            return factor == null ? null : info[0].pixelWidth * factor
+            if (factor == null) return null
+            def height = info[0].pixelHeight > 0 && info[0].pixelHeight != 1.0d ? info[0].pixelHeight : info[0].pixelWidth   // no YResolution tag: square pixels
+            return [height * factor, info[0].pixelWidth * factor]
         // groovylint-disable-next-line CatchException
         } catch (Exception problem) {      // not a TIFF / unreadable header (TiffDecoder throws IOException or runtime errors on garbage)
             // not "no calibration" but "could not read it": tell the user instead of silently leaving the field alone
@@ -129,15 +148,28 @@ class LCModule extends DefaultMutableModule {
     private void syncFromFile(int slot) {
         def imageName = links.keySet().toList()[slot]
         def file = getInput(imageName + "_file") as File
-        def microns = file ? micronsFromFile(file) : null
-        if (microns != null) links[imageName].each { setInput(it, microns) }
+        follow(imageName, file ? micronsYXFromFile(file) : null)
     }
     /** Callback body: copy the pixel size of the image chosen for image parameter number `slot` into its linked fields. */
     private void sync(int slot) {
         def imageName = links.keySet().toList()[slot]
-        def imp = imageOf(getInput(imageName))
-        def microns = micronsPerPixel(imp)
-        if (microns != null) links[imageName].each { setInput(it, microns) }
+        follow(imageName, micronsYX(imageOf(getInput(imageName))))
+    }
+    /** Put the pixel size [y, x] found for `imageName` into its linked fields (X), warning when the pixels are not square.
+     *  A field whose value is not the one this module put there was typed by the person: it keeps what was typed. */
+    private void follow(String imageName, List<Double> yx) {
+        if (yx == null) return
+        def note = anisotropyNote(yx)
+        if (note) {
+            logger("WARNING", note, null)
+            IJ.log("LabConstrictor: " + note)
+        }
+        links[imageName].each { name ->
+            def current = getInput(name) as Double, last = synced[name]
+            if (current != null && last != null && Math.abs(current - last) > TYPED_TOLERANCE * Math.max(1.0d, Math.abs(last))) return
+            setInput(name, yx[1])
+            synced[name] = yx[1]
+        }
     }
 }
 
@@ -393,6 +425,7 @@ def harvest(MutableModuleInfo info, String title, Map links = [:]) {
     hooks.beforeDialog(title)
     def module = new LCModule(info)
     module.links = links
+    links.values().flatten().each { name -> module.synced[name as String] = info.getInput(name as String)?.getDefaultValue() as Double }
     return moduleService.run(module, true).get()
 }
 
@@ -562,9 +595,12 @@ void addFloatItem(MutableModuleInfo info, Map p, Map base, boolean overridden, d
     def openImages = context.openImages
     def value = overridden ? override : p.default
     def source = p.pixel_size_of && openImages ? WindowManager.getImage(context.defaultTitle[p.pixel_size_of] ?: openImages[0]) : null
-    def microns = LCModule.micronsPerPixel(source)
+    def found = LCModule.micronsYX(source)
     def fileSource = p.pixel_size_of ? hooks.overrides[p.pixel_size_of + "_file"] : null
-    if (microns == null && fileSource) microns = LCModule.micronsFromFile(new File(fileSource as String))
+    if (found == null && fileSource) found = LCModule.micronsYXFromFile(new File(fileSource as String))
+    def microns = found?.getAt(1)
+    def squareNote = LCModule.anisotropyNote(found)
+    if (squareNote) { lcLog("WARNING", squareNote); IJ.log("LabConstrictor: " + squareNote) }
     if (microns != null) value = microns                                                      // calibration prefill (unit-aware)
     if (p.pixel_size_of && value == null)
         IJ.log("LabConstrictor: no pixel size found for '" + p.label + "' (the image has no usable calibration): enter it by hand")
