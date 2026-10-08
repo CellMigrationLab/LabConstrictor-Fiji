@@ -901,6 +901,45 @@ void showPoints(Map app, Map r, Map images, Map summary, boolean replace) {
 @groovy.transform.Field final int MAX_SHAPES = 50000       // outlines shown on the image
 @groovy.transform.Field final int MAX_MANAGER_SHAPES = 1000  // outlines also listed in the ROI Manager (it gets very slow with more)
 
+/** One polygon (rings of [x, y], pixel centres at integers; the first ring is the outline, the others holes) as a ShapeRoi. */
+ij.gui.ShapeRoi polygonRoi(List part) {
+    def path = new java.awt.geom.Path2D.Double(java.awt.geom.Path2D.WIND_EVEN_ODD)
+    part.each { ring ->
+        ring.eachWithIndex { point, i ->
+            double x = (point[0] as double) + 0.5d, y = (point[1] as double) + 0.5d       // pixel centres
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        path.closePath()
+    }
+    return new ij.gui.ShapeRoi(path)
+}
+
+/** The ROIs of a GeoJSON feature collection (at most MAX_SHAPES, named `prefix label[.n]`), how many polygons it had and how many have holes. */
+Map outlinesOf(def collection, String prefix) {
+    def rois = [], holes = 0, total = 0
+    collection.features.each { feature ->
+        def geometry = feature.geometry
+        def parts = geometry.type == "Polygon" ? [geometry.coordinates] : geometry.coordinates
+        parts.each { part ->
+            total++
+            if (rois.size() >= MAX_SHAPES) return
+            if (part.size() > 1) holes++
+            def roi = polygonRoi(part)
+            def label = feature.properties?.label
+            roi.setName(prefix + " " + (label != null ? label : rois.size() + 1) + (parts.size() > 1 ? "." + (rois.size() + 1) : ""))
+            rois << roi
+        }
+    }
+    return [rois: rois, holes: holes, total: total]
+}
+
+/** Replace(): remove the earlier outlines of this output (named `prefix ...`) from the overlay and the ROI Manager. */
+void removeEarlierOutlines(def overlay, def manager, String prefix) {
+    for (int i = overlay.size() - 1; i >= 0; i--) if (overlay.get(i).getName()?.startsWith(prefix + " ")) overlay.remove(i)
+    def indexes = (0..<manager.getCount()).findAll { manager.getRoi(it).getName()?.startsWith(prefix + " ") } as int[]
+    if (indexes) manager.setSelectedIndexes(indexes).with { manager.runCommand("Delete") }
+}
+
 /** Outlines (GeoJSON Polygon / MultiPolygon, [x, y] with pixel centres at integers) in the frame of the image named by apply_to
  *  (else the first image of this run, else the current image): an overlay on that image with holes kept (composite ROIs), and the
  *  first MAX_MANAGER_SHAPES also in the ROI Manager. Replace() swaps this output's previous outlines. */
@@ -909,28 +948,8 @@ void showShapes(Map app, Map r, Map images, Map summary, boolean replace) {
     def target = images[r.apply_to]
     if (!(target instanceof ImagePlus)) target = lastShownImage ?: WindowManager.getCurrentImage()
     def prefix = app.name + ":" + r.name
-    def rois = [], holes = 0, total = 0
-    collection.features.each { feature ->
-        def geometry = feature.geometry
-        def parts = geometry.type == "Polygon" ? [geometry.coordinates] : geometry.coordinates
-        parts.each { part ->
-            total++
-            if (rois.size() >= MAX_SHAPES) return
-            def path = new java.awt.geom.Path2D.Double(java.awt.geom.Path2D.WIND_EVEN_ODD)
-            part.each { ring ->
-                ring.eachWithIndex { point, i ->
-                    double x = (point[0] as double) + 0.5d, y = (point[1] as double) + 0.5d       // pixel centres
-                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-                }
-                path.closePath()
-            }
-            if (part.size() > 1) holes++
-            def roi = new ij.gui.ShapeRoi(path)
-            def label = feature.properties?.label
-            roi.setName(prefix + " " + (label != null ? label : rois.size() + 1) + (parts.size() > 1 ? "." + (rois.size() + 1) : ""))
-            rois << roi
-        }
-    }
+    def outlines = outlinesOf(collection, prefix)
+    def rois = outlines.rois, holes = outlines.holes, total = outlines.total
     if (!(target instanceof ImagePlus)) {
         IJ.log("LabConstrictor: '" + r.name + "' has " + total + " outline(s) but no image is open to place them on (open an image and run again)")
         summary["shapes_" + r.name] = [count: total, shown: 0, image: null]
@@ -938,11 +957,7 @@ void showShapes(Map app, Map r, Map images, Map summary, boolean replace) {
     }
     def overlay = target.getOverlay() ?: new ij.gui.Overlay()
     def manager = ij.plugin.frame.RoiManager.getRoiManager()
-    if (replace) {                                           // Replace(): the previous outlines of this output make way
-        for (int i = overlay.size() - 1; i >= 0; i--) if (overlay.get(i).getName()?.startsWith(prefix + " ")) overlay.remove(i)
-        def indexes = (0..<manager.getCount()).findAll { manager.getRoi(it).getName()?.startsWith(prefix + " ") } as int[]
-        if (indexes) manager.setSelectedIndexes(indexes).with { manager.runCommand("Delete") }
-    }
+    if (replace) removeEarlierOutlines(overlay, manager, prefix)
     rois.each { overlay.add(it) }
     target.setOverlay(overlay)
     overlay.setStrokeColor(java.awt.Color.YELLOW)
@@ -1097,58 +1112,72 @@ def macroNumber(Map p, String text) {
     return number
 }
 
+/** The option names a replayed call may use for `tool`. */
+List<String> allowedMacroKeys(Map tool) {
+    return ["app", "tool"] + tool.inputs.collectMany { p -> [p.name] + (p.type in ["image", "labels"] ? [p.name + "_file"] : []) + (p.pick_channel ? [p.name + "_channel"] : []) + (p.region_of ? ["selection_" + p.name] : []) }
+}
+
+/** An image option of a replayed call: a file, the selection, or the window called `text`. */
+void takeMacroImage(MacroModule module, Map p, String text, String fileText) {
+    if (p.region_of && module.values["selection_" + p.name]) return          // the selection is the value (taken when the run starts)
+    if (fileText) { module.values[p.name + "_file"] = new File(fileText); module.values["use_" + p.name] = true; return }
+    if (text == null && !p.required) return
+    if (text == null) throw new IllegalArgumentException("'" + p.label + "' is required: give " + p.name + "=<window title> or " + p.name + "_file=<path> (a macro never guesses the current image)")
+    def imp = WindowManager.getImage(text)
+    if (imp == null) throw new IllegalArgumentException("'" + p.label + "': no open image" + (text ? " called '" + text + "'" : "") + " (use " + p.name + "=<window title> or " + p.name + "_file=<path>)")
+    module.values[p.name] = imp; module.values["use_" + p.name] = true
+}
+
+/** A boolean option of a replayed call: absent is the default, a bare flag counts as true (macro convention). */
+def macroBoolean(Map p, String text) {
+    if (text == null) return p.default ?: false
+    if (text.toLowerCase() in ["", "true", "1", "yes"]) return true
+    if (text.toLowerCase() in ["false", "0", "no"]) return false
+    throw new IllegalArgumentException("'" + p.label + "' must be true or false, got '" + text + "'")
+}
+
+/** The options of a replayed call that belong to parameter `p`, as the values the dialog would have given. */
+void takeMacroParameter(MacroModule module, Map p, String options) {
+    def text = Macro.getValue(options, p.name, null)
+    def fileText = Macro.getValue(options, p.name + "_file", null)
+    if (p.pick_channel) {                                                  // PickChannel: the channel to hand the tool (1 = first)
+        def channelText = Macro.getValue(options, p.name + "_channel", null)
+        module.values[p.name + "_channel"] = channelText == null ? 1 : macroNumber([type: "integer", label: p.label + " channel", minimum: 1], channelText)
+    }
+    if (p.nullable && p.type in ["string", "integer", "float", "choice", "boolean"]) {   // optional, no default: not in the macro = unset
+        module.values["set_" + p.name] = text != null
+        if (text == null) return
+    }
+    if (p.region_of) module.values["selection_" + p.name] = (Macro.getValue(options, "selection_" + p.name, "false") ?: "true").toLowerCase() in ["true", "1", "yes"]   // a bare flag counts as true
+    switch (p.type) {
+        case ["image", "labels"]: takeMacroImage(module, p, text, fileText); break
+        case ["table", "file", "folder"]:
+            if (text) module.values[p.name] = new File(text)
+            break
+        case "boolean": module.values[p.name] = macroBoolean(p, text); break
+        case "integer":
+            module.values[p.name] = text == null ? (p.default ?: 0) as Integer : macroNumber(p, text)
+            break
+        case "float":
+            module.values[p.name] = text == null ? (p.default ?: 0) as Double : macroNumber(p, text)
+            break
+        case "choice":
+            if (text != null && !(text in p.choices)) throw new IllegalArgumentException("'" + p.label + "' must be one of " + p.choices + ", got '" + text + "'")
+            module.values[p.name] = text == null ? (p.default ?: p.choices[0]) : text
+            break
+        default:
+            module.values[p.name] = text == null ? (p.default ?: "") : text
+    }
+}
+
 /** Build the module values for a replayed call; unknown options, tools or parameters, missing images and invalid values raise IllegalArgumentException (shown, logged). */
 MacroModule moduleFromMacro(Map tool, String options) {
-    def allowed = ["app", "tool"] + tool.inputs.collectMany { p -> [p.name] + (p.type in ["image", "labels"] ? [p.name + "_file"] : []) + (p.pick_channel ? [p.name + "_channel"] : []) + (p.region_of ? ["selection_" + p.name] : []) }
+    def allowed = allowedMacroKeys(tool)
     def unknown = macroKeys(options).findAll { !(it in allowed) }
     if (unknown) throw new IllegalArgumentException("unknown option" + (unknown.size() > 1 ? "s " : " ") + unknown.collect { "'" + it + "'" }.join(", ") +
                                                     " (the tool accepts: " + allowed.findAll { it != "app" && it != "tool" }.join(", ") + ")")
     def module = new MacroModule()
-    tool.inputs.each { p ->
-        def text = Macro.getValue(options, p.name, null)
-        def fileText = Macro.getValue(options, p.name + "_file", null)
-        if (p.pick_channel) {                                                  // PickChannel: the channel to hand the tool (1 = first)
-            def channelText = Macro.getValue(options, p.name + "_channel", null)
-            module.values[p.name + "_channel"] = channelText == null ? 1 : macroNumber([type: "integer", label: p.label + " channel", minimum: 1], channelText)
-        }
-        if (p.nullable && p.type in ["string", "integer", "float", "choice", "boolean"]) {   // optional, no default: not in the macro = unset
-            module.values["set_" + p.name] = text != null
-            if (text == null) return
-        }
-        if (p.region_of) module.values["selection_" + p.name] = (Macro.getValue(options, "selection_" + p.name, "false") ?: "true").toLowerCase() in ["true", "1", "yes"]   // a bare flag counts as true
-        switch (p.type) {
-            case ["image", "labels"]:
-                if (p.region_of && module.values["selection_" + p.name]) break          // the selection is the value (taken when the run starts)
-                if (fileText) { module.values[p.name + "_file"] = new File(fileText); module.values["use_" + p.name] = true; break }
-                if (text == null && !p.required) break
-                if (text == null) throw new IllegalArgumentException("'" + p.label + "' is required: give " + p.name + "=<window title> or " + p.name + "_file=<path> (a macro never guesses the current image)")
-                def imp = WindowManager.getImage(text)
-                if (imp == null) throw new IllegalArgumentException("'" + p.label + "': no open image" + (text ? " called '" + text + "'" : "") + " (use " + p.name + "=<window title> or " + p.name + "_file=<path>)")
-                module.values[p.name] = imp; module.values["use_" + p.name] = true
-                break
-            case ["table", "file", "folder"]:
-                if (text) module.values[p.name] = new File(text)
-                break
-            case "boolean":
-                if (text == null) module.values[p.name] = p.default ?: false
-                else if (text.toLowerCase() in ["", "true", "1", "yes"]) module.values[p.name] = true       // a bare flag counts as true (macro convention)
-                else if (text.toLowerCase() in ["false", "0", "no"]) module.values[p.name] = false
-                else throw new IllegalArgumentException("'" + p.label + "' must be true or false, got '" + text + "'")
-                break
-            case "integer":
-                module.values[p.name] = text == null ? (p.default ?: 0) as Integer : macroNumber(p, text)
-                break
-            case "float":
-                module.values[p.name] = text == null ? (p.default ?: 0) as Double : macroNumber(p, text)
-                break
-            case "choice":
-                if (text != null && !(text in p.choices)) throw new IllegalArgumentException("'" + p.label + "' must be one of " + p.choices + ", got '" + text + "'")
-                module.values[p.name] = text == null ? (p.default ?: p.choices[0]) : text
-                break
-            default:
-                module.values[p.name] = text == null ? (p.default ?: "") : text
-        }
-    }
+    tool.inputs.each { p -> takeMacroParameter(module, p, options) }
     return module
 }
 
