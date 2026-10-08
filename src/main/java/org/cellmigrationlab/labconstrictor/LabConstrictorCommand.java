@@ -68,7 +68,7 @@ public class LabConstrictorCommand implements Command {
 			}
 			running.get();
 		}
-		catch (final Throwable problem) {
+		catch (final Throwable problem) {   // the menu entry: broad on purpose, anything that stops the start must reach the log and a dialog, never vanish
 			log.error("LabConstrictor could not start", problem);
 			final StringWriter trace = new StringWriter();
 			problem.printStackTrace(new PrintWriter(trace));

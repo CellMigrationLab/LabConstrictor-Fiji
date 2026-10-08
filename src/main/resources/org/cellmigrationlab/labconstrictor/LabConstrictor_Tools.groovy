@@ -38,6 +38,7 @@ class LCModule extends DefaultMutableModule {
     LCModule(MutableModuleInfo info) { super(info) }
     void run() {}                              // all work happens after harvesting
 
+    static Closure logger = { String level, String message, Throwable problem -> }   // set below to lcLog (a class cannot call the script's methods)
     private static final Map<String, Double> MICRONS_PER_UNIT = [um: 1.0d, micron: 1.0d, microns: 1.0d, micrometer: 1.0d, micrometre: 1.0d,
                                                                   nm: 1e-3d, nanometer: 1e-3d, mm: 1e3d, millimeter: 1e3d, cm: 1e4d, m: 1e6d]
     /** Pixel size of an image in micrometres, or null when uncalibrated or in a unit we cannot convert (pixel, inch, ...). */
@@ -58,8 +59,9 @@ class LCModule extends DefaultMutableModule {
             unit = unit.toLowerCase().replace("\u00b5", "u").replace("\u03bc", "u").replace("\ufffd", "u").trim()
             def factor = MICRONS_PER_UNIT[unit] ?: (unit == "cm" ? 1e4d : unit == "inch" ? 25400.0d : null)
             return factor == null ? null : info[0].pixelWidth * factor
-        } catch (Throwable problem) {
+        } catch (Exception problem) {      // (a) not a TIFF / unreadable header (TiffDecoder throws IOException or runtime errors on garbage)
             // not "no calibration" but "could not read it": tell the user instead of silently leaving the field alone
+            logger("WARN", "could not read the pixel size from " + file.path + ": " + problem, problem)
             IJ.log("LabConstrictor: could not read the pixel size from " + file.name + " (" + problem + "); enter it by hand")
             return null
         }
@@ -113,6 +115,17 @@ if (harnessPath) hooks += new GroovyShell(this.class.classLoader).evaluate(new F
 // ---------------------------------------------------------------- discovery (same rules as labconstrictor_tools.registry)
 String lcHome() { System.getenv("LC_HOME") ?: (System.getProperty("user.home") + "/.labconstrictor") }
 
+LCModule.logger = { String level, String message, Throwable problem -> lcLog(level, message, problem) }
+
+/** Delete a temporary folder; a folder that cannot be removed is logged once (it stays on disk), never ignored. */
+void removeFolder(File folder, String what) {
+    try {
+        if (folder.exists() && !folder.deleteDir()) lcLog("WARN", "could not remove the " + what + " " + folder)
+    } catch (SecurityException problem) {
+        lcLog("WARN", "could not remove the " + what + " " + folder + ": " + problem, problem)
+    }
+}
+
 /** Append one line to the log shared with the Python tools (<LC_HOME>/logs/labconstrictor.log). Never throws. */
 void lcLog(String level, String message, Throwable problem = null) {
     try {
@@ -123,7 +136,10 @@ void lcLog(String level, String message, Throwable problem = null) {
         def text = stamp + " " + level.padRight(7) + " pid=" + ProcessHandle.current().pid() + " fiji: " + message.replace("\r", "") + "\n"
         if (problem) { def w = new StringWriter(); problem.printStackTrace(new PrintWriter(w)); text += w.toString() }
         file.append(text, "UTF-8")
-    } catch (Throwable ignored) { }
+    } catch (Exception failure) {
+        // the log itself is broken (disk full, read-only home): there is nowhere else to write, so say it once on stderr and carry on
+        System.err.println("LabConstrictor: could not write the log file: " + failure)
+    }
 }
 
 /** Directories searched, highest priority first: per-user, LC_APPS_PATH, system-wide. */
@@ -149,7 +165,10 @@ boolean isPosixHost() { return !System.getProperty("os.name").toLowerCase().cont
 /** unix permission bits of `path`, or null where the file system has no such notion (then the POSIX checks cannot apply). */
 Integer unixMode(java.nio.file.Path path) {
     try { return java.nio.file.Files.getAttribute(path, "unix:mode") as Integer }
-    catch (UnsupportedOperationException | IllegalArgumentException ignored) { return null }
+    catch (UnsupportedOperationException | IllegalArgumentException problem) {
+        lcLog("WARN", "no unix permission bits for " + path + " (" + problem + "): the permission checks do not apply to it")
+        return null
+    }
 }
 
 /** Writable by everybody (a directory with the sticky bit, like /tmp, only lets owners replace their own files). */
@@ -185,7 +204,10 @@ String untrustedReason(File entryFile, Map entry, boolean userDir) {
             return "the install prefix " + prefix + " is a filesystem root"
         if (!isPosixHost()) return null                                  // Windows: no POSIX ownership/mode to check (known, not an error)
         try { java.nio.file.Files.getPosixFilePermissions(entryFile.toPath()) }
-        catch (UnsupportedOperationException ignored) { return null }    // a file system without POSIX permissions (known)
+        catch (UnsupportedOperationException problem) {                  // a file system without POSIX permissions (known): the entry cannot be checked
+            lcLog("WARN", "the registry entry " + entryFile + " is not checked for permissions: its file system has no POSIX permissions (" + problem + ")")
+            return null
+        }
         def reason = fileReason(entryFile, userDir, "entry file")
         if (reason) return reason
         def schemaFile = new File(entry.schema_path).absoluteFile
@@ -260,7 +282,10 @@ Map discoverApps() {
                 def badSchema = schemaProblem(schema)
                 if (badSchema) throw new IllegalStateException(badSchema)
                 apps[name] = entry + [pythonpath: entry.pythonpath ?: [], runtime_path: entry.runtime_path ?: "", schema: schema]
-            } catch (Exception e) {
+            } catch (IllegalStateException e) {                    // an invalid schema: expected, reported below with the other problems
+                problems << (file.name + ": " + e.message)
+            } catch (Exception e) {                                // broad on purpose: one broken entry must not hide the other apps; reported below, the stack goes to the log
+                lcLog("WARNING", "app entry " + file.name + " could not be loaded: " + e, e)
                 problems << (file.name + ": " + e.message)
             }
         }
@@ -281,7 +306,7 @@ String writeRunRecord(Map app, Map tool, Map inputs, Map outcome, Map summary) {
             app: app.name, app_version: app.version, tool: tool.id, host: "fiji", status: outcome.status, error: outcome.error,
             seconds: outcome.seconds, inputs: inputs, worker_output_tail: outcome.workerOutput, log_file: new File(lcHome(), "logs/labconstrictor.log").path, progress_events: outcome.progress, interpreter: outcome.outputs?.diagnostics,
             results: (outcome.outputs?.results ?: []).collect { it.findAll { k, v -> k != "matrix_yx" } }]))
-        (runs.listFiles({ File f -> f.isDirectory() } as FileFilter) ?: [] as File[]).sort().reverse().drop(50).each { it.deleteDir() }
+        (runs.listFiles({ File f -> f.isDirectory() } as FileFilter) ?: [] as File[]).sort().reverse().drop(50).each { removeFolder(it, "old run record") }
         return folder.path
     } catch (Exception problem) {                       // a record must never break a run, but its absence must be visible
         lcLog("WARNING", "could not write the run record: " + problem, problem)
@@ -564,7 +589,8 @@ Map readState(Map app) {
         def data = file.isFile() ? new JsonSlurper().parseText(file.text) : [:]
         return data instanceof Map ? data : [:]
     } catch (Exception problem) {
-        lcLog("WARNING", "could not read the remembered values: " + problem)
+        // (d) intended fallback: no remembered values (ChoicesFrom then shows a text field); broad because the file is whatever was left on disk
+        lcLog("WARNING", "could not read the remembered values (starting without them): " + problem, problem)
         return [:]
     }
 }
@@ -579,7 +605,7 @@ void rememberDepends(Map app, Map tool, Map inputs) {
         def file = stateFile(app)
         file.parentFile.mkdirs()
         file.text = groovy.json.JsonOutput.toJson(state)
-    } catch (Exception problem) { lcLog("WARNING", "could not remember the values: " + problem) }
+    } catch (Exception problem) { lcLog("WARNING", "could not remember the values (the next dialog will not know them): " + problem, problem) }
 }
 
 /** ChoicesFrom parameters of `tool` -> their options, asked of the source tool with the values of the previous run; unanswered ones are left out (text field). */
@@ -592,12 +618,18 @@ Map choiceListsFor(Map app, Map tool) {
         def given = hooks.overrides.containsKey("_choices_" + p.name) ? hooks.overrides["_choices_" + p.name] : null
         try {
             if (given instanceof List) { lists[p.name] = given; return }
-            if (source == null || !(p.choices_from.depends instanceof List)) return
+            if (source == null || !(p.choices_from.depends instanceof List)) {
+                lcLog("WARNING", "choices of '" + p.name + "' cannot be asked: the source tool '" + p.choices_from.tool + "' is not in the app or 'depends' is not a list (text field)")
+                return
+            }
             def request = [:]
             for (name in p.choices_from.depends) {
                 def value = hooks.overrides.containsKey(name) ? hooks.overrides[name] : state[name]
                 def type = tool.inputs.find { it.name == name }?.type
-                if (!(value instanceof String) || !value || (type == "folder" && !new File(value).isDirectory())) return    // not known yet: text field
+                if (!(value instanceof String) || !value || (type == "folder" && !new File(value).isDirectory())) {   // (d) intended fallback: not known yet, so a text field
+                    lcLog("INFO", "choices of '" + p.name + "' not asked yet: '" + name + "' has no usable value (text field)")
+                    return
+                }
                 request[name] = value
             }
             def jobDir = Files.createTempDirectory("lcchoices_fiji_").toFile()
@@ -608,8 +640,11 @@ Map choiceListsFor(Map app, Map tool) {
                 def found = outcome.outputs.results.find { it.type == "values" && it.values?.get(p.choices_from.field ?: "choices") instanceof List }
                 def options = found?.values?.get(p.choices_from.field ?: "choices")?.collect { it.toString() }
                 if (options) lists[p.name] = options
-            } finally { jobDir.deleteDir() }
-        } catch (Exception problem) { lcLog("WARNING", "could not get the choices of '" + p.name + "': " + problem, problem) }
+            } finally { removeFolder(jobDir, "job folder of the choices request") }
+        } catch (Exception problem) {          // broad on purpose: one failing source tool must not break the dialog; the field stays a text field
+            lcLog("WARNING", "could not get the choices of '" + p.name + "': " + problem, problem)
+            IJ.log("LabConstrictor: could not get the choices of '" + p.label + "' (" + problem + "); type the value instead")
+        }
     }
     return lists
 }
@@ -653,7 +688,9 @@ Map runTool(Map app, Map tool, Map inputs) {
     } finally {                                              // also when interrupted or when anything above throws: no worker left behind
         IJ.showProgress(1.0)
         try { service.close(); waitForExit(service, EXIT_WAIT_MS) }
-        catch (Throwable problem) { lcLog("ERROR", "could not close the worker cleanly: " + problem, problem); service.kill() }
+        catch (Throwable problem) {                          // cleanup: broad on purpose, whatever close() throws the worker must still be killed
+            lcLog("ERROR", "could not close the worker cleanly: " + problem, problem); service.kill()
+        }
     }
     def complete = task.status == Service.TaskStatus.COMPLETE
     if (complete) lcLog("INFO", "task COMPLETE tool=" + tool.id + " timings=" + task.outputs?.timings)
@@ -713,7 +750,7 @@ Map showResults(Map app, List results, Map images, Map tool = null) {
                 case "affine": showAffine(r, images, results, summary, r.name in replaced); break
                 default: throw new IllegalStateException("the tool returned a result of the type '" + r.type + "', which this version of Fiji LabConstrictor cannot show")
             }
-        } catch (Exception problem) {
+        } catch (Exception problem) {          // broad on purpose: one result that cannot be shown must not hide the others
             def text = "could not show the result '" + r.name + "': " + problem.message
             lcLog("ERROR", text, problem)
             IJ.log("LabConstrictor: " + text)
@@ -754,6 +791,7 @@ void showPoints(Map app, Map r, Map images, Map summary, boolean replace) {
     if (!(target instanceof ImagePlus)) target = lastShownImage ?: WindowManager.getCurrentImage()
     if (!(target instanceof ImagePlus)) {                    // nothing to place them on: the table is still the result
         table.show(app.name + ":" + r.name)
+        lcLog("INFO", "points '" + r.name + "' shown as a table: no image is open to place " + table.size() + " point(s) on")
         IJ.log("LabConstrictor: '" + r.name + "' has " + table.size() + " point(s) but no image is open to place them on: shown as a table (open an image and run again to see them on it)")
         summary["points_" + r.name] = [count: table.size(), image: null, columns: table.getHeadings() as List]
         return
@@ -941,7 +979,10 @@ void recordRun(String appName, Map tool, def module) {
     try {
         if (!Recorder.record) return
         toMacroOptions(appName, tool, module).each { k, v -> Recorder.recordOption(k, v) }
-    } catch (Throwable ignored) { }          // recording must never break a run
+    } catch (Exception problem) {            // broad on purpose: recording must never break a run, but the failure is not hidden
+        lcLog("WARN", "could not record the run for the macro recorder: " + problem, problem)
+        IJ.log("LabConstrictor: this run could not be recorded for the macro recorder (" + problem + ")")
+    }
 }
 
 /** The keys of a macro options string (`key=value key=[value with spaces] flag`). */
@@ -1046,11 +1087,20 @@ def labConstrictorRun() {
         def last = new JsonSlurper().parseText(file.getText("UTF-8"))
         def kind = Macro.getValue(macro, "kind", "terminal")
         def text = kind == "python" ? last.python : last.terminal
+        boolean copied = true
         try {
             java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new java.awt.datatransfer.StringSelection(text), null)
-        } catch (Throwable problem) { lcLog("WARN", "clipboard not available: " + problem) }
-        IJ.log("LabConstrictor: copied the " + kind + " command of the last run (" + last.app + ": " + last.tool + "):\n" + text)
-        IJ.showStatus("LabConstrictor: copied the last run as a " + kind + " command")
+        } catch (java.awt.HeadlessException | IllegalStateException | SecurityException problem) {    // no clipboard here (headless, locked by another program)
+            copied = false
+            lcLog("WARN", "clipboard not available: " + problem, problem)
+            summary.clipboard_error = problem.toString()
+        }
+        if (copied) {
+            IJ.log("LabConstrictor: copied the " + kind + " command of the last run (" + last.app + ": " + last.tool + "):\n" + text)
+            IJ.showStatus("LabConstrictor: copied the last run as a " + kind + " command")
+        } else {
+            IJ.log("LabConstrictor: could not copy to the clipboard (" + summary.clipboard_error + "); the " + kind + " command of the last run (" + last.app + ": " + last.tool + ") is:\n" + text)
+        }
         return hooks.finish(summary + [copied_last: text, copied_kind: kind])
     }
     def appName, toolLabel, app, tool, module
@@ -1096,7 +1146,7 @@ def labConstrictorRun() {
         runAndShow(app, tool, inputs, images, summary)
         if (summary.status == "COMPLETE") rememberDepends(app, tool, inputs)
     } finally {
-        jobDir.deleteDir()
+        removeFolder(jobDir, "job folder of the run")
     }
     hooks.finish(summary)
 }
@@ -1155,7 +1205,11 @@ void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
         IJ.log("LabConstrictor: to repeat this run outside Fiji, copy from here:\n" + summary.command_line + "\n--- or in Python:\n" + summary.python_snippet)
         def stateDir = new File(lcHome(), "state"); stateDir.mkdirs()
         new File(stateDir, "last_command.json").setText(groovy.json.JsonOutput.toJson([app: app.name, tool: tool.id, terminal: summary.command_line, python: summary.python_snippet]), "UTF-8")
-    } catch (Throwable problem) { lcLog("WARN", "could not build the command text: " + problem, problem) }
+    } catch (Exception problem) {          // broad on purpose: the copyable command is a convenience and must never break a run; the failure is shown, not hidden
+        lcLog("WARN", "could not build the command text: " + problem, problem)
+        IJ.log("LabConstrictor: could not build the command to repeat this run (" + problem + ")")
+        summary.command_error = problem.toString()
+    }
     summary.run_record = writeRunRecord(app, tool, inputs, outcome, summary)
     if (outcome.complete) {
         summary.interpreter = outcome.outputs.diagnostics
@@ -1186,7 +1240,7 @@ def labConstrictorMain() {
     lcLog("INFO", "---- session start: " + IJ.getFullVersion() + " java=" + System.getProperty("java.version") + " os=" + System.getProperty("os.name") + " LC_HOME=" + lcHome())
     try {
         return labConstrictorRun()
-    } catch (Throwable problem) {
+    } catch (Throwable problem) {          // the entry point: broad on purpose (anything, even an Error, must end in the log and a dialog, never a silent script)
         lcLog("ERROR", "unexpected failure: " + problem, problem)
         if (hooks.interactive) IJ.error("LabConstrictor", "Unexpected error: " + problem + "\n\nThe full report is in the log file:\n" + new File(lcHome(), "logs/labconstrictor.log").path)
         return hooks.finish([error: problem.toString()])

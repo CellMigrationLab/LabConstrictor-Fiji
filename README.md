@@ -50,6 +50,20 @@ runs the tool without any dialog. Images are given by window title (`name=title`
 (`name_file=path`); tables, files and folders by path; an optional value that was not set is simply absent from the line (replay leaves it unset); unknown apps/tools/images are reported with the valid choices. Not yet: headless mode,
 keeping the worker alive between several calls in a loop, a menu entry per tool. Needs the jar (the menu command receives the options).
 
+## Fallbacks (intended)
+These are deliberate: the host does something simpler instead of failing, writes one line to the shared log
+(`<LC_HOME>/logs/labconstrictor.log`) when it happens, and never does it silently.
+
+| Where | What happens | What the person sees |
+|---|---|---|
+| ChoicesFrom parameter whose source answers nothing yet (a depended-on value is empty, or no earlier run is remembered) | The parameter stays a plain text field | A text field instead of a drop-down |
+| ChoicesFrom source tool fails or is missing | The parameter stays a text field; the failure is logged with its stack trace | A text field, and a line in the Log window ("could not get the choices of ...") |
+| Remembered values (`state/`) cannot be read or written | The dialog starts without them | Empty fields where a previous value would have been offered |
+| Points result and no image is open | The points are shown as a table | The table and a line in the Log window saying to open an image to see them on it |
+| Pixel size of a file cannot be read from its header | The field is left for you to fill in | A line in the Log window ("could not read the pixel size from ...; enter it by hand") |
+| No clipboard (headless, or locked) for "copy last run" | The command is printed instead of copied | The command in the Log window with the reason |
+| File system without POSIX permissions | The permission checks of the trust check cannot apply to that entry | Nothing (logged as a warning) |
+
 ## Tests
 `tests/run_cases.py` drives desktop Fiji on a virtual screen (Linux: `xvfb-run`), answering the real SciJava dialogs with
 `tests/test_harness.groovy` (the only place with test hooks) and writing JSON reports and screenshots to `evidence/`.
