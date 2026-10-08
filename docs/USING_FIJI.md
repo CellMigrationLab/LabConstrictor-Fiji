@@ -4,7 +4,7 @@ This page describes the Fiji-specific workflow. For Python tool declarations and
 
 ## Scientific applications
 
-Examples documented for Fiji include [Guess the Condition](https://github.com/CellMigrationLab/GuessTheCondition), [VLab4Mic](https://github.com/CellMigrationLab/LabConstrictor-VLab4Mic) and NucleiSky integration tests. See the [Toolkit application list](https://github.com/CellMigrationLab/LabConstrictor-Tools) for installation links.
+Fiji reads registered LabConstrictor tool manifests. A new application does not need its own Fiji plugin. The relevant question is whether its tool inputs and results are useful in Fiji; see the [Toolkit](https://github.com/CellMigrationLab/LabConstrictor-Tools) for applications and the shared protocol.
 
 ## Before you start
 
