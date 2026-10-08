@@ -4,7 +4,7 @@ This page describes the Fiji-specific workflow. For Python tool declarations and
 
 ## Scientific applications
 
-Examples documented for Fiji include [Guess the Condition](https://github.com/CellMigrationLab/GuessTheCondition), [VLab4Mic](https://github.com/CellMigrationLab/LabConstrictor-VLab4Mic) and NucleiSky integration tests. See the [Toolkit application list](https://github.com/CellMigrationLab/LabConstrictor-Tools#applications) for installation links.
+Examples documented for Fiji include [Guess the Condition](https://github.com/CellMigrationLab/GuessTheCondition), [VLab4Mic](https://github.com/CellMigrationLab/LabConstrictor-VLab4Mic) and NucleiSky integration tests. See the [Toolkit application list](https://github.com/CellMigrationLab/LabConstrictor-Tools) for installation links.
 
 ## Before you start
 
