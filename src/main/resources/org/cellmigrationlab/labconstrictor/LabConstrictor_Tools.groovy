@@ -825,7 +825,7 @@ String workerPath(File file) { return file.absolutePath }
 
 /** An image given as a file: the worker reads it directly, except that PickChannel writes the chosen channel of it for the worker. */
 List exportImageFile(Map p, def module, File chosen, File jobDir) {
-    if (!chosen.isFile()) throw new IllegalArgumentException("'" + p.label + "': file not found: " + chosen.path)
+    if (!chosen.isFile()) throw new IllegalArgumentException(coded("file_not_found", "image file not found: " + chosen.path))
     if (p.pick_channel) {                                     // PickChannel: the file's chosen channel is written for the worker
         def channelNumber = (module.getInput(p.name + "_channel") ?: 1) as int
         def opened = openForChannel(chosen)
@@ -880,7 +880,7 @@ void checkExportSize(ImagePlus imp) {
 /** An image chosen from the open windows, saved into the job folder as TIFF (one channel for PickChannel; a tool with Axes gets exactly that many dimensions or a refusal). */
 List exportOpenImage(Map p, def module, File jobDir) {
     def chosenImage = LCModule.imageOf(module.getInput(p.name))
-    if (chosenImage == null) throw new IllegalArgumentException("'" + p.label + "' is required: open an image or choose a file")
+    if (chosenImage == null) throw new IllegalArgumentException(coded("missing_parameter", "'" + p.label + "' is required: open an image or choose a file"))
     def file = new File(jobDir, p.name + ".tif")
     if (file.canonicalFile.parentFile != jobDir.canonicalFile) throw new IllegalArgumentException("'" + p.label + "': refusing to write outside " + jobDir)
     def imp = chosenImage
@@ -908,7 +908,7 @@ List exportInputs(Map tool, def module, File jobDir) {
                 break
             case "folder":
                 if (value) {
-                    if (!(value as File).isDirectory()) throw new IllegalArgumentException("'" + p.label + "': folder not found: " + (value as File).path)
+                    if (!(value as File).isDirectory()) throw new IllegalArgumentException(coded("folder_not_found", "'" + p.label + "': folder not found: " + (value as File).path))
                     inputs[p.name] = workerPath(value as File)
                 }
                 break
@@ -1416,7 +1416,7 @@ void takeMacroImage(MacroModule module, Map p, String text, String fileText) {
     if (p.region_of && module.values["selection_" + p.name]) return          // the selection is the value (taken when the run starts)
     if (fileText) { module.values[p.name + "_file"] = new File(fileText); module.values["use_" + p.name] = true; return }
     if (text == null && !p.required) return
-    if (text == null) throw new IllegalArgumentException("'" + p.label + "' is required: give " + p.name + "=<window title> or " + p.name + "_file=<path> (a macro never guesses the current image)")
+    if (text == null) throw new IllegalArgumentException(coded("missing_parameter", "'" + p.label + "' is required: give " + p.name + "=<window title> or " + p.name + "_file=<path> (a macro never guesses the current image)"))
     def imp = WindowManager.getImage(text)
     if (imp == null) throw new IllegalArgumentException("'" + p.label + "': no open image" + (text ? " called '" + text + "'" : "") + " (use " + p.name + "=<window title> or " + p.name + "_file=<path>)")
     module.values[p.name] = imp; module.values["use_" + p.name] = true

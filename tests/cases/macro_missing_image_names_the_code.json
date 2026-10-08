@@ -1,0 +1,21 @@
+{
+ "app": "parity",
+ "tool": "Plane only",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "expect": {
+  "match": {
+   "error": "[missing_parameter] 'Image' is required: give image=<window title> or image_file=<path>"
+  }
+ },
+ "script_macro": "app=parity tool=[Plane only]",
+ "script_mode_only": true
+}

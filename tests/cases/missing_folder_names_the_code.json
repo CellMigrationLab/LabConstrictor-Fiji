@@ -1,0 +1,23 @@
+{
+ "app": "parity",
+ "tool": "Path echo",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "overrides": {
+  "some_file": "${FIXTURES}/sample.tif",
+  "some_folder": "${FIXTURES}/no_such_folder"
+ },
+ "expect": {
+  "match": {
+   "error": "[folder_not_found] 'Some folder': folder not found: "
+  }
+ }
+}

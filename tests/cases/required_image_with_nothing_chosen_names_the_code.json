@@ -1,0 +1,19 @@
+{
+ "app": "parity",
+ "tool": "Calibrated",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "expect": {
+  "match": {
+   "error": "[missing_parameter] 'Image' is required: open an image or choose a file"
+  }
+ }
+}
