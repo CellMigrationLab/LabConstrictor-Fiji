@@ -31,6 +31,7 @@ import java.nio.file.Files
 @Field final List<Integer> SUPPORTED_PROTOCOLS = [1]   // schema protocol versions this script understands
 
 // timeouts and polling
+@Field final String CANCELLED_AFTER_KILL = "cancelled (worker stopped)"   // the status after a Cancel the tool ignored (same words as the Napari form)
 @Field final int CANCEL_GRACE_MS = 3000          // how long a tool gets to honour Cancel before its worker is killed
 @Field final int EXIT_WAIT_MS = 15000            // heavy interpreters (torch, numba) need a few seconds to exit after stdin closes
 @Field final int CANCEL_POLL_MS = 50             // while a task runs: how often Esc, the harness's cancel time and the task status are looked at
@@ -1275,9 +1276,18 @@ void reportOutcome(Map app, Map tool, Map outcome, Map images, Map summary) {
         summary.failure_message = failureMessage(outcome, summary)
         if (hooks.interactive) IJ.error("LabConstrictor: " + app.display_name, summary.failure_message)
     } else {
-        IJ.showStatus("LabConstrictor: " + outcome.status.toLowerCase())
-        IJ.log("LabConstrictor: the run was " + (outcome.cancelRequested ? "cancelled" : outcome.status.toLowerCase()))
+        reportEnd(outcome, summary)
     }
+}
+
+/** A run that ended with no results and no fault (Cancel, or a status such as running): said in the status bar and the Log. After a Cancel that had
+ *  to kill the worker it reads "cancelled (worker stopped)" like the Napari form: the person asked for the stop, so it is never called a crash. */
+void reportEnd(Map outcome, Map summary) {
+    def ended = !outcome.cancelRequested ? outcome.status.toLowerCase() : (outcome.status == "CRASHED" ? CANCELLED_AFTER_KILL : "cancelled")
+    summary.status_line = "LabConstrictor: " + ended
+    IJ.showStatus(summary.status_line)
+    IJ.log("LabConstrictor: the run was " + ended + (outcome.cancelRequested && outcome.status == "CRASHED" ? ": " + crashHint(outcome) : ""))
+    if (outcome.cancelRequested) lcLog("INFO", "the run was " + ended + " (Cancel was pressed)")
 }
 
 // ---- macro replay

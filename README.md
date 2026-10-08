@@ -21,7 +21,7 @@ environment through [Appose](https://github.com/apposed/appose), so Fiji never i
 * Pixel size follows the chosen image (units converted to micrometres), or the TIFF header for files (the ImageJ unit text, else the TIFF resolution unit: inch or centimetre), until you type a value in the field: a value you typed is never overwritten when you pick another image. Pixels that are not square are warned about in the Log (`pixel size differs: Y .. µm, X .. µm - the tool takes one value and gets X`): the tool receives X.
 * Typed results: images/labels open as windows (`<app>:<result name>`), alignments as an overlay window, values in the Log window, tables as a Results window named after the output, files by path in the Log.
 * **"No match" is a message, not an error**: a tool that fails with the code `no_match` / `no_result` opens a plain message window instead of the red error dialog.
-* Progress bar, Esc to cancel (tools that ignore cancel are killed after 3 s), no worker left behind.
+* Progress bar, Esc to cancel (tools that ignore cancel are killed after 3 s), no worker left behind. A run stopped with Esc says `cancelled` in the status bar, or `cancelled (worker stopped)` when the tool ignored Cancel and its worker had to be killed (never `crashed`: the person asked for the stop).
 * Failures show the tool's error, the worker's last output and the log location; unexpected script errors are logged with their
   stack trace. All front-ends share `~/.labconstrictor/logs/labconstrictor.log`.
 
