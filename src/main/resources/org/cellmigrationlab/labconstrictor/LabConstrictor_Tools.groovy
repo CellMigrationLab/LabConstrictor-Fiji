@@ -695,16 +695,17 @@ Map choiceListsFor(Map app, Map tool) {
 }
 
 // ---------------------------------------------------------------- run
-/** Run one task through Appose; Esc (or the harness) requests cancel, a tool that ignores it is killed. */
-Map runTool(Map app, Map tool, Map inputs) {
+/** The worker process of an app (not started yet); its stderr goes to the log and, as a tail, into `workerOutput`. */
+Service newWorkerService(Map app, List<String> workerOutput) {
     def command = [app.python, "-m", "labconstrictor_tools", "serve", "--module", app.module] + app.pythonpath.collectMany { ["--pythonpath", it] }
     def env = [PYTHONPATH: app.runtime_path, PYTHONNOUSERSITE: "1", PYTHONIOENCODING: "utf-8", PYTHONUNBUFFERED: "1"]
     def service = new Service(new File(app.prefix), env, command as String[])
-    def workerOutput = new LinkedList<String>()              // the worker's stderr tail: tracebacks, import errors, native crashes
     service.debug { String line -> synchronized (workerOutput) { workerOutput << line; if (workerOutput.size() > MAX_KEPT_LINES) workerOutput.removeFirst() }; lcLog("DEBUG", "worker " + line) }
-    lcLog("INFO", "starting worker for " + app.name + " python=" + app.python + " module=" + app.module + " tool=" + tool.id)
-    def progress = []
-    def task = service.task(TOOL_PREFIX + tool.id, inputs)
+    return service
+}
+
+/** Show the tool's progress updates in Fiji's status bar and keep the last ones in `progress`. */
+void listenForProgress(def task, List progress) {
     task.listen { event ->
         if (event.responseType == Service.ResponseType.UPDATE) {
             synchronized (progress) { progress << [event.message, event.current, event.maximum]; if (progress.size() > MAX_KEPT_LINES) progress.remove(0) }
@@ -712,10 +713,12 @@ Map runTool(Map app, Map tool, Map inputs) {
             if (event.maximum > 0) IJ.showProgress(event.current / (double) event.maximum)
         }
     }
-    def started = System.currentTimeMillis()
+}
+
+/** Wait for a started task. Esc (or the harness) sends Cancel; a tool that ignores it for CANCEL_GRACE_MS is killed.
+ *  Returns when Cancel was sent (epoch ms), or null if it never was. */
+Long waitForTask(Service service, def task, long started) {
     Long cancelSent = null
-    try {
-    task.start()
     IJ.resetEscape()
     def cancelAfter = hooks.cancelAfterMs()
     while (!task.status.isFinished()) {
@@ -730,12 +733,33 @@ Map runTool(Map app, Map tool, Map inputs) {
         }
         Thread.sleep(50)
     }
-    } finally {                                              // also when interrupted or when anything above throws: no worker left behind
-        IJ.showProgress(1.0)
-        try { service.close(); waitForExit(service, EXIT_WAIT_MS) }
-        catch (Throwable problem) {                          // cleanup: broad on purpose, whatever close() throws the worker must still be killed
-            lcLog("ERROR", "could not close the worker cleanly: " + problem, problem); service.kill()
-        }
+    return cancelSent
+}
+
+/** Close the worker and make sure it is gone: no worker is ever left behind. */
+void closeWorker(Service service) {
+    IJ.showProgress(1.0)
+    try { service.close(); waitForExit(service, EXIT_WAIT_MS) }
+    catch (Throwable problem) {                          // cleanup: broad on purpose, whatever close() throws the worker must still be killed
+        lcLog("ERROR", "could not close the worker cleanly: " + problem, problem); service.kill()
+    }
+}
+
+/** Run one task through Appose; Esc (or the harness) requests cancel, a tool that ignores it is killed. */
+Map runTool(Map app, Map tool, Map inputs) {
+    def workerOutput = new LinkedList<String>()              // the worker's stderr tail: tracebacks, import errors, native crashes
+    def service = newWorkerService(app, workerOutput)
+    lcLog("INFO", "starting worker for " + app.name + " python=" + app.python + " module=" + app.module + " tool=" + tool.id)
+    def progress = []
+    def task = service.task(TOOL_PREFIX + tool.id, inputs)
+    listenForProgress(task, progress)
+    def started = System.currentTimeMillis()
+    Long cancelSent = null
+    try {
+        task.start()
+        cancelSent = waitForTask(service, task, started)
+    } finally {                                              // also when interrupted or when anything above throws
+        closeWorker(service)
     }
     def complete = task.status == Service.TaskStatus.COMPLETE
     if (complete) lcLog("INFO", "task COMPLETE tool=" + tool.id + " timings=" + task.outputs?.timings)
