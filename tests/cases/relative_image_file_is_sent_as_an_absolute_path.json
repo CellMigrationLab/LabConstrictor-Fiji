@@ -1,0 +1,27 @@
+{
+ "app": "parity",
+ "tool": "Calibrated",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "cwd": "${FIXTURES}",
+ "overrides": {
+  "image_file": "sample.tif"
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "approx": {
+   "values_values.height": [
+    128,
+    0
+   ]
+  }
+ }
+}

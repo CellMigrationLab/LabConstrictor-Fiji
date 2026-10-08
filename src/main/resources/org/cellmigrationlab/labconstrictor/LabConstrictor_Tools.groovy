@@ -794,6 +794,10 @@ ImagePlus openForChannel(File file) {
     }
 }
 
+/** The path the worker is given: absolute. A relative path is resolved here, against the folder Fiji runs in (the same one the existence checks
+ *  use), because the worker runs in the app's own folder, where the same text could be another file or none. */
+String workerPath(File file) { return file.absolutePath }
+
 /** An image given as a file: the worker reads it directly, except that PickChannel writes the chosen channel of it for the worker. */
 List exportImageFile(Map p, def module, File chosen, File jobDir) {
     if (!chosen.isFile()) throw new IllegalArgumentException("'" + p.label + "': file not found: " + chosen.path)
@@ -809,9 +813,9 @@ List exportImageFile(Map p, def module, File chosen, File jobDir) {
         def picked = channelOf(opened, channelNumber, p.label as String)
         def channelFile = new File(jobDir, p.name + ".tif")
         new FileSaver(picked).saveAsTiff(channelFile.path)
-        return [channelFile.path, chosen.path]
+        return [channelFile.path, workerPath(chosen)]
     }
-    return [chosen.path, chosen.path]                         // opened later only if a result needs it (see asImage)
+    return [workerPath(chosen), workerPath(chosen)]           // opened later only if a result needs it (see asImage)
 }
 
 /** `message` with its error code in front, the way the worker words its own refusals: `[code] message`. */
@@ -859,12 +863,12 @@ List exportInputs(Map tool, def module, File jobDir) {
                 if (exported != null) { inputs[p.name] = exported[0]; images[p.name] = exported[1] }
                 break
             case ["table", "file"]:
-                if (value) inputs[p.name] = (value as File).path
+                if (value) inputs[p.name] = workerPath(value as File)
                 break
             case "folder":
                 if (value) {
                     if (!(value as File).isDirectory()) throw new IllegalArgumentException("'" + p.label + "': folder not found: " + (value as File).path)
-                    inputs[p.name] = (value as File).path
+                    inputs[p.name] = workerPath(value as File)
                 }
                 break
             default:
