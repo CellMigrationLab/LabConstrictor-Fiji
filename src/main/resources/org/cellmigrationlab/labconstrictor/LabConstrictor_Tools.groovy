@@ -376,102 +376,140 @@ void addChannelItem(MutableModuleInfo info, Map p, String defaultImageTitle, Map
                                                 description: "Channel of the image to use (1 = first). The tool receives only this channel" + (imp != null && imp.getNChannels() > 1 ? "; the chosen image has " + imp.getNChannels() : "")])
 }
 
+/** The dialog's rows in order: [heading: text] for each group and for the advanced block, [parameter: p] for each parameter. */
+List dialogRows(List inputs) {
+    def rows = [], lastGroup = null, advancedShown = false
+    presentationOrder(inputs).each { p ->
+        if (p.advanced && !advancedShown) { advancedShown = true; rows << [heading: "Advanced settings"]; lastGroup = null }
+        if (p.group && p.group != lastGroup) rows << [heading: p.group as String]
+        lastGroup = p.group ?: lastGroup
+        rows << [parameter: p]
+    }
+    return rows
+}
+
+/** image parameter -> the pixel-size parameters that follow its calibration (schema: pixel_size_of). */
+Map pixelSizeLinks(Map tool) {
+    def links = [:]
+    tool.inputs.findAll { it.pixel_size_of }.each { links.get(it.pixel_size_of, []) << it.name }
+    return links
+}
+
+/** The window each image parameter starts on: the i-th image parameter defaults to the i-th open image (the last one repeats). */
+Map defaultImageTitles(Map tool, List<String> openImages) {
+    def titles = [:]
+    tool.inputs.findAll { it.type in ["image", "labels"] }.eachWithIndex { p, i ->
+        def given = hooks.overrides[p.name]
+        titles[p.name] = given ? given as String : (openImages ? openImages[Math.min(i, openImages.size() - 1)] : null)
+    }
+    return titles
+}
+
+/** The harness's value for a dialog key, or `fallback` when it did not set one. */
+def overrideOr(String key, def fallback) { return hooks.overrides.containsKey(key) ? hooks.overrides[key] : fallback }
+
 /** Build the tool dialog from the schema. Returns [info, links]. */
 List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
     def info = newInfo(tool.label)
-    def links = [:]                                          // image param -> [pixel-size params]
-    tool.inputs.findAll { it.pixel_size_of }.each { links.get(it.pixel_size_of, []) << it.name }
-    def linkedImages = links.keySet().toList()
-    def defaultTitle = [:]                                   // i-th image parameter defaults to the i-th open image (the last one repeats)
-    tool.inputs.findAll { it.type in ["image", "labels"] }.eachWithIndex { p, i ->
-        def given = hooks.overrides[p.name]
-        defaultTitle[p.name] = given ? given as String : (openImages ? openImages[Math.min(i, openImages.size() - 1)] : null)
-    }
+    def links = pixelSizeLinks(tool)                         // image param -> [pixel-size params]
+    def context = [openImages: openImages, choiceLists: choiceLists, linkedImages: links.keySet().toList(), defaultTitle: defaultImageTitles(tool, openImages)]
     if (openImages && tool.inputs.any { it.type in ["image", "labels"] }) {
         // also keeps SciJava from replacing a one-image dialog by a bare file chooser (the open image is auto-resolved)
         addItem(info, "image_source_note", String, [label: "Image source", message: true, required: false,
                                                     default: "Images are taken from the open windows. To use a file instead, choose it in the matching '(or file)' field."])
     }
-    def lastGroup = null, advancedShown = false, headings = 0
-    def heading = { String text -> addItem(info, "heading_" + (headings++), String, [label: text, message: true, required: false, default: "— " + text + " —"]) }
-    presentationOrder(tool.inputs).each { p ->
-        if (p.advanced && !advancedShown) { advancedShown = true; heading("Advanced settings"); lastGroup = null }
-        if (p.group && p.group != lastGroup) heading(p.group as String)
-        lastGroup = p.group ?: lastGroup
-        def base = [label: p.label + (p.unit ? " (" + p.unit + ")" : ""), description: p.description, required: p.required]
-        if (p.nullable && p.type in ["string", "integer", "float", "choice", "boolean"]) {   // optional with no default: "unset" must stay possible
-            addItem(info, "set_" + p.name, Boolean, [label: "Set " + p.label.toLowerCase(), required: false,
-                                                     default: hooks.overrides.containsKey("set_" + p.name) ? hooks.overrides["set_" + p.name] : false])
-        }
-        def overridden = hooks.overrides.containsKey(p.name)
-        def override = overridden ? hooks.overrides[p.name] : null
-        switch (p.type) {
-            case ["image", "labels"]:
-                def slot = linkedImages.indexOf(p.name)
-                def fileOverride = hooks.overrides[p.name + "_file"]
-                if (p.region_of) {                           // RegionOf: the ROI / ROI Manager selection of the named image can be the value
-                    addItem(info, "selection_" + p.name, Boolean, [label: "Use the selection as " + p.label.toLowerCase(), required: false,
-                                                                   description: "Send the ROI of the image (or the ROIs selected in the ROI Manager: several are labels 1, 2, 3...) as the region",
-                                                                   default: hooks.overrides.containsKey("selection_" + p.name) ? hooks.overrides["selection_" + p.name] : false])
-                }
-                if (openImages) {
-                    if (!p.required) {                       // SciJava image choosers cannot be empty
-                        addItem(info, "use_" + p.name, Boolean, [label: "Use " + p.label.toLowerCase(), required: false,
-                                                                 default: hooks.overrides.containsKey("use_" + p.name) ? hooks.overrides["use_" + p.name] : false])
-                    }
-                    addItem(info, p.name, String, base + [choices: openImages, default: defaultTitle[p.name], callback: slot >= 0 ? "syncImage" + slot : null])
-                    addItem(info, p.name + "_file", File, [label: p.label + " (or file)", required: false,
-                                                           description: "Read the image from a file instead of the open image above (leave empty to use the open image)",
-                                                           default: fileOverride ? new File(fileOverride as String) : null,
-                                                           callback: slot >= 0 ? "syncFile" + slot : null])
-                    if (p.pick_channel) addChannelItem(info, p, defaultTitle[p.name], hooks.overrides)
-                } else {                                     // nothing open: the file is the only way to give an image
-                    addItem(info, p.name + "_file", File, base + [description: p.description ?: "No image is open - choose a file",
-                                                                  default: fileOverride ? new File(fileOverride as String) : null,
-                                                                  callback: slot >= 0 ? "syncFile" + slot : null])
-                    if (p.pick_channel) addChannelItem(info, p, null, hooks.overrides)
-                }
-                break
-            case ["table", "file"]:
-                addItem(info, p.name, File, base + [default: override ? new File(override as String) : null]); break
-            case "folder":
-                addItem(info, p.name, File, base + [default: override ? new File(override as String) : null]).setWidgetStyle("directory"); break
-            case "string":
-                def options = choiceLists[p.name]                  // ChoicesFrom answered: a dropdown (otherwise the plain text field)
-                def held = (override ?: p.default) as String                // a value the parameter already holds (its default, or a remembered one) stays selectable even when the source does not list it: never silently replaced
-                if (options && held && !options.contains(held)) options = [held] + options
-                if (options && p.nullable) options = [""] + options    // no answer pre-selected: ticking "Set" with the blank entry is refused by the tool, not silently answered
-                if (options) addItem(info, p.name, String, base + [choices: options, default: options.contains(override) ? override : options.contains(p.default) ? p.default : options[0]])
-                else addItem(info, p.name, String, base + [default: override ?: p.default ?: ""])
-                break
-            case "boolean":
-                addItem(info, p.name, Boolean, base + [default: overridden ? override : (p.default ?: false)]); break
-            case "choice":
-                def choiceItem = addItem(info, p.name, String, base + [choices: p.choices, default: override ?: p.default ?: p.choices[0]])
-                if (p.widget == "radio" && !p.nullable) choiceItem.setWidgetStyle("radioButtonHorizontal")   // Widget("radio")
-                break
-            case "integer":
-                def intItem = addItem(info, p.name, Integer, base + [default: (overridden ? override : (p.default ?: 0)) as Integer,
-                                                                    min: p.minimum as Integer, max: p.maximum as Integer, step: 1])
-                if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) intItem.setWidgetStyle("slider")   // Widget("slider")
-                break
-            case "float":
-                def value = overridden ? override : p.default
-                def source = p.pixel_size_of && openImages ? WindowManager.getImage(defaultTitle[p.pixel_size_of] ?: openImages[0]) : null
-                def microns = LCModule.micronsPerPixel(source)
-                def fileSource = p.pixel_size_of ? hooks.overrides[p.pixel_size_of + "_file"] : null
-                if (microns == null && fileSource) microns = LCModule.micronsFromFile(new File(fileSource as String))
-                if (microns != null) value = microns                                                      // calibration prefill (unit-aware)
-                if (p.pixel_size_of && value == null)
-                    IJ.log("LabConstrictor: no pixel size found for '" + p.label + "' (the image has no usable calibration): enter it by hand")
-                def floatItem = addItem(info, p.name, Double, base + [default: (value ?: 0) as Double, min: p.minimum as Double, max: p.maximum as Double, step: 0.0001d])
-                if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) floatItem.setWidgetStyle("slider")   // Widget("slider")
-                break
-            default:
-                throw new IllegalArgumentException("parameter '" + p.name + "' has the unsupported type '" + p.type + "'")
-        }
+    int headings = 0
+    dialogRows(tool.inputs).each { row ->
+        if (row.heading) addItem(info, "heading_" + (headings++), String, [label: row.heading, message: true, required: false, default: "— " + row.heading + " —"])
+        else addParameterItems(info, row.parameter, context)
     }
     return [info, links]
+}
+
+/** The dialog items of one parameter: an optional "Set" box for nullable ones, then the field(s) its type needs. */
+void addParameterItems(MutableModuleInfo info, Map p, Map context) {
+    def base = [label: p.label + (p.unit ? " (" + p.unit + ")" : ""), description: p.description, required: p.required]
+    if (p.nullable && p.type in ["string", "integer", "float", "choice", "boolean"]) {   // optional with no default: "unset" must stay possible
+        addItem(info, "set_" + p.name, Boolean, [label: "Set " + p.label.toLowerCase(), required: false, default: overrideOr("set_" + p.name, false)])
+    }
+    def overridden = hooks.overrides.containsKey(p.name)
+    def override = overridden ? hooks.overrides[p.name] : null
+    switch (p.type) {
+        case ["image", "labels"]: addImageItems(info, p, base, context); break
+        case ["table", "file"]:
+            addItem(info, p.name, File, base + [default: override ? new File(override as String) : null]); break
+        case "folder":
+            addItem(info, p.name, File, base + [default: override ? new File(override as String) : null]).setWidgetStyle("directory"); break
+        case "string": addStringItem(info, p, base, override, context.choiceLists); break
+        case "boolean":
+            addItem(info, p.name, Boolean, base + [default: overridden ? override : (p.default ?: false)]); break
+        case "choice":
+            def choiceItem = addItem(info, p.name, String, base + [choices: p.choices, default: override ?: p.default ?: p.choices[0]])
+            if (p.widget == "radio" && !p.nullable) choiceItem.setWidgetStyle("radioButtonHorizontal")   // Widget("radio")
+            break
+        case "integer":
+            def intItem = addItem(info, p.name, Integer, base + [default: (overridden ? override : (p.default ?: 0)) as Integer,
+                                                                min: p.minimum as Integer, max: p.maximum as Integer, step: 1])
+            if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) intItem.setWidgetStyle("slider")   // Widget("slider")
+            break
+        case "float": addFloatItem(info, p, base, overridden, override, context); break
+        default:
+            throw new IllegalArgumentException("parameter '" + p.name + "' has the unsupported type '" + p.type + "'")
+    }
+}
+
+/** Image / labels parameter: the chooser of open windows, the "(or file)" field, and the extras (selection, "use" box, channel). */
+void addImageItems(MutableModuleInfo info, Map p, Map base, Map context) {
+    def openImages = context.openImages
+    def slot = context.linkedImages.indexOf(p.name)
+    def fileOverride = hooks.overrides[p.name + "_file"]
+    def defaultTitle = context.defaultTitle[p.name]
+    if (p.region_of) {                           // RegionOf: the ROI / ROI Manager selection of the named image can be the value
+        addItem(info, "selection_" + p.name, Boolean, [label: "Use the selection as " + p.label.toLowerCase(), required: false,
+                                                       description: "Send the ROI of the image (or the ROIs selected in the ROI Manager: several are labels 1, 2, 3...) as the region",
+                                                       default: overrideOr("selection_" + p.name, false)])
+    }
+    if (openImages) {
+        if (!p.required) {                       // SciJava image choosers cannot be empty
+            addItem(info, "use_" + p.name, Boolean, [label: "Use " + p.label.toLowerCase(), required: false, default: overrideOr("use_" + p.name, false)])
+        }
+        addItem(info, p.name, String, base + [choices: openImages, default: defaultTitle, callback: slot >= 0 ? "syncImage" + slot : null])
+        addItem(info, p.name + "_file", File, [label: p.label + " (or file)", required: false,
+                                               description: "Read the image from a file instead of the open image above (leave empty to use the open image)",
+                                               default: fileOverride ? new File(fileOverride as String) : null,
+                                               callback: slot >= 0 ? "syncFile" + slot : null])
+        if (p.pick_channel) addChannelItem(info, p, defaultTitle, hooks.overrides)
+    } else {                                     // nothing open: the file is the only way to give an image
+        addItem(info, p.name + "_file", File, base + [description: p.description ?: "No image is open - choose a file",
+                                                      default: fileOverride ? new File(fileOverride as String) : null,
+                                                      callback: slot >= 0 ? "syncFile" + slot : null])
+        if (p.pick_channel) addChannelItem(info, p, null, hooks.overrides)
+    }
+}
+
+/** String parameter: a dropdown when ChoicesFrom answered, otherwise the plain text field. */
+void addStringItem(MutableModuleInfo info, Map p, Map base, def override, Map choiceLists) {
+    def options = choiceLists[p.name]
+    def held = (override ?: p.default) as String                // a value the parameter already holds (its default, or a remembered one) stays selectable even when the source does not list it: never silently replaced
+    if (options && held && !options.contains(held)) options = [held] + options
+    if (options && p.nullable) options = [""] + options    // no answer pre-selected: ticking "Set" with the blank entry is refused by the tool, not silently answered
+    if (options) addItem(info, p.name, String, base + [choices: options, default: options.contains(override) ? override : options.contains(p.default) ? p.default : options[0]])
+    else addItem(info, p.name, String, base + [default: override ?: p.default ?: ""])
+}
+
+/** Float parameter, prefilled from the calibration of the image (or file) it is linked to. */
+void addFloatItem(MutableModuleInfo info, Map p, Map base, boolean overridden, def override, Map context) {
+    def openImages = context.openImages
+    def value = overridden ? override : p.default
+    def source = p.pixel_size_of && openImages ? WindowManager.getImage(context.defaultTitle[p.pixel_size_of] ?: openImages[0]) : null
+    def microns = LCModule.micronsPerPixel(source)
+    def fileSource = p.pixel_size_of ? hooks.overrides[p.pixel_size_of + "_file"] : null
+    if (microns == null && fileSource) microns = LCModule.micronsFromFile(new File(fileSource as String))
+    if (microns != null) value = microns                                                      // calibration prefill (unit-aware)
+    if (p.pixel_size_of && value == null)
+        IJ.log("LabConstrictor: no pixel size found for '" + p.label + "' (the image has no usable calibration): enter it by hand")
+    def floatItem = addItem(info, p.name, Double, base + [default: (value ?: 0) as Double, min: p.minimum as Double, max: p.maximum as Double, step: 0.0001d])
+    if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) floatItem.setWidgetStyle("slider")   // Widget("slider")
 }
 
 // ---------------------------------------------------------------- dialog -> request
