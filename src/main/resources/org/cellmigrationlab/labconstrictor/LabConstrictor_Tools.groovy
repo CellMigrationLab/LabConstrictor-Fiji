@@ -1078,16 +1078,31 @@ void showMessage(Map app, Map r, Map summary) {
     if (hooks.interactive) IJ.showMessage("LabConstrictor: " + app.display_name, text)
 }
 
-/** Points (columns y, x in pixels of the image named by apply_to, else of the first image of this run, else the current image):
+/** The image window a points or shapes result is placed on: the image `apply_to` names, else the first image input of the run (PROTOCOL.md).
+ *  Only a tool without any image input falls back to the image its run showed last, else the current image. Returns null when the
+ *  image is a file that is not open as a window (the result is not put on some other image: that would be another frame). */
+ImagePlus resultTarget(Map r, Map images) {
+    def name = r.apply_to ?: (images ? images.keySet().first() : null)
+    def source = name == null ? null : images[name]
+    if (source instanceof ImagePlus) return source
+    if (source != null) return null
+    return lastShownImage ?: WindowManager.getCurrentImage()
+}
+
+/** Why a points or shapes result has no window to be placed on. */
+String noWindowReason(Map images) {
+    return images ? "the image they belong to was given as a file, so there is no open window to place them on" : "no image is open to place them on"
+}
+
+/** Points (columns y, x in pixels of the image named by apply_to, else of the first image input, else the current image):
  *  a multi-point ROI on that image, also kept in the ROI Manager under the output's name, and a table with the properties. */
 void showPoints(Map app, Map r, Map images, Map summary, boolean replace) {
     def table = ResultsTable.open(r.path)
-    def target = images[r.apply_to]
-    if (!(target instanceof ImagePlus)) target = lastShownImage ?: WindowManager.getCurrentImage()
-    if (!(target instanceof ImagePlus)) {                    // nothing to place them on: the table is still the result
+    def target = resultTarget(r, images)
+    if (target == null) {                                    // nothing to place them on: the table is still the result
         table.show(app.name + ":" + r.name)
-        lcLog("INFO", "points '" + r.name + "' shown as a table: no image is open to place " + table.size() + " point(s) on")
-        IJ.log("LabConstrictor: '" + r.name + "' has " + table.size() + " point(s) but no image is open to place them on: shown as a table (open an image and run again to see them on it)")
+        lcLog("INFO", "points '" + r.name + "' shown as a table: " + noWindowReason(images) + " (" + table.size() + " point(s))")
+        IJ.log("LabConstrictor: '" + r.name + "' has " + table.size() + " point(s) but " + noWindowReason(images) + ": shown as a table (open an image and run again to see them on it)")
         summary["points_" + r.name] = [count: table.size(), image: null, columns: table.getHeadings() as List]
         return
     }
@@ -1146,17 +1161,16 @@ void removeEarlierOutlines(def overlay, def manager, String prefix) {
 }
 
 /** Outlines (GeoJSON Polygon / MultiPolygon, [x, y] with pixel centres at integers) in the frame of the image named by apply_to
- *  (else the first image of this run, else the current image): an overlay on that image with holes kept (composite ROIs), and the
+ *  (else the first image input, else the current image): an overlay on that image with holes kept (composite ROIs), and the
  *  first MAX_MANAGER_SHAPES also in the ROI Manager. Replace() swaps this output's previous outlines. */
 void showShapes(Map app, Map r, Map images, Map summary, boolean replace) {
     def collection = new JsonSlurper().parse(new File(r.path as String), "UTF-8")
-    def target = images[r.apply_to]
-    if (!(target instanceof ImagePlus)) target = lastShownImage ?: WindowManager.getCurrentImage()
+    def target = resultTarget(r, images)
     def prefix = app.name + ":" + r.name
     def outlines = outlinesOf(collection, prefix)
     def rois = outlines.rois, holes = outlines.holes, total = outlines.total
-    if (!(target instanceof ImagePlus)) {
-        IJ.log("LabConstrictor: '" + r.name + "' has " + total + " outline(s) but no image is open to place them on (open an image and run again)")
+    if (target == null) {
+        IJ.log("LabConstrictor: '" + r.name + "' has " + total + " outline(s) but " + noWindowReason(images) + " (open an image and run again)")
         summary["shapes_" + r.name] = [count: total, shown: 0, image: null]
         return
     }
