@@ -18,7 +18,7 @@ import javax.swing.JSpinner
 import javax.swing.SwingUtilities
 
 def cfg = new JsonSlurper().parseText(new File(System.getenv("LC_FIJI_CASE")).text)
-def report = [dialogs: [:]]
+def report = [dialogs: [:], combo_items: [:]]
 def shots = new File(cfg.shots as String)
 shots.mkdirs()
 
@@ -53,17 +53,29 @@ def selectImages = { Window dialog ->
     report.spinner_values_after_selection = components(dialog, JSpinner).collect { it.getValue().toString() }
 }
 
+// Type values into the number fields (top to bottom), as a person would before changing something else: cfg.type_into_spinners = [{index, value}].
+def typeIntoSpinners = { Window dialog ->
+    if (!cfg.type_into_spinners) return
+    def spinners = components(dialog, JSpinner).sort { it.getLocationOnScreen().y }
+    cfg.type_into_spinners.each { entry ->
+        JSpinner spinner = spinners[entry.index as int]
+        SwingUtilities.invokeAndWait { spinner.setValue(entry.value as double) }
+    }
+    Thread.sleep(500)
+}
+
 def answerDialog = { Window dialog, String title ->
     Thread.sleep(700)
     screenshot(dialog, "dialog_" + safe(title))
     report.dialogs[title] = components(dialog, JLabel).findAll { it.text }.collect { it.text }
+    report.combo_items[title] = components(dialog, JComboBox).sort { it.getLocationOnScreen().y }.collect { box -> (0..<box.getItemCount()).collect { box.getItemAt(it).toString() } }
     if (title == cfg.tool) {      // which open image each image chooser shows before anybody touches it (top to bottom)
         def open = (WindowManager.getImageTitles() as List)
         report.chooser_initial = components(dialog, JComboBox).sort { it.getLocationOnScreen().y }
             .findAll { box -> box.getItemCount() > 0 && (0..<box.getItemCount()).every { open.contains(box.getItemAt(it).toString()) } }
             .collect { it.getSelectedItem()?.toString() }
     }
-    if (title == cfg.tool) selectImages(dialog)
+    if (title == cfg.tool) { typeIntoSpinners(dialog); selectImages(dialog) }
     def ok = components(dialog, JButton).find { it.text == "OK" }
     if (ok) SwingUtilities.invokeLater { ok.doClick() }
 }
@@ -91,7 +103,14 @@ def startClicker = { String title ->
 }
 
 def preload = {
+    if (cfg.script_macro) System.setProperty("lc.macro.options", cfg.script_macro as String)   // a macro call without the menu command (the script reads this property first)
     if (cfg.record) ij.plugin.frame.Recorder.record = true          // as if the Macro Recorder window were open
+    cfg.preload_tables?.each { item ->                       // stands in for "a results window the person already has open"
+        def table = new ij.measure.ResultsTable()
+        table.addRow()
+        table.addValue("a", 1)
+        table.show(item.title as String)
+    }
     cfg.preload?.each { item ->                              // stands in for "images the user already has open"
         def imp = IJ.openImage(item.path as String)
         imp.setTitle(item.title as String)
@@ -114,10 +133,12 @@ def preload = {
 def finish = { Map summary ->
     if (cfg.record) summary.recorded_options = ij.plugin.frame.Recorder.getCommandOptions()
     summary.dialogs = report.dialogs
+    summary.combo_items = report.combo_items
     summary.spinner_values_after_selection = report.spinner_values_after_selection
     summary.chooser_initial = report.chooser_initial
     summary.single_input_prompt = report.single_input_prompt
     summary.open_windows = WindowManager.getImageTitles() as List
+    summary.open_tables = WindowManager.getNonImageTitles() as List
     def overlay = summary.overlay_title ? WindowManager.getImage(summary.overlay_title as String) : null
     if (overlay) {
         IJ.saveAs(overlay, "PNG", new File(shots, "overlay.png").path)
@@ -140,5 +161,7 @@ return [
     setup        : preload,
     beforeDialog : { String title -> startClicker(title) },
     cancelAfterMs: { cfg.cancel_after_s ? (long) (cfg.cancel_after_s * 1000) : null },
+    maxShapes     : { cfg.max_shapes ? (int) cfg.max_shapes : null },
+    maxExportBytes: { cfg.max_export_bytes ? (long) cfg.max_export_bytes : null },       // a small limit instead of a 4 GB image
     finish       : finish,
 ]

@@ -7,6 +7,9 @@ Needs: a Fiji installation in $LC_FIJI_HOME, xvfb-run (Linux), and `pip install 
 in the Python running this script (it registers the example app in a private registry). With --real-apps the registry is
 yours: set LC_HOME and $LC_REAL_FIXTURES to a folder with nucleisky/, celltracks/, vlab4mic/ data.
 LC_FIJI_MODE=jar builds the jar (mvn) and tests the menu command instead of the loose Groovy script.
+LC_FIJI_MACRO_PROPERTY=1 (script mode) also runs the cases that carry a macro call, through the property the menu command sets.
+Cases with "unit_checks" call functions of the script directly (tests/unit_checks.groovy); "script_macro", "cwd", "env", "log_prefill" and
+"runs_prefill" set up the situation a case needs (a macro call, Fiji's folder and environment, a log or a runs folder that already exists).
 """
 
 import json
@@ -45,6 +48,16 @@ def expand(value):
     return value
 
 
+def lookup(report, dotted):
+    """The value under a dotted key of the report (None when a part is missing); a list of lists (the items of several dropdowns) is flattened one level."""
+    found = report
+    for part in dotted.split("."):
+        found = found.get(part) if isinstance(found, dict) else None
+    if isinstance(found, list) and found and all(isinstance(item, list) for item in found):
+        found = [x for item in found for x in item]
+    return found
+
+
 def check(expect, report):
     """Return a list of failed expectations (empty = pass)."""
     failed = []
@@ -64,8 +77,9 @@ def check(expect, report):
         if found is None or abs(found - value) > tolerance:
             failed.append("%s = %r, expected %r +- %r" % (dotted, found, value, tolerance))
     for key, value in expect.get("equals", {}).items():
-        if report.get(key) != value:
-            failed.append("%s = %r, expected %r" % (key, report.get(key), value))
+        found = report.get(key) if "." not in key else lookup(report, key)
+        if found != value:
+            failed.append("%s = %r, expected %r" % (key, found, value))
     for text in expect.get("log_contains", []):
         if text not in report.get("log_text", ""):
             failed.append("log lacks %r" % text)
@@ -83,12 +97,23 @@ def check(expect, report):
     for key, limit in expect.get("max", {}).items():
         if report.get(key) is None or report[key] > limit:
             failed.append("%s = %r > %r" % (key, report.get(key), limit))
+    for key, limit in expect.get("min", {}).items():
+        if report.get(key) is None or report[key] < limit:
+            failed.append("%s = %r < %r" % (key, report.get(key), limit))
     for dotted, size in expect.get("min_length", {}).items():
         found = report
         for part in dotted.split("."):
             found = found.get(part) if isinstance(found, dict) else None
         if not isinstance(found, list) or len(found) < size:
             failed.append("%s has %s items, expected at least %d" % (dotted, len(found) if isinstance(found, list) else found, size))
+    for key, items in expect.get("contains", {}).items():
+        for item in items:
+            if item not in (lookup(report, key) or []):
+                failed.append("%s lacks %r" % (key, item))
+    for key, items in expect.get("not_contains", {}).items():
+        for item in items:
+            if item in (lookup(report, key) or []):
+                failed.append("%s must not contain %r" % (key, item))
     for dotted in expect.get("absent_keys", []):
         found = report
         for part in dotted.split("."):
@@ -144,13 +169,17 @@ def _tail(process, lines=12):
 def run_case(path):
     case = expand(json.loads(path.read_text()))
     name = path.stem
+    if case.get("macro") is not None and os.environ.get("LC_FIJI_MODE", "script") != "jar" and os.environ.get("LC_FIJI_MACRO_PROPERTY") == "1":
+        case["script_macro"] = case.pop("macro")  # LC_FIJI_MACRO_PROPERTY=1: macro calls through the property the menu command sets, in script mode (no mvn build per case)
     case_dir = OUT / name
     case_dir.mkdir(parents=True, exist_ok=True)
-    case.update(shots=str(case_dir), report=str(case_dir / "report.json"))
+    case.update(shots=str(case_dir), report=str(case_dir / "report.json"), script=str(GROOVY))
     (case_dir / "report.json").unlink(missing_ok=True)
     case_file = Path(tempfile.mkdtemp()) / "case.json"
     case_file.write_text(json.dumps(case))
-    launch = install_into_fiji(case)
+    if case.get("unit_checks") and os.environ.get("LC_FIJI_MODE", "script") == "jar":
+        return name, [], {}  # the checks call the functions of the loose script: nothing different to test through the jar
+    launch = ["--run", str(HERE / "unit_checks.groovy")] if case.get("unit_checks") else install_into_fiji(case)
     if case.get("macro") is not None and os.environ.get("LC_FIJI_MODE", "script") != "jar":
         return name, [], {}  # macro calls need the menu command of the jar (LC_FIJI_MODE=jar): not applicable to the loose script
     if case.get("script_mode_only") and os.environ.get("LC_FIJI_MODE", "script") == "jar":
@@ -168,12 +197,24 @@ def run_case(path):
                  "--module", app["module"], *[a for p in app["pythonpath"] for a in ("--pythonpath", p)]],
                 check=True, capture_output=True, env=dict(env, PYTHONPATH=str(V3)),
             )  # fmt: skip
+    if case.get("log_prefill"):  # a shared log already past the rotation size, with five old backups (needs "register": a private home)
+        logs = Path(env["LC_HOME"]) / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / "labconstrictor.log").write_text("filler\n" * 200000)
+        for n in range(1, 6):
+            (logs / ("labconstrictor.log.%d" % n)).write_text("old backup %d\n" % n)
+    if case.get("runs_prefill"):  # old run records plus a folder that is not one (a person's own): only the records may ever be pruned
+        runs = Path(env["LC_HOME"]) / "runs"
+        for n in range(case["runs_prefill"]):
+            (runs / ("20200101T000000%03d_old_tool" % n)).mkdir(parents=True)
+        (runs / "my_own_notes").mkdir()
     if case.get("last_command"):  # a previous run's command text, as the script leaves it for the "Copy last run as command" entry
         state = Path(env["LC_HOME"]) / "state"
         state.mkdir(parents=True, exist_ok=True)
         (state / "last_command.json").write_text(json.dumps(case["last_command"]))
     for op in case.get("tamper", []):
         tamper(Path(env["LC_HOME"]) / "apps", op)
+    env.update(case.get("env", {}))  # variables Fiji itself is started with (a conda or venv the person launched it from)
     command = [
         "xvfb-run",
         "-a",
@@ -186,8 +227,8 @@ def run_case(path):
     try:
         # own process group: on a timeout the whole tree (xvfb-run, Xvfb, Fiji, its workers) is killed, not just xvfb-run
         process = subprocess.Popen(
-            command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=os.name == "posix"
-        )
+            command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=os.name == "posix", cwd=case.get("cwd")
+        )  # "cwd": the folder Fiji is started in (a relative path typed in a dialog resolves against it)
         try:
             stdout, stderr = process.communicate(timeout=TIMEOUT_S)
         except subprocess.TimeoutExpired:
@@ -206,6 +247,13 @@ def run_case(path):
     report = json.loads(report_path.read_text())
     log_file = Path(env["LC_HOME"]) / "logs" / "labconstrictor.log"
     report["log_text"] = log_file.read_text(encoding="utf-8") if log_file.exists() else ""
+    runs = Path(env["LC_HOME"]) / "runs"
+    report["run_folders"] = sorted(p.name for p in runs.iterdir()) if runs.is_dir() else []
+    report["run_record_count"] = sum(1 for name in report["run_folders"] if name != "my_own_notes")
+    report["log_backups"] = {  # first line of each rotated copy of the log
+        p.name: (p.read_text(encoding="utf-8", errors="replace").splitlines() or [""])[0]
+        for p in sorted(log_file.parent.glob("labconstrictor.log.*"))
+    } if log_file.parent.is_dir() else {}
     return name, check(case.get("expect", {}), report), report
 
 

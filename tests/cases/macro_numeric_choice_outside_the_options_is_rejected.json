@@ -11,10 +11,11 @@
    ]
   }
  ],
- "macro": "app=parity tool=[Typed choices] count=7",
  "expect": {
   "match": {
    "error": "must be one of [1, 2, 3]"
   }
- }
+ },
+ "script_macro": "app=parity tool=[Typed choices] count=7",
+ "script_mode_only": true
 }

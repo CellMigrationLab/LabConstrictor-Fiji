@@ -11,7 +11,6 @@
    ]
   }
  ],
- "macro": "app=parity tool=[Typed choices] count=3 ratio=0.5 mode=b",
  "expect": {
   "status": "COMPLETE",
   "approx": {
@@ -28,5 +27,7 @@
     0
    ]
   }
- }
+ },
+ "script_macro": "app=parity tool=[Typed choices] count=3 ratio=0.5 mode=b",
+ "script_mode_only": true
 }
