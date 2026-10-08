@@ -44,6 +44,8 @@ import java.nio.file.Files
 @Field final int DIALOG_WORKER_LINES = 8         // last worker lines shown in the error dialog
 @Field final int DIALOG_LINE_CHARS = 300         // longer worker lines are cut in the error dialog (it must not outgrow the screen)
 @Field final int KEPT_RUN_RECORDS = 50           // newest run folders kept under <home>/runs
+@Field final int RGB_BIT_DEPTH = 24              // ImageJ's colour images: saved as a trailing axis of RGB_SAMPLES
+@Field final int RGB_SAMPLES = 3                 // red, green, blue
 @Field final int MAX_CHANNELS = 1000             // upper bound of the "channel" field of a PickChannel image
 @Field final int MAX_REGION_OBJECTS = 65535      // labels of the region image (16 bit)
 @Field final int MAX_SHAPES = 50000              // outlines shown on the image
@@ -765,7 +767,26 @@ List exportImageFile(Map p, def module, File chosen, File jobDir) {
     return [chosen.path, chosen.path]                         // opened later only if a result needs it (see asImage)
 }
 
-/** An image chosen from the open windows, saved into the job folder as TIFF (one channel for PickChannel, one plane for axes "YX"). */
+/** `message` with its error code in front, the way the worker words its own refusals: `[code] message`. */
+String coded(String code, String message) { return "[" + code + "] " + message }
+
+/** The shape the worker reads back from the TIFF saved for `imp` (numpy order, T Z C of size 1 left out as tifffile does), e.g. [3, 32, 32]. */
+List<Integer> savedShape(ImagePlus imp) {
+    def shape = [imp.getNFrames(), imp.getNSlices(), imp.getNChannels()].findAll { it > 1 }
+    shape += [imp.getHeight(), imp.getWidth()]
+    if (imp.getBitDepth() == RGB_BIT_DEPTH) shape << RGB_SAMPLES
+    return shape
+}
+
+/** A parameter declared with `Axes` wants exactly that many dimensions (same refusal as the worker's, same words): no plane is ever chosen for the person. */
+void checkAxes(Map p, ImagePlus imp) {
+    def shape = savedShape(imp)
+    if (p.axes && shape.size() != p.axes.length())
+        throw new IllegalArgumentException(coded("wrong_dimensions", "'" + p.label + "' must be a " + p.axes.length() + "D image (" + p.axes + ") but got " + shape.size() +
+                                                 "D with shape (" + shape.join(", ") + ")"))
+}
+
+/** An image chosen from the open windows, saved into the job folder as TIFF (one channel for PickChannel; a tool with Axes gets exactly that many dimensions or a refusal). */
 List exportOpenImage(Map p, def module, File jobDir) {
     def chosenImage = LCModule.imageOf(module.getInput(p.name))
     if (chosenImage == null) throw new IllegalArgumentException("'" + p.label + "' is required: open an image or choose a file")
@@ -774,11 +795,8 @@ List exportOpenImage(Map p, def module, File jobDir) {
     def imp = chosenImage
     if (p.pick_channel) {                                   // PickChannel: exactly the channel that was chosen, at the current Z and T
         imp = channelOf(imp, (module.getInput(p.name + "_channel") ?: 1) as int, p.label as String)
-    } else if (p.axes == "YX" && imp.getStackSize() > 1) {          // tool wants one plane: send the one on screen
-        IJ.log("LabConstrictor: '" + p.label + "' needs a single 2D plane - using the current plane (" + imp.getCurrentSlice() + " of " + imp.getStackSize() + ")")
-        imp = new ImagePlus(imp.getTitle(), imp.getProcessor().duplicate())
-        imp.setCalibration(chosenImage.getCalibration())
     }
+    checkAxes(p, imp)
     new FileSaver(imp).saveAsTiff(file.path)
     return [file.path, chosenImage]
 }
