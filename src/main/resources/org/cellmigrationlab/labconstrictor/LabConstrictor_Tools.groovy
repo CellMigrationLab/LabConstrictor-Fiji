@@ -71,6 +71,7 @@ import java.nio.file.Files
 class LCModule extends DefaultMutableModule {
     Map<String, List<String>> links = [:]     // image parameter -> [pixel-size parameters]
     LCModule(MutableModuleInfo info) { super(info) }
+    @Override
     void run() {}                              // all work happens after harvesting
 
     static Closure logger = { String level, String message, Throwable problem -> }   // set below to lcLog (a class cannot call the script's methods)
@@ -95,6 +96,7 @@ class LCModule extends DefaultMutableModule {
             unit = unit.toLowerCase().replace("\u00b5", "u").replace("\u03bc", "u").replace("\ufffd", "u").trim()
             def factor = MICRONS_PER_UNIT[unit] ?: (unit == "inch" ? MICRONS_PER_INCH : null)
             return factor == null ? null : info[0].pixelWidth * factor
+        // groovylint-disable-next-line CatchException
         } catch (Exception problem) {      // not a TIFF / unreadable header (TiffDecoder throws IOException or runtime errors on garbage)
             // not "no calibration" but "could not read it": tell the user instead of silently leaving the field alone
             logger("WARN", "could not read the pixel size from " + file.path + ": " + problem, problem)
@@ -163,12 +165,14 @@ void lcLog(String level, String message, Throwable problem = null) {
         def file = new File(lcHome(), "logs/labconstrictor.log")
         file.parentFile.mkdirs()
         if (file.length() > LOG_MAX_BYTES) file.renameTo(new File(file.parentFile, "labconstrictor.log.1"))
-        def stamp = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(new Date())
+        def stamp = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.ROOT).format(new Date())
         def text = stamp + " " + level.padRight(7) + " pid=" + ProcessHandle.current().pid() + " fiji: " + message.replace("\r", "") + "\n"
         if (problem) { def w = new StringWriter(); problem.printStackTrace(new PrintWriter(w)); text += w.toString() }
         file.append(text, "UTF-8")
+    // groovylint-disable-next-line CatchException
     } catch (Exception failure) {
         // the log itself is broken (disk full, read-only home): there is nowhere else to write, so say it once on stderr and carry on
+        // groovylint-disable-next-line SystemErrPrint
         System.err.println("LabConstrictor: could not write the log file: " + failure)
     }
 }
@@ -270,6 +274,7 @@ String untrustedReason(File entryFile, Map entry, boolean userDir) {
             if (item[0].exists() && worldWritable(item[0] as File, item[1] as boolean))
                 return item[2] + " " + item[0] + " is writable by everybody"
         }
+    // groovylint-disable-next-line CatchException
     } catch (Exception problem) {
         lcLog("WARNING", "cannot verify the registry entry " + entryFile + ": " + problem, problem)
         return "cannot verify the registry entry permissions (" + problem + ")"
@@ -333,6 +338,7 @@ Map discoverApps() {
                 apps[name] = entry + [pythonpath: entry.pythonpath ?: [], runtime_path: entry.runtime_path ?: "", schema: schema]
             } catch (IllegalStateException e) {                    // an invalid schema: expected, reported below with the other problems
                 problems << (file.name + ": " + e.message)
+            // groovylint-disable-next-line CatchException
             } catch (Exception e) {                                // broad on purpose: one broken entry must not hide the other apps; reported below, the stack goes to the log
                 lcLog("WARNING", "app entry " + file.name + " could not be loaded: " + e, e)
                 problems << (file.name + ": " + e.message)
@@ -448,6 +454,7 @@ Map defaultImageTitles(Map tool, List<String> openImages) {
 def overrideOr(String key, def fallback) { return hooks.overrides.containsKey(key) ? hooks.overrides[key] : fallback }
 
 /** Build the tool dialog from the schema. Returns [info, links]. */
+// groovylint-disable-next-line FactoryMethodName
 List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
     def info = newInfo(tool.label)
     def links = pixelSizeLinks(tool)                         // image param -> [pixel-size params]
@@ -537,6 +544,7 @@ void addStringItem(MutableModuleInfo info, Map p, Map base, def override, Map ch
 }
 
 /** Float parameter, prefilled from the calibration of the image (or file) it is linked to. */
+// groovylint-disable-next-line ParameterCount
 void addFloatItem(MutableModuleInfo info, Map p, Map base, boolean overridden, def override, Map context) {
     def openImages = context.openImages
     def value = overridden ? override : p.default
@@ -568,6 +576,7 @@ Map readState(Map app) {
         def file = stateFile(app)
         def data = file.isFile() ? new JsonSlurper().parseText(file.text) : [:]
         return data instanceof Map ? data : [:]
+    // groovylint-disable-next-line CatchException
     } catch (Exception problem) {
         // intended fallback: no remembered values (ChoicesFrom then shows a text field); broad because the file is whatever was left on disk
         lcLog("WARNING", "could not read the remembered values (starting without them): " + problem, problem)
@@ -585,6 +594,7 @@ void rememberDepends(Map app, Map tool, Map inputs) {
         def file = stateFile(app)
         file.parentFile.mkdirs()
         file.text = groovy.json.JsonOutput.toJson(state)
+    // groovylint-disable-next-line CatchException
     } catch (Exception problem) { lcLog("WARNING", "could not remember the values (the next dialog will not know them): " + problem, problem) }
 }
 
@@ -628,6 +638,7 @@ List choicesFor(Map app, Map tool, Map p, Map state) {
         }
         def request = choiceRequest(tool, p, state)
         return request == null ? null : askSourceTool(app, source, p, request)
+    // groovylint-disable-next-line CatchException
     } catch (Exception problem) {          // broad on purpose: one failing source tool must not break the dialog; the field stays a text field
         lcLog("WARNING", "could not get the choices of '" + p.name + "': " + problem, problem)
         IJ.log("LabConstrictor: could not get the choices of '" + p.label + "' (" + problem + "); type the value instead")
@@ -655,13 +666,16 @@ void describeDialog(Map summary, def info) {
     summary.dialog_defaults = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getDefaultValue()] }
 }
 
+/** The way out of an interactive request that the person cancelled: nothing is run. */
+Map cancelled(Map summary) { return [aborted: true, result: hooks.finish(summary + [cancelled: true])] }
+
 /** Interactive run: choose the app and tool, show the tool's dialog, record the run. Returns [app, tool, module], or [aborted: true, result: ...] when cancelled. */
 Map requestFromDialog(Map found, Map summary) {
     def appName = pickOne("LabConstrictor", "Application", found.apps.keySet().toList(), hooks.preferred("app"))
-    if (appName == null) return [aborted: true, result: hooks.finish(summary + [cancelled: true])]
+    if (appName == null) return cancelled(summary)
     def app = found.apps[appName]
     def toolLabel = pickOne("LabConstrictor: " + app.display_name, "Tool", app.schema.tools.collect { it.label }, hooks.preferred("tool"))
-    if (toolLabel == null) return [aborted: true, result: hooks.finish(summary + [cancelled: true])]
+    if (toolLabel == null) return cancelled(summary)
     def tool = app.schema.tools.find { it.label == toolLabel }
 
     def openImages = WindowManager.getImageTitles() as List<String>
@@ -670,7 +684,7 @@ Map requestFromDialog(Map found, Map summary) {
     summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / NANOS_PER_SECOND
     describeDialog(summary, info)
     def module = harvest(info, tool.label, links)
-    if (module == null) return [aborted: true, result: hooks.finish(summary + [cancelled: true])]
+    if (module == null) return cancelled(summary)
     recordRun(appName, tool, module)
     return [app: app, tool: tool, module: module]
 }
@@ -825,6 +839,7 @@ Long waitForTask(Service service, def task, long started) {
 void closeWorker(Service service) {
     IJ.showProgress(1.0)
     try { service.close(); waitForExit(service, EXIT_WAIT_MS) }
+    // groovylint-disable-next-line CatchThrowable
     catch (Throwable problem) {                          // cleanup: broad on purpose, whatever close() throws the worker must still be killed
         lcLog("ERROR", "could not close the worker cleanly: " + problem, problem); service.kill()
     }
@@ -832,6 +847,7 @@ void closeWorker(Service service) {
 
 /** Run one task through Appose; Esc (or the harness) requests cancel, a tool that ignores it is killed. */
 Map runTool(Map app, Map tool, Map inputs) {
+    // groovylint-disable-next-line ExplicitLinkedListInstantiation
     def workerOutput = new LinkedList<String>()              // the worker's stderr tail: tracebacks, import errors, native crashes
     def service = newWorkerService(app, workerOutput)
     lcLog("INFO", "starting worker for " + app.name + " python=" + app.python + " module=" + app.module + " tool=" + tool.id)
@@ -886,10 +902,10 @@ String failureMessage(Map outcome, Map summary) {
 }
 
 /** One folder per run under <home>/runs (the newest KEPT_RUN_RECORDS kept): what was run, by which interpreter, what came back. */
-String writeRunRecord(Map app, Map tool, Map inputs, Map outcome, Map summary) {
+String writeRunRecord(Map app, Map tool, Map inputs, Map outcome) {
     try {
         def runs = new File(lcHome(), "runs")
-        def stamp = new java.text.SimpleDateFormat("yyyyMMdd'T'HHmmssSSS").format(new Date())
+        def stamp = new java.text.SimpleDateFormat("yyyyMMdd'T'HHmmssSSS", Locale.ROOT).format(new Date())
         def folder = new File(runs, stamp + "_" + slug(app.name as String) + "_" + slug(tool.id as String))
         if (folder.canonicalFile.parentFile != runs.canonicalFile) throw new IOException("run folder " + folder + " is not inside " + runs)
         folder.mkdirs()
@@ -899,6 +915,7 @@ String writeRunRecord(Map app, Map tool, Map inputs, Map outcome, Map summary) {
             results: (outcome.outputs?.results ?: []).collect { it.findAll { k, v -> k != "matrix_yx" } }]))
         (runs.listFiles({ File f -> f.isDirectory() } as FileFilter) ?: [] as File[]).sort().reverse().drop(KEPT_RUN_RECORDS).each { removeFolder(it, "old run record") }
         return folder.path
+    // groovylint-disable-next-line CatchException
     } catch (Exception problem) {                       // a record must never break a run, but its absence must be visible
         lcLog("WARNING", "could not write the run record: " + problem, problem)
         return null
@@ -912,7 +929,7 @@ void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
                 worker_alive_after: outcome.workerAlive, cancel_requested: outcome.cancelRequested]
     summary.timings.worker_run_s = outcome.seconds
     rememberCommand(app, tool, inputs, images, summary)
-    summary.run_record = writeRunRecord(app, tool, inputs, outcome, summary)
+    summary.run_record = writeRunRecord(app, tool, inputs, outcome)
     reportOutcome(app, tool, outcome, images, summary)
 }
 
@@ -938,6 +955,7 @@ Map showResults(Map app, List results, Map images, Map tool = null) {
                 case "affine": showAffine(r, images, results, summary, r.name in replaced); break
                 default: throw new IllegalStateException("the tool returned a result of the type '" + r.type + "', which this version of Fiji LabConstrictor cannot show")
             }
+        // groovylint-disable-next-line CatchException
         } catch (Exception problem) {          // broad on purpose: one result that cannot be shown must not hide the others
             def text = "could not show the result '" + r.name + "': " + problem.message
             lcLog("ERROR", text, problem)
@@ -1204,6 +1222,7 @@ void recordRun(String appName, Map tool, def module) {
     try {
         if (!Recorder.record) return
         toMacroOptions(appName, tool, module).each { k, v -> Recorder.recordOption(k, v) }
+    // groovylint-disable-next-line CatchException
     } catch (Exception problem) {            // broad on purpose: recording must never break a run, but the failure is not hidden
         lcLog("WARN", "could not record the run for the macro recorder: " + problem, problem)
         IJ.log("LabConstrictor: this run could not be recorded for the macro recorder (" + problem + ")")
@@ -1422,6 +1441,7 @@ void rememberCommand(Map app, Map tool, Map inputs, Map images, Map summary) {
         IJ.log("LabConstrictor: to repeat this run outside Fiji, copy from here:\n" + summary.command_line + "\n--- or in Python:\n" + summary.python_snippet)
         def stateDir = new File(lcHome(), "state"); stateDir.mkdirs()
         new File(stateDir, "last_command.json").setText(groovy.json.JsonOutput.toJson([app: app.name, tool: tool.id, terminal: summary.command_line, python: summary.python_snippet]), "UTF-8")
+    // groovylint-disable-next-line CatchException
     } catch (Exception problem) {          // broad on purpose: the copyable command is a convenience and must never break a run; the failure is shown, not hidden
         lcLog("WARN", "could not build the command text: " + problem, problem)
         IJ.log("LabConstrictor: could not build the command to repeat this run (" + problem + ")")
@@ -1471,6 +1491,7 @@ def labConstrictorMain() {
     lcLog("INFO", "---- session start: " + IJ.getFullVersion() + " java=" + System.getProperty("java.version") + " os=" + System.getProperty("os.name") + " LC_HOME=" + lcHome())
     try {
         return labConstrictorRun()
+    // groovylint-disable-next-line CatchThrowable
     } catch (Throwable problem) {          // the entry point: broad on purpose (anything, even an Error, must end in the log and a dialog, never a silent script)
         lcLog("ERROR", "unexpected failure: " + problem, problem)
         if (hooks.interactive) IJ.error("LabConstrictor", "Unexpected error: " + problem + "\n\nThe full report is in the log file:\n" + new File(lcHome(), "logs/labconstrictor.log").path)

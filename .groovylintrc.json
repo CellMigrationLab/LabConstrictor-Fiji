@@ -1,0 +1,35 @@
+{
+  // npm-groovy-lint (CodeNarc) configuration for src/main/resources/.../LabConstrictor_Tools.groovy.
+  // Run it with tests/lint_groovy.sh (the same command CI runs). Warnings and errors fail the build; "info" findings are
+  // style hints that are not shown. Every rule turned off or tuned below has its reason on the line above it.
+  "extends": "recommended",
+  "rules": {
+    // The longest line of the script today is 240 characters (dense one-line guard clauses and messages); the limit stops it growing.
+    "LineLength": { "length": 240 },
+
+    // One-statement guard clauses on one line ("if (x == null) return null") are the style of the whole script; bracing
+    // the ~160 of them would only add lines. Multi-line bodies are braced by convention.
+    "IfStatementBraces": "off",
+    "ElseBlockBraces": "off",
+    "ForStatementBraces": "off",
+    "WhileStatementBraces": "off",
+
+    // The script validates untrusted, dynamically typed JSON (registry entries, schemas, tool results) and
+    // ImagePlus-or-String values: instanceof is how that validation is written.
+    "Instanceof": "off",
+
+    // The rule enforces the Enterprise JavaBeans restriction on java.io; this is a desktop script that has to read and write files.
+    "JavaIoPackageAccess": "off",
+
+    // Pixel sizes, calibration factors and alignment matrices are floating-point measurements; BigDecimal would be wrong here.
+    "NoDouble": "off",
+
+    // null means "no answer" by contract for the lookup helpers (choices, state, pixel size, command inputs); callers tell it
+    // from an empty result, and every such case is logged where it happens (theme 1: no silent fallbacks).
+    "ReturnNullFromCatchBlock": "off",
+    "ReturnsNullInsteadOfEmptyCollection": "off",
+
+    // A Fiji script is one file of top-level functions grouped under section headers (theme 2); the count is the design.
+    "MethodCount": "off"
+  }
+}

@@ -76,6 +76,8 @@ These are deliberate: the host does something simpler instead of failing, writes
                                                    # (LC_HOME) and LC_REAL_FIXTURES=<folder with nucleisky/ celltracks/ vlab4mic/ data>
                                                    # (4 cases; the blur and VLab4Mic cases fail or time out when those apps are not installed)
 
+Lint: `tests/lint_groovy.sh` runs `npm-groovy-lint` (pinned) on the script with `.groovylintrc.json` (needs node and Java); CI runs it as the `lint` job.
+
 Cases are JSON (`tests/cases/*.json`): the app and tool, images to preload, dialog overrides, optional cancel timing, expectations.
 
 Status: **testing phase**. Tested on Linux only (Fiji with Java 21, Xvfb); to help on Windows or macOS (and on a real desktop) follow the
