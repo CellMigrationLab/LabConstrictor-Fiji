@@ -653,43 +653,61 @@ void rememberDepends(Map app, Map tool, Map inputs) {
     } catch (Exception problem) { lcLog("WARNING", "could not remember the values (the next dialog will not know them): " + problem, problem) }
 }
 
+/** The values of the parameters a ChoicesFrom depends on (the harness's, else the remembered ones), or null while one of them is not known yet. */
+Map choiceRequest(Map tool, Map p, Map state) {
+    def request = [:]
+    for (name in p.choices_from.depends) {
+        def value = hooks.overrides.containsKey(name) ? hooks.overrides[name] : state[name]
+        def type = tool.inputs.find { it.name == name }?.type
+        if (!(value instanceof String) || !value || (type == "folder" && !new File(value).isDirectory())) {   // (d) intended fallback: not known yet, so a text field
+            lcLog("INFO", "choices of '" + p.name + "' not asked yet: '" + name + "' has no usable value (text field)")
+            return null
+        }
+        request[name] = value
+    }
+    return request
+}
+
+/** Run the source tool of a ChoicesFrom with `request` and return the options it answered, or null when it gave none. */
+List askSourceTool(Map app, Map source, Map p, Map request) {
+    def jobDir = Files.createTempDirectory("lcchoices_fiji_").toFile()
+    try {
+        request[JOB_DIR_KEY] = jobDir.path
+        def outcome = runTool(app, source, request)
+        if (!outcome.complete) { lcLog("WARNING", "choices of '" + p.name + "' not available: " + outcome.error); return null }
+        def found = outcome.outputs.results.find { it.type == "values" && it.values?.get(p.choices_from.field ?: "choices") instanceof List }
+        def options = found?.values?.get(p.choices_from.field ?: "choices")?.collect { it.toString() }
+        return options ?: null
+    } finally { removeFolder(jobDir, "job folder of the choices request") }
+}
+
+/** The options for one ChoicesFrom parameter, or null (it stays a text field). One failing source tool must not break the dialog. */
+List choicesFor(Map app, Map tool, Map p, Map state) {
+    def source = app.schema.tools.find { it.id == p.choices_from.tool }
+    def given = hooks.overrides.containsKey("_choices_" + p.name) ? hooks.overrides["_choices_" + p.name] : null
+    try {
+        if (given instanceof List) return given
+        if (source == null || !(p.choices_from.depends instanceof List)) {
+            lcLog("WARNING", "choices of '" + p.name + "' cannot be asked: the source tool '" + p.choices_from.tool + "' is not in the app or 'depends' is not a list (text field)")
+            return null
+        }
+        def request = choiceRequest(tool, p, state)
+        return request == null ? null : askSourceTool(app, source, p, request)
+    } catch (Exception problem) {          // broad on purpose: one failing source tool must not break the dialog; the field stays a text field
+        lcLog("WARNING", "could not get the choices of '" + p.name + "': " + problem, problem)
+        IJ.log("LabConstrictor: could not get the choices of '" + p.label + "' (" + problem + "); type the value instead")
+        return null
+    }
+}
+
 /** ChoicesFrom parameters of `tool` -> their options, asked of the source tool with the values of the previous run; unanswered ones are left out (text field). */
 Map choiceListsFor(Map app, Map tool) {
     def lists = [:]
     def state = null
     tool.inputs.findAll { it.choices_from instanceof Map }.each { p ->
         state = state ?: readState(app)
-        def source = app.schema.tools.find { it.id == p.choices_from.tool }
-        def given = hooks.overrides.containsKey("_choices_" + p.name) ? hooks.overrides["_choices_" + p.name] : null
-        try {
-            if (given instanceof List) { lists[p.name] = given; return }
-            if (source == null || !(p.choices_from.depends instanceof List)) {
-                lcLog("WARNING", "choices of '" + p.name + "' cannot be asked: the source tool '" + p.choices_from.tool + "' is not in the app or 'depends' is not a list (text field)")
-                return
-            }
-            def request = [:]
-            for (name in p.choices_from.depends) {
-                def value = hooks.overrides.containsKey(name) ? hooks.overrides[name] : state[name]
-                def type = tool.inputs.find { it.name == name }?.type
-                if (!(value instanceof String) || !value || (type == "folder" && !new File(value).isDirectory())) {   // (d) intended fallback: not known yet, so a text field
-                    lcLog("INFO", "choices of '" + p.name + "' not asked yet: '" + name + "' has no usable value (text field)")
-                    return
-                }
-                request[name] = value
-            }
-            def jobDir = Files.createTempDirectory("lcchoices_fiji_").toFile()
-            try {
-                request[JOB_DIR_KEY] = jobDir.path
-                def outcome = runTool(app, source, request)
-                if (!outcome.complete) { lcLog("WARNING", "choices of '" + p.name + "' not available: " + outcome.error); return }
-                def found = outcome.outputs.results.find { it.type == "values" && it.values?.get(p.choices_from.field ?: "choices") instanceof List }
-                def options = found?.values?.get(p.choices_from.field ?: "choices")?.collect { it.toString() }
-                if (options) lists[p.name] = options
-            } finally { removeFolder(jobDir, "job folder of the choices request") }
-        } catch (Exception problem) {          // broad on purpose: one failing source tool must not break the dialog; the field stays a text field
-            lcLog("WARNING", "could not get the choices of '" + p.name + "': " + problem, problem)
-            IJ.log("LabConstrictor: could not get the choices of '" + p.label + "' (" + problem + "); type the value instead")
-        }
+        def options = choicesFor(app, tool, p, state)
+        if (options != null) lists[p.name] = options
     }
     return lists
 }
