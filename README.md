@@ -24,7 +24,7 @@ environment through [Appose](https://github.com/apposed/appose), so Fiji never i
 * **"No match" is a message, not an error**: a tool that fails with the code `no_match` / `no_result` opens a plain message window instead of the red error dialog.
 * Progress bar, Esc to cancel (tools that ignore cancel are killed after 3 s), no worker left behind. A run stopped with Esc says `cancelled` in the status bar, or `cancelled (worker stopped)` when the tool ignored Cancel and its worker had to be killed (never `crashed`: the person asked for the stop).
 * Failures show the tool's error, the worker's last output and the log location; unexpected script errors are logged with their
-  stack trace. All front-ends share `~/.labconstrictor/logs/labconstrictor.log`.
+  stack trace. All front-ends share `~/.labconstrictor/logs/labconstrictor.log` (rotated at 1 MB with five numbered backups, `.log.1` to `.log.5`, and the level names of the Python tools; a rotation that fails, for instance on Windows because another program holds the file, is reported once on the console and the log keeps growing). Run records under `runs/`: the newest 50 are kept, and only folders named like a record are ever removed.
 
 ## Install
 1. On the machine, the LabConstrictor apps must be installed and registered (the installer does it; check with

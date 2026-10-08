@@ -1,0 +1,31 @@
+{
+ "app": "parity",
+ "tool": "Typed choices",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "runs_prefill": 52,
+ "expect": {
+  "status": "COMPLETE",
+  "contains": {
+   "run_folders": [
+    "my_own_notes"
+   ]
+  },
+  "not_contains": {
+   "run_folders": [
+    "20200101T000000000_old_tool"
+   ]
+  },
+  "max": {
+   "run_record_count": 50
+  }
+ }
+}

@@ -39,12 +39,14 @@ import java.nio.file.Files
 
 // limits on what is kept, shown or sent
 @Field final long LOG_MAX_BYTES = 1_000_000L     // the log file is rotated (to .log.1) above this size
+@Field final int LOG_BACKUPS = 5                 // rotated copies kept (.log.1 newest ... .log.5 oldest), like labconstrictor_tools.log
 @Field final int MAX_KEPT_LINES = 500            // worker output and progress events kept per run (the log has the rest)
 @Field final int LOG_WORKER_LINES = 40           // last worker lines copied into the log when a task does not complete
 @Field final int OUTCOME_WORKER_LINES = 60       // last worker lines kept in the outcome (and the run record)
 @Field final int DIALOG_WORKER_LINES = 8         // last worker lines shown in the error dialog
 @Field final int DIALOG_LINE_CHARS = 300         // longer worker lines are cut in the error dialog (it must not outgrow the screen)
 @Field final int KEPT_RUN_RECORDS = 50           // newest run folders kept under <home>/runs
+@Field final String RUN_FOLDER_PATTERN = /\d{8}T\d{6}\d{3,6}_.+/   // the folders a run record creates (time stamp, app, tool); anything else in runs/ is never deleted
 @Field final int RGB_BIT_DEPTH = 24              // ImageJ's colour images: saved as a trailing axis of RGB_SAMPLES
 @Field final int RGB_SAMPLES = 3                 // red, green, blue
 @Field final long MAX_EXPORT_BYTES = 4L * 1024 * 1024 * 1024   // an open image larger than this (all planes, channels and samples) is not written for the worker (same limit as the Napari form)
@@ -123,7 +125,7 @@ class LCModule extends DefaultMutableModule {
         // groovylint-disable-next-line CatchException
         } catch (Exception problem) {      // not a TIFF / unreadable header (TiffDecoder throws IOException or runtime errors on garbage)
             // not "no calibration" but "could not read it": tell the user instead of silently leaving the field alone
-            logger("WARN", "could not read the pixel size from " + file.path + ": " + problem, problem)
+            logger("WARNING", "could not read the pixel size from " + file.path + ": " + problem, problem)
             IJ.log("LabConstrictor: could not read the pixel size from " + file.name + " (" + problem + "); enter it by hand")
             return null
         }
@@ -197,12 +199,31 @@ String lcHome() { System.getenv("LC_HOME") ?: (System.getProperty("user.home") +
 
 LCModule.logger = { String level, String message, Throwable problem -> lcLog(level, message, problem) }
 
-/** Append one entry to the log shared with the Python tools (<LC_HOME>/logs/labconstrictor.log, rotated to .log.1 at 1 MB). Never throws. */
+@Field boolean logRotationFailureShown = false     // a rotation that fails is reported once per session (stderr: the log is what failed)
+
+/** Rotate the log: .log.4 becomes .log.5 (the oldest copy is dropped), ... the log becomes .log.1. Each step replaces what is there
+ *  (File.renameTo does not on Windows). A step that fails (Windows: the file is open in another program) leaves the log to grow and is reported once. */
+void rotateLog(File file) {
+    try {
+        for (int n = LOG_BACKUPS; n >= 1; n--) {
+            def from = n == 1 ? file : new File(file.parentFile, file.name + "." + (n - 1))
+            if (from.exists()) Files.move(from.toPath(), new File(file.parentFile, file.name + "." + n).toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        }
+    } catch (IOException problem) {
+        if (!logRotationFailureShown) {
+            logRotationFailureShown = true
+            // groovylint-disable-next-line SystemErrPrint
+            System.err.println("LabConstrictor: could not rotate the log file " + file + " (it keeps growing): " + problem)
+        }
+    }
+}
+
+/** Append one entry to the log shared with the Python tools (<LC_HOME>/logs/labconstrictor.log, rotated at 1 MB, five copies kept). Never throws. */
 void lcLog(String level, String message, Throwable problem = null) {
     try {
         def file = new File(lcHome(), "logs/labconstrictor.log")
         file.parentFile.mkdirs()
-        if (file.length() > LOG_MAX_BYTES) file.renameTo(new File(file.parentFile, "labconstrictor.log.1"))
+        if (file.length() > LOG_MAX_BYTES) rotateLog(file)
         def stamp = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.ROOT).format(new Date())
         def text = stamp + " " + level.padRight(7) + " pid=" + ProcessHandle.current().pid() + " fiji: " + message.replace("\r", "") + "\n"
         if (problem) { def w = new StringWriter(); problem.printStackTrace(new PrintWriter(w)); text += w.toString() }
@@ -218,9 +239,9 @@ void lcLog(String level, String message, Throwable problem = null) {
 /** Delete a temporary folder; a folder that cannot be removed is logged once (it stays on disk), never ignored. */
 void removeFolder(File folder, String what) {
     try {
-        if (folder.exists() && !folder.deleteDir()) lcLog("WARN", "could not remove the " + what + " " + folder)
+        if (folder.exists() && !folder.deleteDir()) lcLog("WARNING", "could not remove the " + what + " " + folder)
     } catch (SecurityException problem) {
-        lcLog("WARN", "could not remove the " + what + " " + folder + ": " + problem, problem)
+        lcLog("WARNING", "could not remove the " + what + " " + folder + ": " + problem, problem)
     }
 }
 
@@ -256,7 +277,7 @@ boolean isPosixHost() { return !System.getProperty("os.name").toLowerCase().cont
 Integer unixMode(java.nio.file.Path path) {
     try { return java.nio.file.Files.getAttribute(path, "unix:mode") as Integer }
     catch (UnsupportedOperationException | IllegalArgumentException problem) {
-        lcLog("WARN", "no unix permission bits for " + path + " (" + problem + "): the permission checks do not apply to it")
+        lcLog("WARNING", "no unix permission bits for " + path + " (" + problem + "): the permission checks do not apply to it")
         return null
     }
 }
@@ -295,7 +316,7 @@ String untrustedReason(File entryFile, Map entry, boolean userDir) {
         if (!isPosixHost()) return null                                  // Windows: no POSIX ownership/mode to check (known, not an error)
         try { java.nio.file.Files.getPosixFilePermissions(entryFile.toPath()) }
         catch (UnsupportedOperationException problem) {                  // a file system without POSIX permissions (known): the entry cannot be checked
-            lcLog("WARN", "the registry entry " + entryFile + " is not checked for permissions: its file system has no POSIX permissions (" + problem + ")")
+            lcLog("WARNING", "the registry entry " + entryFile + " is not checked for permissions: its file system has no POSIX permissions (" + problem + ")")
             return null
         }
         def reason = fileReason(entryFile, userDir, "entry file")
@@ -1021,7 +1042,7 @@ String writeRunRecord(Map app, Map tool, Map inputs, Map outcome) {
             app: app.name, app_version: app.version, tool: tool.id, host: "fiji", status: outcome.status, error: outcome.error,
             seconds: outcome.seconds, inputs: inputs, worker_output_tail: outcome.workerOutput, log_file: new File(lcHome(), "logs/labconstrictor.log").path, progress_events: outcome.progress, interpreter: outcome.outputs?.diagnostics,
             results: (outcome.outputs?.results ?: []).collect { it.findAll { k, v -> k != "matrix_yx" } }]))
-        (runs.listFiles({ File f -> f.isDirectory() } as FileFilter) ?: [] as File[]).sort().reverse().drop(KEPT_RUN_RECORDS).each { removeFolder(it, "old run record") }
+        (runs.listFiles({ File f -> f.isDirectory() && f.name ==~ RUN_FOLDER_PATTERN } as FileFilter) ?: [] as File[]).sort().reverse().drop(KEPT_RUN_RECORDS).each { removeFolder(it, "old run record") }
         return folder.path
     // groovylint-disable-next-line CatchException
     } catch (Exception problem) {                       // a record must never break a run, but its absence must be visible
@@ -1355,7 +1376,7 @@ void recordRun(String appName, Map tool, def module) {
         toMacroOptions(appName, tool, module).each { k, v -> Recorder.recordOption(k, v) }
     // groovylint-disable-next-line CatchException
     } catch (Exception problem) {            // broad on purpose: recording must never break a run, but the failure is not hidden
-        lcLog("WARN", "could not record the run for the macro recorder: " + problem, problem)
+        lcLog("WARNING", "could not record the run for the macro recorder: " + problem, problem)
         IJ.log("LabConstrictor: this run could not be recorded for the macro recorder (" + problem + ")")
     }
 }
@@ -1541,7 +1562,7 @@ String putOnClipboard(String text) {
         java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new java.awt.datatransfer.StringSelection(text), null)
         return null
     } catch (java.awt.HeadlessException | IllegalStateException | SecurityException problem) {
-        lcLog("WARN", "clipboard not available: " + problem, problem)
+        lcLog("WARNING", "clipboard not available: " + problem, problem)
         return problem.toString()
     }
 }
@@ -1574,7 +1595,7 @@ void rememberCommand(Map app, Map tool, Map inputs, Map images, Map summary) {
         new File(stateDir, "last_command.json").setText(groovy.json.JsonOutput.toJson([app: app.name, tool: tool.id, terminal: summary.command_line, python: summary.python_snippet]), "UTF-8")
     // groovylint-disable-next-line CatchException
     } catch (Exception problem) {          // broad on purpose: the copyable command is a convenience and must never break a run; the failure is shown, not hidden
-        lcLog("WARN", "could not build the command text: " + problem, problem)
+        lcLog("WARNING", "could not build the command text: " + problem, problem)
         IJ.log("LabConstrictor: could not build the command to repeat this run (" + problem + ")")
         summary.command_error = problem.toString()
     }
