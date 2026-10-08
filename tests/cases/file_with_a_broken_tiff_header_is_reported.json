@@ -1,0 +1,13 @@
+{
+ "app": "synthetic",
+ "tool": "Kitchen sink",
+ "overrides": {
+  "image_file": "${FIXTURES}/broken_header.tif",
+  "required_string": "hello"
+ },
+ "expect": {
+  "log_contains": [
+   "fiji: could not read the pixel size from"
+  ]
+ }
+}
