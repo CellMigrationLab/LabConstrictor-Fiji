@@ -1,0 +1,23 @@
+{
+ "app": "crashy",
+ "tool": "Returns NaN and numpy values",
+ "register": [
+  {
+   "name": "crashy",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/crashy_app"
+   ]
+  }
+ ],
+ "expect": {
+  "status": "COMPLETE",
+  "log_contains": [
+   "nan=(not a finite number)",
+   "inf=(not a finite number)",
+   "np_int=5",
+   "plain=1.0"
+  ]
+ }
+}

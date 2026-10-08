@@ -54,6 +54,7 @@ import java.nio.file.Files
 @Field final String INTEGER_TEXT = /[+-]?[0-9]+/                                                  // the number grammar shared by every host (labconstrictor_tools conformance)
 @Field final String FLOAT_TEXT = /[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?/
 @Field final List<String> NON_FINITE_WORDS = ["nan", "inf", "infinity"]                              // refused as "not a finite number", like the worker does after parsing them
+@Field final String NOT_FINITE_TEXT = "(not a finite number)"   // how a null in a numeric result reads (PROTOCOL.md: null = not a finite number)
 @Field final int MAX_CHANNELS = 1000             // upper bound of the "channel" field of a PickChannel image
 @Field final int MAX_REGION_OBJECTS = 65535      // labels of the region image (16 bit)
 @Field final int MAX_SHAPES = 50000              // outlines shown on the image
@@ -1087,7 +1088,7 @@ Map showResults(Map app, List results, Map images, Map tool = null) {
             switch (r.type) {
                 case ["image", "labels"]: showImage(app, r, summary, r.name in replaced); break
                 case "table": showTable(r, summary, r.name in replaced); break
-                case "values": IJ.log(app.display_name + " " + r.name + ": " + r.values); summary["values_" + r.name] = r.values; break
+                case "values": showValues(app, r, summary); break
                 case "message": showMessage(app, r, summary); break
                 case "points": showPoints(app, r, images, summary, r.name in replaced); break
                 case "shapes": showShapes(app, r, images, summary, r.name in replaced); break
@@ -1106,6 +1107,20 @@ Map showResults(Map app, List results, Map images, Map tool = null) {
         }
     }
     return summary
+}
+
+/** One value of a `values` result as text. JSON cannot hold NaN or Infinity, so the worker sends them as null: the protocol says a host reads that as "not a finite number". */
+String valueText(def value) {
+    if (value == null) return NOT_FINITE_TEXT
+    return value instanceof List ? "[" + value.collect { valueText(it) }.join(", ") + "]" : value.toString()
+}
+
+/** A values result: `name=value` pairs in the Log (and in the log file, for support). */
+void showValues(Map app, Map r, Map summary) {
+    def text = r.values.collect { key, value -> key + "=" + valueText(value) }.join(", ")
+    IJ.log(app.display_name + " " + r.name + ": " + text)
+    lcLog("INFO", "result values " + r.name + ": " + text)
+    summary["values_" + r.name] = r.values
 }
 
 /** An image / labels result: opened as a new window `<app>:<name>` (numbered when the title is taken; replace=true closes the previous one first). */
