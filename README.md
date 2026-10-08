@@ -19,6 +19,7 @@ environment through [Appose](https://github.com/apposed/appose), so Fiji never i
 * **Image size limit**: an open image of more than 4 GB (all planes, channels and samples) is refused with `image 'T' is 5.0 GB; exporting more than 4 GB is not supported`, never cropped or sent in part (same limit and sentence as the Napari form). An image given as a file is read by the worker and is not checked here.
 * **Refusals before a run** use the worker's sentences with their code: `[missing_parameter] 'L' is required: ...`, `[file_not_found] image file not found: P`, `[folder_not_found] 'L': folder not found: P` (and `[wrong_dimensions]`, see above).
 * **Chooser and description**: applications are listed in sorted order, two tools with the same label are listed as `label (id)` (a macro accepts either), and the tool's description is shown at the top of its dialog.
+* **Worker environment**: like the command line and Napari, the worker keeps Fiji's working directory, never inherits the host's Python or Qt variables and runs with `PYTHONSAFEPATH=1`.
 * **Images from an open window *or* a file**: each image parameter has the open-image chooser and an "(or file)" field (a file
   wins). With no image open, the file field is the only input. TIFF always; other formats if the app has `imageio`.
 * Pixel size follows the chosen image (units converted to micrometres), or the TIFF header for files (the ImageJ unit text, else the TIFF resolution unit: inch or centimetre), until you type a value in the field: a value you typed is never overwritten when you pick another image. Pixels that are not square are warned about in the Log (`pixel size differs: Y .. µm, X .. µm - the tool takes one value and gets X`): the tool receives X.
@@ -69,6 +70,7 @@ These are deliberate: the host does something simpler instead of failing, writes
 | Pixel size of a file cannot be read from its header | The field is left for you to fill in | A line in the Log window ("could not read the pixel size from ...; enter it by hand") |
 | Points or outlines whose image was given as a file (no window to put them on) | Points are shown as a table, outlines only logged; they are never put on another image | A line in the Log window saying the image is a file, not an open window |
 | No clipboard (headless, or locked) for "copy last run" | The command is printed instead of copied | The command in the Log window with the reason |
+| Fiji was started from a conda or venv (`PYTHONHOME`, `VIRTUAL_ENV`, `CONDA_PREFIX`, `QT_PLUGIN_PATH` are set) | The worker gets those variables set to the empty string: Appose can add variables to a worker's environment but not remove them, and Python, conda and Qt read an empty value as unset | Nothing (one line per variable in the log) |
 | File system without POSIX permissions | The permission checks of the trust check cannot apply to that entry | Nothing (logged as a warning) |
 
 ## Tests

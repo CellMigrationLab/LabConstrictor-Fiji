@@ -32,6 +32,7 @@ import java.nio.file.Files
 
 // timeouts and polling
 @Field final String CANCELLED_AFTER_KILL = "cancelled (worker stopped)"   // the status after a Cancel the tool ignored (same words as the Napari form)
+@Field final List<String> SCRUBBED_ENV = ["PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX", "QT_PLUGIN_PATH"]   // variables of the host's environment the worker must not inherit (PYTHONPATH is always set)
 @Field final int CANCEL_GRACE_MS = 3000          // how long a tool gets to honour Cancel before its worker is killed
 @Field final int EXIT_WAIT_MS = 15000            // heavy interpreters (torch, numba) need a few seconds to exit after stdin closes
 @Field final int CANCEL_POLL_MS = 50             // while a task runs: how often Esc, the harness's cancel time and the task status are looked at
@@ -952,8 +953,14 @@ List exportInputs(Map tool, def module, File jobDir) {
 /** The worker process of an app (not started yet); its stderr goes to the log and, as a tail, into `workerOutput`. */
 Service newWorkerService(Map app, List<String> workerOutput) {
     def command = [app.python, "-m", "labconstrictor_tools", "serve", "--module", app.module] + app.pythonpath.collectMany { ["--pythonpath", it] }
-    def env = [PYTHONPATH: app.runtime_path, PYTHONNOUSERSITE: "1", PYTHONIOENCODING: "utf-8", PYTHONUNBUFFERED: "1"]
-    def service = new Service(new File(app.prefix), env, command as String[])
+    def env = [PYTHONPATH: app.runtime_path, PYTHONNOUSERSITE: "1", PYTHONSAFEPATH: "1", PYTHONIOENCODING: "utf-8", PYTHONUNBUFFERED: "1"]
+    // Appose can only add variables to the worker's environment, not remove them: what must not leak in from Fiji's own environment (the
+    // conda or venv it was started from) is set to the empty string, which Python, conda and Qt read as "not set"
+    SCRUBBED_ENV.findAll { System.getenv(it) != null }.each { name ->
+        env[name] = ""
+        lcLog("INFO", "worker environment: " + name + " is set in Fiji's environment and is emptied for the worker")
+    }
+    def service = new Service(new File(System.getProperty("user.dir")), env, command as String[])   // the host's working directory, like labconstrictor_tools.client
     service.debug { String line -> synchronized (workerOutput) { workerOutput << line; if (workerOutput.size() > MAX_KEPT_LINES) workerOutput.removeFirst() }; lcLog("DEBUG", "worker " + line) }
     return service
 }
