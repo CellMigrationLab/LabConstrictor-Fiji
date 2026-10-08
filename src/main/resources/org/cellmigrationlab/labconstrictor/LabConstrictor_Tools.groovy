@@ -513,7 +513,6 @@ void addFloatItem(MutableModuleInfo info, Map p, Map base, boolean overridden, d
 }
 
 // ---------------------------------------------------------------- dialog -> request
-/** Harvested values -> worker inputs. Images are saved as TIFF (calibration travels as explicit parameters). */
 /** One channel of a (hyper)stack as a plain image, at the current Z and T: what a tool declared with PickChannel receives. */
 ImagePlus channelOf(ImagePlus imp, int channel, String label) {
     if (channel < 1 || channel > imp.getNChannels())
@@ -547,51 +546,59 @@ File selectionMask(Map p, Map tool, def module, File jobDir) {
     return file
 }
 
+/** An image parameter's value for the worker: [file the worker reads, what to remember as the image (an ImagePlus, or the path to open later)],
+ *  or null when the parameter is optional and was not given. */
+List exportImage(Map p, Map tool, def module, File jobDir) {
+    if (p.region_of && module.getInput("selection_" + p.name)) {   // RegionOf: the selection is the value
+        def maskFile = selectionMask(p, tool, module, jobDir)
+        return [maskFile.path, maskFile.path]
+    }
+    def chosen = module.getInput(p.name + "_file") as File
+    if (chosen) return exportImageFile(p, module, chosen, jobDir)   // a file wins over the open image: the worker reads it directly
+    if (!p.required && !module.getInput("use_" + p.name)) return null
+    return exportOpenImage(p, module, jobDir)
+}
+
+/** An image given as a file: the worker reads it directly, except that PickChannel writes the chosen channel of it for the worker. */
+List exportImageFile(Map p, def module, File chosen, File jobDir) {
+    if (!chosen.isFile()) throw new IllegalArgumentException("'" + p.label + "': file not found: " + chosen.path)
+    def opened = p.pick_channel ? IJ.openImage(chosen.path) : null
+    if (opened != null) {                                     // PickChannel: the file's chosen channel is written for the worker
+        def picked = channelOf(opened, (module.getInput(p.name + "_channel") ?: 1) as int, p.label as String)
+        def channelFile = new File(jobDir, p.name + ".tif")
+        new FileSaver(picked).saveAsTiff(channelFile.path)
+        return [channelFile.path, chosen.path]
+    }
+    return [chosen.path, chosen.path]                         // opened later only if a result needs it (see asImage)
+}
+
+/** An image chosen from the open windows, saved into the job folder as TIFF (one channel for PickChannel, one plane for axes "YX"). */
+List exportOpenImage(Map p, def module, File jobDir) {
+    def chosenImage = LCModule.imageOf(module.getInput(p.name))
+    if (chosenImage == null) throw new IllegalArgumentException("'" + p.label + "' is required: open an image or choose a file")
+    def file = new File(jobDir, p.name + ".tif")
+    if (file.canonicalFile.parentFile != jobDir.canonicalFile) throw new IllegalArgumentException("'" + p.label + "': refusing to write outside " + jobDir)
+    def imp = chosenImage
+    if (p.pick_channel) {                                   // PickChannel: exactly the channel that was chosen, at the current Z and T
+        imp = channelOf(imp, (module.getInput(p.name + "_channel") ?: 1) as int, p.label as String)
+    } else if (p.axes == "YX" && imp.getStackSize() > 1) {          // tool wants one plane: send the one on screen
+        IJ.log("LabConstrictor: '" + p.label + "' needs a single 2D plane - using the current plane (" + imp.getCurrentSlice() + " of " + imp.getStackSize() + ")")
+        imp = new ImagePlus(imp.getTitle(), imp.getProcessor().duplicate())
+        imp.setCalibration(chosenImage.getCalibration())
+    }
+    new FileSaver(imp).saveAsTiff(file.path)
+    return [file.path, chosenImage]
+}
+
+/** Harvested values -> worker inputs. Images are saved as TIFF (calibration travels as explicit parameters). Returns [inputs, images]. */
 List exportInputs(Map tool, def module, File jobDir) {
     def inputs = [:], images = [:]
     tool.inputs.each { p ->
         def value = module.getInput(p.name)
         switch (p.type) {
             case ["image", "labels"]:
-                if (p.region_of && module.getInput("selection_" + p.name)) {   // RegionOf: the selection is the value
-                    def maskFile = selectionMask(p, tool, module, jobDir)
-                    inputs[p.name] = maskFile.path
-                    images[p.name] = maskFile.path
-                    break
-                }
-                def chosen = module.getInput(p.name + "_file") as File
-                if (chosen) {                                                // a file wins over the open image: the worker reads it directly
-                    if (!chosen.isFile()) throw new IllegalArgumentException("'" + p.label + "': file not found: " + chosen.path)
-                    def opened = p.pick_channel ? IJ.openImage(chosen.path) : null
-                    if (opened != null) {                                     // PickChannel: the file's chosen channel is written for the worker
-                        def picked = channelOf(opened, (module.getInput(p.name + "_channel") ?: 1) as int, p.label as String)
-                        def channelFile = new File(jobDir, p.name + ".tif")
-                        new FileSaver(picked).saveAsTiff(channelFile.path)
-                        inputs[p.name] = channelFile.path
-                        images[p.name] = chosen.path
-                        break
-                    }
-                    inputs[p.name] = chosen.path
-                    images[p.name] = chosen.path                              // opened later only if a result needs it (see asImage)
-                    break
-                }
-                if (!p.required && !module.getInput("use_" + p.name)) break
-                def chosenImage = LCModule.imageOf(value)
-                if (chosenImage == null) throw new IllegalArgumentException("'" + p.label + "' is required: open an image or choose a file")
-                value = chosenImage
-                def file = new File(jobDir, p.name + ".tif")
-                if (file.canonicalFile.parentFile != jobDir.canonicalFile) throw new IllegalArgumentException("'" + p.label + "': refusing to write outside " + jobDir)
-                def imp = value as ImagePlus
-                if (p.pick_channel) {                                   // PickChannel: exactly the channel that was chosen, at the current Z and T
-                    imp = channelOf(imp, (module.getInput(p.name + "_channel") ?: 1) as int, p.label as String)
-                } else if (p.axes == "YX" && imp.getStackSize() > 1) {          // tool wants one plane: send the one on screen
-                    IJ.log("LabConstrictor: '" + p.label + "' needs a single 2D plane - using the current plane (" + imp.getCurrentSlice() + " of " + imp.getStackSize() + ")")
-                    imp = new ImagePlus(imp.getTitle(), imp.getProcessor().duplicate())
-                    imp.setCalibration(value.getCalibration())
-                }
-                new FileSaver(imp).saveAsTiff(file.path)
-                inputs[p.name] = file.path
-                images[p.name] = value as ImagePlus
+                def exported = exportImage(p, tool, module, jobDir)
+                if (exported != null) { inputs[p.name] = exported[0]; images[p.name] = exported[1] }
                 break
             case ["table", "file"]:
                 if (value) inputs[p.name] = (value as File).path
