@@ -1,0 +1,5 @@
+{"app": "interactions", "tool": "Mean of a channel",
+ "register": [{"name": "interactions", "prefix": "${PREFIX}", "module": "labconstrictor_tools.examples.interactions", "pythonpath": []}],
+ "overrides": {"image_file": "${FIXTURES}/broken_header.tif", "image_channel": 2},
+ "script_mode_only": true,
+ "expect": {"match": {"error": "could not open"}, "log_contains": ["broken_header.tif"], "absent_keys": ["status", "values_values"]}}
