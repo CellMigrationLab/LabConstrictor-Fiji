@@ -96,6 +96,8 @@ Fiji uses SciJava dialogs, so some presentation hints work differently from Napa
 
 For errors, inspect Fiji's Log and the shared log at `~/.labconstrictor/logs/labconstrictor.log`. The Toolkit also provides `labconstrictor-tools support-bundle`.
 
+For more detail, see [Fiji workflow and results](docs/USING_FIJI.md).
+
 ## For developers and testers
 
 The main bridge lives in `src/main/resources/org/cellmigrationlab/labconstrictor/LabConstrictor_Tools.groovy`; `LabConstrictorCommand.java` provides the Fiji menu entry. The Java side uses Fiji's Appose integration to communicate with the restricted LabConstrictor worker.
