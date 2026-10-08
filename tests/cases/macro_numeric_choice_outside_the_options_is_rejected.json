@@ -1,0 +1,20 @@
+{
+ "app": "parity",
+ "tool": "Typed choices",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "macro": "app=parity tool=[Typed choices] count=7",
+ "expect": {
+  "match": {
+   "error": "must be one of [1, 2, 3]"
+  }
+ }
+}

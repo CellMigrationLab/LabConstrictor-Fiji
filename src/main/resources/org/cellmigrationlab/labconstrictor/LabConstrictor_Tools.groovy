@@ -492,7 +492,8 @@ void addParameterItems(MutableModuleInfo info, Map p, Map context) {
         case "boolean":
             addItem(info, p.name, Boolean, base + [default: overridden ? override : (p.default ?: false)]); break
         case "choice":
-            def choiceItem = addItem(info, p.name, String, base + [choices: p.choices, default: override ?: p.default ?: p.choices[0]])
+            def start = overridden ? override : (p.default != null ? p.default : p.choices[0])
+            def choiceItem = addItem(info, p.name, String, base + [choices: p.choices.collect { it.toString() }, default: start.toString()])
             if (p.widget == "radio" && !p.nullable) choiceItem.setWidgetStyle("radioButtonHorizontal")   // Widget("radio")
             break
         case "integer":
@@ -504,6 +505,16 @@ void addParameterItems(MutableModuleInfo info, Map p, Map context) {
         default:
             throw new IllegalArgumentException("parameter '" + p.name + "' has the unsupported type '" + p.type + "'")
     }
+}
+
+/** The declared choice whose text is `text`, or null. Choices are typed (Literal[1, 2, 3] means the numbers 1, 2, 3, which the worker
+ *  insists on) while a dialog or a macro only has text: the text is mapped back to the declared value. */
+def declaredChoice(Map p, def text) { return p.choices.find { it.toString() == text?.toString() } }
+
+/** The value to send for a choice: the declared choice that `text` names (the worker's refusal, in its words, when there is none). */
+def typedChoice(Map p, def text) {
+    if (declaredChoice(p, text) == null) throw new IllegalArgumentException("'" + p.name + "' must be one of " + p.choices)
+    return declaredChoice(p, text)
 }
 
 /** Image / labels parameter: the chooser of open windows, the "(or file)" field, and the extras (selection, "use" box, channel). */
@@ -822,6 +833,7 @@ List exportInputs(Map tool, def module, File jobDir) {
                 break
             default:
                 if (p.nullable && !module.getInput("set_" + p.name)) break      // unset: the tool receives None
+                if (value != null && p.type == "choice") value = typedChoice(p, value)
                 if (value != null) inputs[p.name] = value
         }
     }
@@ -1340,8 +1352,8 @@ void takeMacroParameter(MacroModule module, Map p, String options) {
             module.values[p.name] = text == null ? (p.default ?: 0) as Double : macroNumber(p, text)
             break
         case "choice":
-            if (text != null && !(text in p.choices)) throw new IllegalArgumentException("'" + p.label + "' must be one of " + p.choices + ", got '" + text + "'")
-            module.values[p.name] = text == null ? (p.default ?: p.choices[0]) : text
+            if (text != null && declaredChoice(p, text) == null) throw new IllegalArgumentException("'" + p.label + "' must be one of " + p.choices + ", got '" + text + "'")
+            module.values[p.name] = text == null ? (p.default != null ? p.default : p.choices[0]) : declaredChoice(p, text)
             break
         default:
             module.values[p.name] = text == null ? (p.default ?: "") : text
