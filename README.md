@@ -100,9 +100,11 @@ For more detail, see [Fiji workflow and results](docs/USING_FIJI.md).
 
 ## Applications
 
-Install an application before opening the Fiji command. Examples with documented Fiji bridge workflows include [Guess the Condition](https://github.com/CellMigrationLab/GuessTheCondition) (blinded image classification), [VLab4Mic](https://github.com/CellMigrationLab/LabConstrictor-VLab4Mic) (image simulation) and [NucleiSky](https://github.com/CellMigrationLab/NucleiSky) (image registration). [Playground](https://github.com/CellMigrationLab/LabConstrictor-Playground) exercises the bridge with synthetic data.
+Fiji discovers tools through the registered LabConstrictor manifest. Applications do **not** need their own Fiji plugin: if an installed application exposes supported tool declarations, its tools can appear in the same command.
 
-For other applications, including CellTracksColab, and direct installer links, see the [Toolkit application list](https://github.com/CellMigrationLab/LabConstrictor-Tools). Only tools registered by the installed application appear in Fiji.
+Examples include [Guess the Condition](https://github.com/CellMigrationLab/GuessTheCondition) for blinded image classification, [VLab4Mic](https://github.com/CellMigrationLab/LabConstrictor-VLab4Mic) for simulation and [NucleiSky](https://github.com/CellMigrationLab/NucleiSky) for image registration. [Playground](https://github.com/CellMigrationLab/LabConstrictor-Playground) provides synthetic test cases. These examples are not a compatibility allowlist.
+
+See the [Toolkit](https://github.com/CellMigrationLab/LabConstrictor-Tools) for more application repositories. Choose tools based on whether their input data and results are useful in Fiji; host-specific presentation still has limits.
 
 ## For developers and testers
 
