@@ -555,7 +555,7 @@ void addParameterItems(MutableModuleInfo info, Map p, Map context) {
             if (p.widget == "radio" && !p.nullable) choiceItem.setWidgetStyle("radioButtonHorizontal")   // Widget("radio")
             break
         case "integer":
-            def intItem = addItem(info, p.name, Integer, base + [default: (overridden ? override : (p.default ?: 0)) as Integer,
+            def intItem = addItem(info, p.name, Integer, base + [default: startNumber(p, overridden, override) as Integer,
                                                                 min: p.minimum as Integer, max: p.maximum as Integer, step: 1])
             if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) intItem.setWidgetStyle("slider")   // Widget("slider")
             break
@@ -573,6 +573,16 @@ def declaredChoice(Map p, def text) { return p.choices.find { it.toString() == t
 def typedChoice(Map p, def text) {
     if (declaredChoice(p, text) == null) throw new IllegalArgumentException("'" + p.name + "' must be one of " + p.choices)
     return declaredChoice(p, text)
+}
+
+/** The starting value of a number field: the harness's, else the declared default, else (a number without one) 0 moved into [minimum, maximum]:
+ *  the nearest allowed value, so that a required number never starts outside its own bounds (same rule as the QuPath form). */
+def startNumber(Map p, boolean overridden, def override) {
+    if (overridden) return override
+    if (p.default != null) return p.default
+    if (p.minimum != null && p.minimum > 0) return p.minimum
+    if (p.maximum != null && p.maximum < 0) return p.maximum
+    return 0
 }
 
 /** Image / labels parameter: the chooser of open windows, the "(or file)" field, and the extras (selection, "use" box, channel). */
@@ -629,7 +639,7 @@ void addFloatItem(MutableModuleInfo info, Map p, Map base, boolean overridden, d
     if (microns != null) value = microns                                                      // calibration prefill (unit-aware)
     if (p.pixel_size_of && value == null)
         IJ.log("LabConstrictor: no pixel size found for '" + p.label + "' (the image has no usable calibration): enter it by hand")
-    def floatItem = addItem(info, p.name, Double, base + [default: (value ?: 0) as Double, min: p.minimum as Double, max: p.maximum as Double, step: FLOAT_STEP])
+    def floatItem = addItem(info, p.name, Double, base + [default: (value != null ? value : startNumber(p, false, null)) as Double, min: p.minimum as Double, max: p.maximum as Double, step: FLOAT_STEP])
     if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) floatItem.setWidgetStyle("slider")   // Widget("slider")
 }
 
