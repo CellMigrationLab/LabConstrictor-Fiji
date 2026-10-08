@@ -47,6 +47,8 @@ import java.nio.file.Files
 @Field final int KEPT_RUN_RECORDS = 50           // newest run folders kept under <home>/runs
 @Field final int RGB_BIT_DEPTH = 24              // ImageJ's colour images: saved as a trailing axis of RGB_SAMPLES
 @Field final int RGB_SAMPLES = 3                 // red, green, blue
+@Field final long MAX_EXPORT_BYTES = 4L * 1024 * 1024 * 1024   // an open image larger than this (all planes, channels and samples) is not written for the worker (same limit as the Napari form)
+@Field final double BYTES_PER_GB = 1024.0d * 1024.0d * 1024.0d
 @Field final int MAX_CHANNELS = 1000             // upper bound of the "channel" field of a PickChannel image
 @Field final int MAX_REGION_OBJECTS = 65535      // labels of the region image (16 bit)
 @Field final int MAX_SHAPES = 50000              // outlines shown on the image
@@ -182,6 +184,7 @@ hooks = [
     setup        : { },                       // called once when a run starts
     beforeDialog : { String title -> },       // called just before each dialog is shown
     cancelAfterMs: { null },                  // ms after the start at which Cancel is sent on its own (null: never)
+    maxExportBytes: { null },                 // a smaller export limit (null: MAX_EXPORT_BYTES), so that a test needs no huge image
     finish       : { Map summary -> },        // called with the run's summary on every way out; its value is the script's result
 ]
 
@@ -838,6 +841,21 @@ void checkAxes(Map p, ImagePlus imp) {
                                                  "D with shape (" + shape.join(", ") + ")"))
 }
 
+/** Bytes of the TIFF saved for `imp`: every plane, channel and colour sample at the pixel type's size. */
+long exportBytes(ImagePlus imp) {
+    long bytesPerSample = imp.getBitDepth() == RGB_BIT_DEPTH ? 1L : imp.getBitDepth() / Byte.SIZE
+    long samples = imp.getBitDepth() == RGB_BIT_DEPTH ? RGB_SAMPLES : 1L
+    return (long) imp.getWidth() * imp.getHeight() * imp.getStackSize() * samples * bytesPerSample
+}
+
+/** An image above the export limit is refused with a clear sentence, never cropped or sent in part (same words and limit as the Napari form). */
+void checkExportSize(ImagePlus imp) {
+    long limit = hooks.maxExportBytes() ?: MAX_EXPORT_BYTES
+    long size = exportBytes(imp)
+    if (size > limit)
+        throw new IllegalArgumentException(String.format(Locale.ROOT, "image '%s' is %.1f GB; exporting more than %.0f GB is not supported", imp.getTitle(), size / BYTES_PER_GB, limit / BYTES_PER_GB))
+}
+
 /** An image chosen from the open windows, saved into the job folder as TIFF (one channel for PickChannel; a tool with Axes gets exactly that many dimensions or a refusal). */
 List exportOpenImage(Map p, def module, File jobDir) {
     def chosenImage = LCModule.imageOf(module.getInput(p.name))
@@ -849,6 +867,7 @@ List exportOpenImage(Map p, def module, File jobDir) {
         imp = channelOf(imp, (module.getInput(p.name + "_channel") ?: 1) as int, p.label as String)
     }
     checkAxes(p, imp)
+    checkExportSize(imp)
     new FileSaver(imp).saveAsTiff(file.path)
     return [file.path, chosenImage]
 }
