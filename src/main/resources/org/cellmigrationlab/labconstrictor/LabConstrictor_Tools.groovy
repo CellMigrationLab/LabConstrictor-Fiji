@@ -190,6 +190,7 @@ hooks = [
     setup        : { },                       // called once when a run starts
     beforeDialog : { String title -> },       // called just before each dialog is shown
     cancelAfterMs: { null },                  // ms after the start at which Cancel is sent on its own (null: never)
+    maxShapes     : { null },                 // a smaller outline cap (null: MAX_SHAPES), so that a test needs no 50 000 outlines
     maxExportBytes: { null },                 // a smaller export limit (null: MAX_EXPORT_BYTES), so that a test needs no huge image
     finish       : { Map summary -> },        // called with the run's summary on every way out; its value is the script's result
 ]
@@ -1203,15 +1204,16 @@ ij.gui.ShapeRoi polygonRoi(List part) {
     return new ij.gui.ShapeRoi(path)
 }
 
-/** The ROIs of a GeoJSON feature collection (at most MAX_SHAPES, named `prefix label[.n]`), how many polygons it had and how many have holes. */
-Map outlinesOf(def collection, String prefix) {
-    def rois = [], holes = 0, total = 0
-    collection.features.each { feature ->
+/** The ROIs of a GeoJSON feature collection (every polygon of the first `limit` features, named `prefix label[.n]`), the polygons and features it had
+ *  in all and how many polygons have holes. The cap counts features, the author's objects, like the other hosts. */
+Map outlinesOf(def collection, String prefix, int limit) {
+    def rois = [], holes = 0, polygons = 0
+    collection.features.eachWithIndex { feature, index ->
         def geometry = feature.geometry
         def parts = geometry.type == "Polygon" ? [geometry.coordinates] : geometry.coordinates
+        polygons += parts.size()
+        if (index >= limit) return
         parts.each { part ->
-            total++
-            if (rois.size() >= MAX_SHAPES) return
             if (part.size() > 1) holes++
             def roi = polygonRoi(part)
             def label = feature.properties?.label
@@ -1219,7 +1221,7 @@ Map outlinesOf(def collection, String prefix) {
             rois << roi
         }
     }
-    return [rois: rois, holes: holes, total: total]
+    return [rois: rois, holes: holes, total: polygons, features: collection.features.size()]
 }
 
 /** Replace(): remove the earlier outlines of this output (named `prefix ...`) from the overlay and the ROI Manager. */
@@ -1236,7 +1238,8 @@ void showShapes(Map app, Map r, Map images, Map summary, boolean replace) {
     def collection = new JsonSlurper().parse(new File(r.path as String), "UTF-8")
     def target = resultTarget(r, images)
     def prefix = app.name + ":" + r.name
-    def outlines = outlinesOf(collection, prefix)
+    def limit = hooks.maxShapes() ?: MAX_SHAPES
+    def outlines = outlinesOf(collection, prefix, limit)
     def rois = outlines.rois, holes = outlines.holes, total = outlines.total
     if (target == null) {
         IJ.log("LabConstrictor: '" + r.name + "' has " + total + " outline(s) but " + noWindowReason(images) + " (open an image and run again)")
@@ -1251,10 +1254,15 @@ void showShapes(Map app, Map r, Map images, Map summary, boolean replace) {
     overlay.setStrokeColor(java.awt.Color.YELLOW)
     target.updateAndDraw()
     rois.take(MAX_MANAGER_SHAPES).each { manager.addRoi(it.clone() as ij.gui.Roi) }
-    if (total > MAX_SHAPES) IJ.log("LabConstrictor: '" + r.name + "': showing the first " + MAX_SHAPES + " of " + total + " outlines")
+    if (outlines.features > limit) {
+        def sentence = "'" + r.name + "': showing the first " + limit + " of " + outlines.features + " outlines"
+        IJ.log("LabConstrictor: " + sentence)
+        lcLog("INFO", "shapes " + sentence)
+    }
     if (rois.size() > MAX_MANAGER_SHAPES) IJ.log("LabConstrictor: '" + r.name + "': the ROI Manager lists the first " + MAX_MANAGER_SHAPES + " of " + rois.size() + " outlines (all are in the overlay)")
     if (holes) IJ.log("LabConstrictor: '" + r.name + "': " + holes + " outline(s) have holes (kept in the overlay and the ROI Manager)")
-    summary["shapes_" + r.name] = [count: total, shown: rois.size(), holes: holes, image: target.getTitle(), overlay_size: overlay.size(), manager_count: manager.getCount()]
+    summary["shapes_" + r.name] = [count: total, shown: rois.size(), holes: holes, image: target.getTitle(), overlay_size: overlay.size(), manager_count: manager.getCount(),
+                                   features: outlines.features]
 }
 
 /** Show `table` in a results window called `title`. ImageJ would overwrite an open window of that name, so a table that does not replace its
