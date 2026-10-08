@@ -1,0 +1,23 @@
+{
+ "app": "parity",
+ "tool": "Bounded numbers",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "equals": {
+   "dialog_messages": {
+    "tool_description": "Required numbers with no default: each starts at the allowed value nearest to 0."
+   }
+  }
+ }
+}

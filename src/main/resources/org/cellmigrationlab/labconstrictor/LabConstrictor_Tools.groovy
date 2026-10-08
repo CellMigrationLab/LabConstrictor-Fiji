@@ -459,6 +459,12 @@ def harvest(MutableModuleInfo info, String title, Map links = [:]) {
     return moduleService.run(module, true).get()
 }
 
+/** [name shown in the chooser, tool] for each tool of the app: the label, or `label (id)` when two tools share a label (never pick the wrong one). */
+List toolChoices(Map app) {
+    def labels = app.schema.tools.collect { it.label }
+    return app.schema.tools.collect { t -> [labels.count(t.label) == 1 ? t.label : t.label + " (" + t.id + ")", t] }
+}
+
 /** Ask the user to pick one of `choices`; a single choice needs no dialog (and avoids SciJava's single-input prompt). */
 String pickOne(String title, String label, List<String> choices, String preferred) {
     if (choices.size() == 1) return choices[0]
@@ -529,6 +535,8 @@ List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
         addItem(info, "image_source_note", String, [label: "Image source", message: true, required: false,
                                                     default: "Images are taken from the open windows. To use a file instead, choose it in the matching '(or file)' field."])
     }
+    if (tool.description)                                    // the tool's description above the form, as in the other hosts
+        addItem(info, "tool_description", String, [label: "Description", message: true, required: false, default: tool.description as String])
     int headings = 0
     dialogRows(tool.inputs).each { row ->
         if (row.heading) addItem(info, "heading_" + (headings++), String, [label: row.heading, message: true, required: false, default: "— " + row.heading + " —"])
@@ -753,6 +761,7 @@ void describeDialog(Map summary, def info) {
     summary.dialog_choices = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getChoices() as List] }
     summary.dialog_styles = info.inputs().findAll { it.getWidgetStyle() }.collectEntries { [(it.getName()): it.getWidgetStyle()] }
     summary.dialog_defaults = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getDefaultValue()] }
+    summary.dialog_messages = info.inputs().findAll { it.getVisibility() == org.scijava.ItemVisibility.MESSAGE }.collectEntries { [(it.getName()): it.getDefaultValue()] }
 }
 
 /** The way out of an interactive request that the person cancelled: nothing is run. */
@@ -760,12 +769,13 @@ Map cancelled(Map summary) { return [aborted: true, result: hooks.finish(summary
 
 /** Interactive run: choose the app and tool, show the tool's dialog, record the run. Returns [app, tool, module], or [aborted: true, result: ...] when cancelled. */
 Map requestFromDialog(Map found, Map summary) {
-    def appName = pickOne("LabConstrictor", "Application", found.apps.keySet().toList(), hooks.preferred("app"))
+    def appName = pickOne("LabConstrictor", "Application", found.apps.keySet().toList().sort(), hooks.preferred("app"))
     if (appName == null) return cancelled(summary)
     def app = found.apps[appName]
-    def toolLabel = pickOne("LabConstrictor: " + app.display_name, "Tool", app.schema.tools.collect { it.label }, hooks.preferred("tool"))
-    if (toolLabel == null) return cancelled(summary)
-    def tool = app.schema.tools.find { it.label == toolLabel }
+    def choices = toolChoices(app)
+    def toolName = pickOne("LabConstrictor: " + app.display_name, "Tool", choices.collect { it[0] as String }, hooks.preferred("tool"))
+    if (toolName == null) return cancelled(summary)
+    def tool = choices.find { it[0] == toolName }[1] as Map
 
     def openImages = WindowManager.getImageTitles() as List<String>
     def dialogStarted = System.nanoTime()
@@ -774,7 +784,7 @@ Map requestFromDialog(Map found, Map summary) {
     describeDialog(summary, info)
     def module = harvest(info, tool.label, links)
     if (module == null) return cancelled(summary)
-    recordRun(appName, tool, module)
+    recordRun(app, tool, module)
     return [app: app, tool: tool, module: module]
 }
 
@@ -1390,8 +1400,8 @@ String macroOptions() {
 }
 
 /** The dialog's choices as macro options (key -> text). Images by window title, or `<name>_file` for a file. */
-Map<String, String> toMacroOptions(String appName, Map tool, def module) {
-    def o = [app: appName, tool: tool.label] as LinkedHashMap
+Map<String, String> toMacroOptions(Map app, Map tool, def module) {
+    def o = [app: app.name, tool: toolChoices(app).find { it[1].id == tool.id }[0]] as LinkedHashMap
     tool.inputs.each { p ->
         switch (p.type) {
             case ["image", "labels"]:
@@ -1416,10 +1426,10 @@ Map<String, String> toMacroOptions(String appName, Map tool, def module) {
 }
 
 /** Tell the macro recorder what this run was (only when the recorder is open); the command line becomes a replayable run(...). */
-void recordRun(String appName, Map tool, def module) {
+void recordRun(Map app, Map tool, def module) {
     try {
         if (!Recorder.record) return
-        toMacroOptions(appName, tool, module).each { k, v -> Recorder.recordOption(k, v) }
+        toMacroOptions(app, tool, module).each { k, v -> Recorder.recordOption(k, v) }
     // groovylint-disable-next-line CatchException
     } catch (Exception problem) {            // broad on purpose: recording must never break a run, but the failure is not hidden
         lcLog("WARNING", "could not record the run for the macro recorder: " + problem, problem)
@@ -1533,7 +1543,7 @@ Map requestFromMacro(Map found, String macro, Map summary) {
     def appName = found.apps.keySet().find { it.equalsIgnoreCase(appText) }
     if (appName == null) return [aborted: true, result: failEarly(summary, "unknown app '" + Macro.getValue(macro, "app", "") + "' (registered: " + found.apps.keySet().join(", ") + ")")]
     def app = found.apps[appName]
-    def tool = app.schema.tools.find { it.label.equalsIgnoreCase(toolText) || it.id == Macro.getValue(macro, "tool", "") }
+    def tool = toolChoices(app).find { it[0].equalsIgnoreCase(toolText) }?.getAt(1) ?: app.schema.tools.find { it.label.equalsIgnoreCase(toolText) || it.id == Macro.getValue(macro, "tool", "") }
     if (tool == null) return [aborted: true, result: failEarly(summary, "unknown tool '" + Macro.getValue(macro, "tool", "") + "' in " + appName + " (tools: " + app.schema.tools.collect { it.label }.join(", ") + ")")]
     def module
     try { module = moduleFromMacro(tool, macro) } catch (IllegalArgumentException | NumberFormatException problem) { return [aborted: true, result: failEarly(summary, problem.message ?: problem.toString())] }
