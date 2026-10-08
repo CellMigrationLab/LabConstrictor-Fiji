@@ -1,0 +1,14 @@
+{
+ "unit_checks": [
+  "crash_hints"
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 8
+  }
+ }
+}

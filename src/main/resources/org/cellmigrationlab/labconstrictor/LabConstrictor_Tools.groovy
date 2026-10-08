@@ -74,7 +74,7 @@ import java.nio.file.Files
 
 // worker exit codes (POSIX shell convention: 128 + signal; Windows: NTSTATUS) that crashHint explains
 @Field final List<Long> EXIT_KILLED = [-9L, 137L]                    // SIGKILL (the OOM killer)
-@Field final List<Long> EXIT_SEGFAULT = [-11L, 139L, 3221225477L]    // SIGSEGV / access violation
+@Field final List<Long> EXIT_SEGFAULT = [-11L, 139L, 3221225477L, -1073741819L]    // SIGSEGV / access violation (Windows: 0xC0000005, unsigned in Python, signed in Java)
 @Field final long EXIT_IMPORT_FAILED = 3L                            // the serve command's own code for "tool module failed to import"
 
 // ---- calibration sync: a dialog module that keeps pixel-size fields in step with the chosen image or file
