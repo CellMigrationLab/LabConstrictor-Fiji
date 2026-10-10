@@ -1,0 +1,5 @@
+# yaml-language-server: $schema=https://labconstrictor.cellmig.org/schema/labconstrictor-project.schema.json
+# How this project is listed on the LabConstrictor website's Ecosystem page. Keep the status true.
+name: Fiji
+summary: Plugins > LabConstrictor > LabConstrictor Tools lists the tools of every installed app and builds a dialog for each.
+status: Experimental
