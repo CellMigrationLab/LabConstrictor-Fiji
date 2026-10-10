@@ -9,7 +9,7 @@ One Fiji command runs the tools of every installed LabConstrictor app, with a di
 
 ## What you need
 
-- Fiji.
+- [Fiji](https://fiji.sc).
 - At least one LabConstrictor app installed on your computer. The app's installer registers it, which is how the plugin finds it.
 - To build the jar: Java and Maven.
 
