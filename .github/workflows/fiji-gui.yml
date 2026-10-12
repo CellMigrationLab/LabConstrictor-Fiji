@@ -48,7 +48,7 @@ jobs:
           home=$(dirname "$(find "$PWD/fiji-dist" -maxdepth 2 -name fiji-linux-x64 | head -n 1)")
           test -d "$home/jars"
           ls "$home/jars" | grep -E '^(imagej|scijava-common)-[0-9]' || true
-          "$home"/java/linux-amd64/*/bin/java -version
+          "$(find "$home/java" -path '*/bin/java' | head -n 1)" -version
           echo "LC_FIJI_HOME=$home" >> "$GITHUB_ENV"
       - name: Install the example app's Python side (labconstrictor-tools)
         run: |
