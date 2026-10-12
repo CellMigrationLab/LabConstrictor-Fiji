@@ -1,0 +1,38 @@
+{
+ "app": "victim",
+ "tool": "Scalar echo",
+ "register": [
+  {
+   "name": "victim",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "tamper": [
+  {
+   "schema_replace": [
+    "\"default\": 1.0,\n          \"type\": \"float\"",
+    "\"default\": 1.0,\n          \"type\": \"imagge\""
+   ],
+   "app": "victim"
+  }
+ ],
+ "expect": {
+  "status_in": [
+   "COMPLETE",
+   "FAILED"
+  ],
+  "contains": {
+   "combo_items.LabConstrictor: victim": [
+    "Explode"
+   ]
+  },
+  "not_contains": {
+   "combo_items.LabConstrictor: victim": [
+    "Scalar echo"
+   ]
+  }
+ },
+ "script_mode_only": true
+}

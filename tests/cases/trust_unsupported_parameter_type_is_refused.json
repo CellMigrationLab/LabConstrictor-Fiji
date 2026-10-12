@@ -22,16 +22,6 @@
   "log_contains": [
    "app skipped: ",
    "tool 'scalar_echo': this tool cannot be shown: parameter 'a' has the unknown type 'imagge'"
-  ],
-  "not_contains": {
-   "combo_items.LabConstrictor: victim": [
-    "Scalar echo"
-   ]
-  },
-  "contains": {
-   "combo_items.LabConstrictor: victim": [
-    "Explode"
-   ]
-  }
+  ]
  }
 }
