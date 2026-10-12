@@ -136,6 +136,7 @@ GROOVY = (
     / "labconstrictor"
     / "LabConstrictor_Tools.groovy"
 )
+JAR_INSTALLED = False
 JAR_IN_FIJI = (FIJI or Path(".")) / "plugins" / "labconstrictor-fiji.jar"
 
 
@@ -143,8 +144,11 @@ def install_into_fiji(case=None):
     """LC_FIJI_MODE=script (default): the loose Groovy script. LC_FIJI_MODE=jar: build the plugin jar and call its menu command.
     Returns the launcher arguments that start the tool."""
     if os.environ.get("LC_FIJI_MODE", "script") == "jar":
-        subprocess.run(["mvn", "-q", "-B", "package"], cwd=PLUGIN, check=True, capture_output=True)
-        shutil.copyfile(next((PLUGIN / "target").glob("labconstrictor-fiji-*.jar")), JAR_IN_FIJI)
+        global JAR_INSTALLED
+        if not JAR_INSTALLED:  # one build and one copy per run of this script, not per case
+            subprocess.run(["mvn", "-q", "-B", "package"], cwd=PLUGIN, check=True, capture_output=True)
+            shutil.copyfile(next((PLUGIN / "target").glob("labconstrictor-fiji-*.jar")), JAR_IN_FIJI)
+            JAR_INSTALLED = True
         shutil.rmtree(SCRIPT_DIR, ignore_errors=True)  # never both: the menu would list the tool twice
         macro = Path(tempfile.mkdtemp()) / "start.ijm"
         options = (case or {}).get("macro")

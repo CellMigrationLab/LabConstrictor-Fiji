@@ -1,0 +1,82 @@
+name: fiji-gui
+# The Fiji GUI cases (tests/run_cases.py, tests/cases/*.json): desktop Fiji on a virtual screen (Xvfb), the real SciJava dialogs
+# through the loose script and through the built jar (LC_FIJI_MODE=jar), as the README describes.
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *" # nightly
+concurrency:
+  group: fiji-gui-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  # Fiji must be the build with a Java 21 JDK (the "stable" build still ships Java 8 and its launcher does not take --run).
+  # Fiji publishes no dated JDK builds, so the build is pinned by the cache: it is downloaded once per FIJI_PIN, kept alive by
+  # the nightly run, and the version actually used is printed. To move to a newer Fiji, change FIJI_PIN.
+  FIJI_URL: https://downloads.imagej.net/fiji/latest/fiji-latest-linux64-jdk.zip
+  FIJI_PIN: "2026-10-07"
+jobs:
+  fiji-gui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21", cache: maven }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install xvfb and the libraries Fiji's Swing/AWT needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb xauth libxtst6 libxrender1 libxi6 libxrandr2 libgtk-3-0t64 fonts-dejavu-core
+      - name: Cache Fiji
+        id: fiji-cache
+        uses: actions/cache@v4
+        with:
+          path: fiji-dist
+          key: fiji-${{ env.FIJI_PIN }}
+      - name: Download and check Fiji
+        if: steps.fiji-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL --retry 5 --retry-delay 10 -o fiji.zip "$FIJI_URL"
+          sha256sum fiji.zip
+          mkdir fiji-dist
+          unzip -q fiji.zip -d fiji-dist
+          rm fiji.zip
+      - name: Locate Fiji
+        run: |
+          home=$(dirname "$(find "$PWD/fiji-dist" -maxdepth 2 -name fiji-linux-x64 | head -n 1)")
+          test -d "$home/jars"
+          ls "$home/jars" | grep -E '^(imagej|scijava-common)-[0-9]' || true
+          "$home"/java/linux-amd64/*/bin/java -version
+          echo "LC_FIJI_HOME=$home" >> "$GITHUB_ENV"
+      - name: Install the example app's Python side (labconstrictor-tools)
+        run: |
+          python -m pip install --upgrade pip
+          pip install git+https://github.com/CellMigrationLab/LabConstrictor-Tools numpy pandas tifffile
+      - name: Cases through the loose Groovy script (fast; includes the unit checks and the script-only cases)
+        env:
+          FIJI_TIMEOUT: "300"
+          LC_FIJI_MACRO_PROPERTY: "1"
+        run: python tests/run_cases.py
+      - name: Cases through the built jar (mvn package, installed into Fiji's plugins/, started by the menu command)
+        if: ${{ !cancelled() }}
+        env:
+          LC_FIJI_MODE: jar
+          FIJI_TIMEOUT: "300"
+        run: python tests/run_cases.py
+      - name: Collect Fiji logs
+        if: failure()
+        run: |
+          mkdir -p fiji-logs
+          cp -r evidence fiji-logs/evidence 2>/dev/null || true
+          cp -r "$LC_FIJI_HOME/ImageJ.log" "$LC_FIJI_HOME/logs" fiji-logs/ 2>/dev/null || true
+          find /tmp -maxdepth 2 -name 'lchome_fiji_*' -exec cp -r {} fiji-logs/ \; 2>/dev/null || true
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fiji-gui-logs
+          path: fiji-logs
+          if-no-files-found: ignore
+          retention-days: 14
