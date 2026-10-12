@@ -18,7 +18,7 @@ env:
 jobs:
   fiji-gui:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -63,12 +63,14 @@ jobs:
           "$HOME/lcvenv/bin/pip" install git+https://github.com/CellMigrationLab/LabConstrictor-Tools numpy pandas tifffile scipy scikit-image
           ls -ld "$HOME/lcvenv/bin" "$(readlink -f "$HOME/lcvenv/bin/python")"
       - name: Cases through the loose Groovy script (fast; includes the unit checks and the script-only cases)
+        timeout-minutes: 70   # every case is also killed after FIJI_TIMEOUT seconds (whole process group), so one hung case costs 5 minutes
         env:
           FIJI_TIMEOUT: "300"
           LC_FIJI_MACRO_PROPERTY: "1"
         run: $HOME/lcvenv/bin/python tests/run_cases.py
       - name: Cases through the built jar (mvn package, installed into Fiji's plugins/, started by the menu command)
         if: ${{ !cancelled() }}
+        timeout-minutes: 60
         env:
           LC_FIJI_MODE: jar
           FIJI_TIMEOUT: "300"
