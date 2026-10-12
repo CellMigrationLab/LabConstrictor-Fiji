@@ -23,15 +23,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: "21", cache: maven }
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
       - name: Install xvfb and the libraries Fiji's Swing/AWT needs
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb xauth libxtst6 libxrender1 libxi6 libxrandr2 libgtk-3-0t64 fonts-dejavu-core
-      - name: Cache Fiji
+          sudo apt-get install -y --no-install-recommends xvfb xauth libxtst6 libxrender1 libxi6 libxrandr2 libgtk-3-0t64 fonts-dejavu-core python3-venv
+      - name: Restore Fiji from the cache
         id: fiji-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: fiji-dist
           key: fiji-${{ env.FIJI_PIN }}
@@ -43,6 +41,12 @@ jobs:
           mkdir fiji-dist
           unzip -q fiji.zip -d fiji-dist
           rm fiji.zip
+      - name: Save Fiji to the cache (right after the download, so a failing case run does not lose it)
+        if: steps.fiji-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: fiji-dist
+          key: fiji-${{ env.FIJI_PIN }}
       - name: Locate Fiji
         run: |
           home=$(dirname "$(find "$PWD/fiji-dist" -maxdepth 2 -name fiji-linux-x64 | head -n 1)")
@@ -51,24 +55,24 @@ jobs:
           "$(find "$home/java" -path '*/bin/java' | head -n 1)" -version
           echo "LC_FIJI_HOME=$home" >> "$GITHUB_ENV"
       - name: Install the example app's Python side (labconstrictor-tools) in a venv of our own
-        # The host refuses an interpreter whose folders are writable by everybody (trust rules), and the runner's hosted
-        # tool-cache Python is; a venv in the runner's home is not.
+        # The host refuses an interpreter that is writable by everybody (trust rules; symlinks are followed). The runner's
+        # tool-cache Python is (mode 777), so the venv is made from the distribution's /usr/bin/python3 instead.
         run: |
-          python -m venv "$HOME/lcvenv"
+          /usr/bin/python3 -m venv "$HOME/lcvenv"
           echo "$HOME/lcvenv/bin" >> "$GITHUB_PATH"
           "$HOME/lcvenv/bin/pip" install git+https://github.com/CellMigrationLab/LabConstrictor-Tools numpy pandas tifffile
-          ls -ld "$HOME/lcvenv" "$HOME/lcvenv/bin" "$(dirname "$(readlink -f "$HOME/lcvenv/bin/python")")"
+          ls -ld "$HOME/lcvenv/bin" "$(readlink -f "$HOME/lcvenv/bin/python")"
       - name: Cases through the loose Groovy script (fast; includes the unit checks and the script-only cases)
         env:
           FIJI_TIMEOUT: "300"
           LC_FIJI_MACRO_PROPERTY: "1"
-        run: python tests/run_cases.py
+        run: $HOME/lcvenv/bin/python tests/run_cases.py
       - name: Cases through the built jar (mvn package, installed into Fiji's plugins/, started by the menu command)
         if: ${{ !cancelled() }}
         env:
           LC_FIJI_MODE: jar
           FIJI_TIMEOUT: "300"
-        run: python tests/run_cases.py
+        run: $HOME/lcvenv/bin/python tests/run_cases.py
       - name: Collect Fiji logs
         if: failure()
         run: |
