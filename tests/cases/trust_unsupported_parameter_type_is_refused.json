@@ -12,19 +12,26 @@
  "tamper": [
   {
    "schema_replace": [
-    "\"type\": \"float\"",
-    "\"type\": \"imagge\""
+    "\"default\": 1.0,\n          \"type\": \"float\"",
+    "\"default\": 1.0,\n          \"type\": \"imagge\""
    ],
    "app": "victim"
   }
  ],
  "expect": {
-  "equals": {
-   "error": "no apps registered"
-  },
   "log_contains": [
    "app skipped: ",
-   "unknown type 'imagge'"
-  ]
+   "tool 'scalar_echo': this tool cannot be shown: parameter 'a' has the unknown type 'imagge'"
+  ],
+  "not_contains": {
+   "combo_items.LabConstrictor: victim": [
+    "Scalar echo"
+   ]
+  },
+  "contains": {
+   "combo_items.LabConstrictor: victim": [
+    "Explode"
+   ]
+  }
  }
 }

@@ -81,7 +81,7 @@ These are deliberate: the host does something simpler instead of failing, writes
 `tests/run_cases.py` drives desktop Fiji on a virtual screen (Linux: `xvfb-run`), answering the real SciJava dialogs with
 `tests/test_harness.groovy` (the only place with test hooks) and writing JSON reports and screenshots to `evidence/`.
 
-    pip install git+https://github.com/CellMigrationLab/LabConstrictor-Tools numpy pandas tifffile
+    pip install git+https://github.com/CellMigrationLab/LabConstrictor-Tools numpy pandas tifffile scipy scikit-image
     export LC_FIJI_HOME=/path/to/Fiji.app
     python tests/run_cases.py                      # 21 portable cases (example app and small test apps), loose script
     LC_FIJI_MODE=jar python tests/run_cases.py     # the same 21 through the built jar (needs mvn); about 5 minutes each

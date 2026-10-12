@@ -60,7 +60,7 @@ jobs:
         run: |
           /usr/bin/python3 -m venv "$HOME/lcvenv"
           echo "$HOME/lcvenv/bin" >> "$GITHUB_PATH"
-          "$HOME/lcvenv/bin/pip" install git+https://github.com/CellMigrationLab/LabConstrictor-Tools numpy pandas tifffile
+          "$HOME/lcvenv/bin/pip" install git+https://github.com/CellMigrationLab/LabConstrictor-Tools numpy pandas tifffile scipy scikit-image
           ls -ld "$HOME/lcvenv/bin" "$(readlink -f "$HOME/lcvenv/bin/python")"
       - name: Cases through the loose Groovy script (fast; includes the unit checks and the script-only cases)
         env:
