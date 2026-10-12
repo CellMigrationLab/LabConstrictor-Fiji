@@ -1,6 +1,6 @@
 # Install the Fiji plugin
 
-One Fiji command runs the tools of every installed LabConstrictor app, with a dialog generated from each tool's declaration.
+One Fiji (ImageJ) command runs the tools of every installed LabConstrictor app, with a dialog generated from each tool's declaration.
 
 > [!WARNING]
 > **Under heavy construction.** This plugin is untested and unlikely to be stable. Expect bugs, missing features and changes without notice. Do not rely on it for work you cannot redo.
@@ -26,6 +26,8 @@ Without building: copy the script `src/main/resources/org/cellmigrationlab/labco
 ## Open it
 
 Choose **Plugins > LabConstrictor > LabConstrictor Tools...**. Pick an app and a tool, fill in the dialog, and press OK.
+
+A first run needs an installed LabConstrictor app that declares tools. If none is registered, Fiji shows the message "No LabConstrictor apps are registered" and stops.
 
 - Each image input has a chooser for an open image and an "(or file)" field. A file wins.
 - Results open as image windows, a Results table, ROIs or overlays on the image, or lines in the Log window.
