@@ -1,0 +1,14 @@
+{
+ "unit_checks": [
+  "form_integers"
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 14
+  }
+ }
+}

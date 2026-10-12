@@ -21,8 +21,14 @@
  "expect": {
   "status": "COMPLETE",
   "log_contains": [
-   "could not show the result",
-   "singular"
-  ]
+   "the alignment matrix is singular",
+   "collapses onto a line or a point"
+  ],
+  "equals": {
+   "open_windows": [
+    "sample.tif",
+    "Alignment overlay (green = , magenta = image)"
+   ]
+  }
  }
 }

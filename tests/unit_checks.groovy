@@ -66,6 +66,72 @@ def groups = [
         check("minimum template", refusal([type: "integer", label: "L", minimum: 3], "2") == "'L' must be >= 3, got 2")
         check("exponent value", lc.macroNumber(decimal, "1E-2") == 0.01d)
         check("integer is an int", lc.macroNumber(integer, "+7") instanceof Integer)
+        check("integer template", refusal(integer, "2.5") == "'L' must be an integer, got '2.5'", refusal(integer, "2.5"))
+        check("float template", refusal(decimal, "abc") == "'L' must be a number, got 'abc'", refusal(decimal, "abc"))
+        def words = [name: "mode", label: "Mode", choices: ["fast", "it's"]]
+        def numbers = [name: "n", label: "N", choices: [1, 2, 3]]
+        check("choices of text as Python writes them", lc.choicesText(words) == "['fast', 'it\\'s']", lc.choicesText(words))
+        check("choices of numbers", lc.choicesText(numbers) == "[1, 2, 3]", lc.choicesText(numbers))
+        check("choice template uses the name", refuses { lc.typedChoice(words, "slow") } == "'mode' must be one of ['fast', 'it\\'s']", refuses { lc.typedChoice(words, "slow") })
+    },
+    affine_warp: {
+        def plane = new ij.process.FloatProcessor(3, 3, [1, 2, 3, 4, 5, 6, 7, 8, 9] as float[])
+        def image = new ij.ImagePlus("plane", plane)
+        def pixels = { List matrix -> (0..<9).collect { lc.resample(image, 3, 3, matrix).getf(it) as double } }
+        check("identity keeps the pixels", pixels([[1, 0, 0], [0, 1, 0]]) == [1, 2, 3, 4, 5, 6, 7, 8, 9] as List<Double>, pixels([[1, 0, 0], [0, 1, 0]]).toString())
+        // [y', x'] = M [y, x]: x' = 0 for every pixel, so each row collapses onto its first column (the mean of the row)
+        def collapsed = pixels([[1, 0, 0], [0, 0, 0]])
+        check("singular matrix still applied", collapsed == [2, 0, 0, 5, 0, 0, 8, 0, 0] as List<Double>, collapsed.toString())
+        check("singular is detected", lc.determinantOf([[1, 0, 0], [0, 0, 0]]).singular)
+        check("regular is not singular", !lc.determinantOf([[1, 0, 0], [0, 2, 0]]).singular)
+        check("determinant", lc.determinantOf([[1, 0, 0], [0, 2, 0]]).det == 2d)
+        def failure = null
+        try { lc.resample(image, 3, 3, [[1, 0, 0], [0, Double.NaN, 0]]) } catch (IllegalStateException problem) { failure = problem.message }
+        check("non-finite matrix refused", failure == "the alignment matrix contains values that are not finite numbers", failure)
+    },
+    usable_tools: {
+        def schema = [protocol: 1, tools: [
+            [id: "fine", label: "Fine", inputs: [[name: "a", label: "A", type: "float"]], outputs: []],
+            [id: "odd", label: "Odd", inputs: [[name: "x", label: "X", type: "float"], [name: "m", label: "M", type: "matrix"]], outputs: []],
+        ]]
+        check("schema with an unknown type is still well formed", lc.schemaProblem(schema) == null, lc.schemaProblem(schema))
+        def usable = lc.usableTools(schema)
+        check("the known tool stays", usable.tools*.id == ["fine"], usable.tools*.id.toString())
+        check("the other is named", usable.skipped == ["tool 'odd': this tool cannot be shown: parameter 'm' has the unknown type 'matrix'"], usable.skipped.toString())
+        check("nothing skipped when all are known", lc.usableTools([tools: [schema.tools[0]]]).skipped == [])
+    },
+    quote_vectors: {
+        // tests/fixtures/quote_vectors.json: a copy of LabConstrictor-Tools tests/quote_vectors.json (the shared vectors every host quotes by)
+        def vectors = new JsonSlurper().parseText(new File(cfg.vectors as String).text)
+        vectors.each { v ->
+            check("posix " + v.label, lc.shellQuote(v.text as String, false) == v.posix, lc.shellQuote(v.text as String, false))
+            check("windows " + v.label, lc.shellQuote(v.text as String, true) == v.windows, lc.shellQuote(v.text as String, true))
+        }
+    },
+    form_integers: {
+        def limit = 9007199254740991L                                  // 2**53 - 1
+        def wideInteger = { Map extra -> [type: "integer", name: "big", label: "Big", required: true] + extra }
+        def refusal = { Map p, String given -> refuses { lc.macroNumber(p, given) } }
+        check("the limit", lc.MAX_FORM_INTEGER == limit)
+        check("bounds within the limit are kept", lc.integerLimits(wideInteger([minimum: -5, maximum: 5_000_000_000L])) == [minimum: -5L, maximum: 5_000_000_000L, limited: false])
+        def beyond = lc.integerLimits(wideInteger([minimum: -(10G ** 20), maximum: 10G ** 20]))
+        check("bounds beyond the limit are narrowed and said", beyond == [minimum: -limit, maximum: limit, limited: true], beyond.toString())
+        def wide = wideInteger([maximum: 5_000_000_000L])
+        check("a wide bound is not cut to 32 bits", lc.macroNumber(wide, "3000000000") == 3_000_000_000L, lc.macroNumber(wide, "3000000000").toString())
+        check("a small value stays an int", lc.macroNumber(wide, "7") instanceof Integer)
+        check("beyond a wide bound", refusal(wide, "5000000001") == "'Big' must be <= 5000000000, got 5000000001", refusal(wide, "5000000001"))
+        def huge = wideInteger([maximum: 10G ** 20])
+        check("the limit itself is accepted", lc.macroNumber(huge, "9007199254740991") == limit)
+        check("beyond the limit is refused", refusal(huge, "9007199254740992") == "'Big' must be <= 9007199254740991, got 9007199254740992", refusal(huge, "9007199254740992"))
+        check("below the limit is refused", refusal(huge, "-9007199254740992") == "'Big' must be >= -9007199254740991, got -9007199254740992", refusal(huge, "-9007199254740992"))
+        check("32 bits", lc.fitsInt(2147483647) && !lc.fitsInt(2147483648L) && lc.fitsInt(-2147483648) && !lc.fitsInt(-2147483649L))
+        def itemOf = { Map p -> lc.buildToolDialog([label: "T", inputs: [p], outputs: []], [])[0].getInput("big") }
+        check("small bounds: a 32-bit field", itemOf(wideInteger([minimum: 1, maximum: 9])).getType() == Integer)
+        check("wide bound: a 64-bit field", itemOf(wideInteger([maximum: 5_000_000_000L])).getType() == Long)
+        def limited = itemOf(wideInteger([minimum: 0, maximum: 10G ** 20]))
+        check("limit beyond: a 64-bit field with the limit in its description", limited.getType() == Long && limited.getDescription() == "Whole numbers up to +-9007199254740991." && limited.getMaximumValue() == limit,
+              limited.getType().toString() + " " + limited.getDescription() + " " + limited.getMaximumValue())
+        check("a wide default is kept", itemOf(wideInteger([default: 4_000_000_000L])).getDefaultValue() == 4_000_000_000L)
     },
 ]
 

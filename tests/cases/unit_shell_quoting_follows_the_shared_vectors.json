@@ -1,0 +1,15 @@
+{
+ "unit_checks": [
+  "quote_vectors"
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 60
+  }
+ },
+ "vectors": "${FIXTURES}/quote_vectors.json"
+}

@@ -24,7 +24,7 @@
   },
   "log_contains": [
    "app skipped: ",
-   "unsupported type imagge"
+   "unknown type 'imagge'"
   ]
  }
 }

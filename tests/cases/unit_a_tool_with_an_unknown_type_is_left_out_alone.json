@@ -1,0 +1,14 @@
+{
+ "unit_checks": [
+  "usable_tools"
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 4
+  }
+ }
+}

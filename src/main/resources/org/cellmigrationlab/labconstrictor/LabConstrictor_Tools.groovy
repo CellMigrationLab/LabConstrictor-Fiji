@@ -52,6 +52,7 @@ import java.nio.file.Files
 @Field final int RGB_SAMPLES = 3                 // red, green, blue
 @Field final long MAX_EXPORT_BYTES = 4L * 1024 * 1024 * 1024   // an open image larger than this (all planes, channels and samples) is not written for the worker (same limit as the Napari form)
 @Field final double BYTES_PER_GB = 1024.0d * 1024.0d * 1024.0d
+@Field final long MAX_FORM_INTEGER = 9_007_199_254_740_991L       // 2**53 - 1: the largest whole number a form holds exactly (labconstrictor_tools.notebook.MAX_FORM_INTEGER)
 @Field final String INTEGER_TEXT = /[+-]?[0-9]+/                                                  // the number grammar shared by every host (labconstrictor_tools conformance)
 @Field final String FLOAT_TEXT = /[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?/
 @Field final List<String> NON_FINITE_WORDS = ["nan", "inf", "infinity"]                              // refused as "not a finite number", like the worker does after parsing them
@@ -372,11 +373,22 @@ String schemaProblem(def schema) {
         for (p in tool.inputs) {
             if (!(p instanceof Map) || !identifier(p.name) || !(p.label instanceof String))
                 return "tool '" + tool.id + "' has a parameter without an identifier name and a text label"
-            if (!(p.type in PARAMETER_TYPES)) return "tool '" + tool.id + "': parameter '" + p.name + "' has the unsupported type " + p.type
             if (p.type == "choice" && !(p.choices instanceof List && p.choices)) return "tool '" + tool.id + "': choice parameter '" + p.name + "' has no choices"
         }
     }
     return null
+}
+
+/** The tools of a checked schema that the dialog can show, and the sentences for those it cannot: a tool with a parameter of a type this host does not know
+ *  is left out (the other tools of the app stay usable), like the Napari form. */
+Map usableTools(Map schema) {
+    def tools = [], skipped = []
+    schema.tools.each { tool ->
+        def unknown = tool.inputs.find { !(it.type in PARAMETER_TYPES) }
+        if (unknown) skipped << ("tool '" + tool.id + "': this tool cannot be shown: parameter '" + unknown.name + "' has the unknown type '" + unknown.type + "'")
+        else tools << tool
+    }
+    return [tools: tools, skipped: skipped]
 }
 
 /** Read every registry directory and return [home, apps (name -> entry + schema), problems]: one broken or untrusted app never hides the others. */
@@ -400,6 +412,10 @@ Map discoverApps() {
                 def schema = slurper.parseText(new File(entry.schema_path).text)
                 def badSchema = schemaProblem(schema)
                 if (badSchema) throw new IllegalStateException(badSchema)
+                def usable = usableTools(schema)
+                usable.skipped.each { problems << (name + ": " + it) }
+                if (!usable.tools) throw new IllegalStateException("no tool of the app can be shown")
+                schema = schema + [tools: usable.tools]
                 apps[name] = entry + [pythonpath: entry.pythonpath ?: [], runtime_path: entry.runtime_path ?: "", schema: schema]
             } catch (IllegalStateException e) {                    // an invalid schema: expected, reported below with the other problems
                 problems << (file.name + ": " + e.message)
@@ -569,8 +585,12 @@ void addParameterItems(MutableModuleInfo info, Map p, Map context) {
             if (p.widget == "radio" && !p.nullable) choiceItem.setWidgetStyle("radioButtonHorizontal")   // Widget("radio")
             break
         case "integer":
-            def intItem = addItem(info, p.name, Integer, base + [default: startNumber(p, overridden, override) as Integer,
-                                                                min: p.minimum as Integer, max: p.maximum as Integer, step: 1])
+            def limits = integerLimits(p)
+            def start = Math.max(limits.minimum ?: Long.MIN_VALUE, Math.min(limits.maximum ?: Long.MAX_VALUE, startNumber(p, overridden, override) as long))
+            def wide = [start, limits.minimum, limits.maximum].any { it != null && !fitsInt(it) }       // a 32-bit field would cut the value
+            def description = [p.description, limits.limited ? "Whole numbers up to +-" + MAX_FORM_INTEGER + "." : null].findAll { it }.join(" ")
+            def intItem = addItem(info, p.name, wide ? Long : Integer, base + [description: description, default: wide ? start : start as Integer, step: 1,
+                                                                               min: wide ? limits.minimum : limits.minimum as Integer, max: wide ? limits.maximum : limits.maximum as Integer])
             if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) intItem.setWidgetStyle("slider")   // Widget("slider")
             break
         case "float": addFloatItem(info, p, base, overridden, override, context); break
@@ -583,10 +603,25 @@ void addParameterItems(MutableModuleInfo info, Map p, Map context) {
  *  insists on) while a dialog or a macro only has text: the text is mapped back to the declared value. */
 def declaredChoice(Map p, def text) { return p.choices.find { it.toString() == text?.toString() } }
 
+/** The declared choices as the worker writes them in `must be one of [...]` (a Python list: text in quotes, numbers as they are). */
+String choicesText(Map p) { return "[" + p.choices.collect { pythonLiteral(it) }.join(", ") + "]" }
+
 /** The value to send for a choice: the declared choice that `text` names (the worker's refusal, in its words, when there is none). */
 def typedChoice(Map p, def text) {
-    if (declaredChoice(p, text) == null) throw new IllegalArgumentException("'" + p.name + "' must be one of " + p.choices)
+    if (declaredChoice(p, text) == null) throw new IllegalArgumentException("'" + p.name + "' must be one of " + choicesText(p))
     return declaredChoice(p, text)
+}
+
+/** Whether `number` is within the 32-bit range. */
+boolean fitsInt(def number) { return number >= Integer.MIN_VALUE && number <= Integer.MAX_VALUE }
+
+/** The declared bounds of an integer parameter, kept within +-MAX_FORM_INTEGER (a bound beyond it cannot be held exactly: `limited` says so,
+ *  the form states the limit instead of cutting values silently). */
+Map integerLimits(Map p) {
+    def limit = MAX_FORM_INTEGER as BigInteger
+    def narrowed = { def bound -> bound == null ? null : ((bound as BigInteger).max(-limit).min(limit)).longValue() }
+    def beyond = { def bound -> bound != null && (bound as BigInteger).abs() > limit }
+    return [minimum: narrowed(p.minimum), maximum: narrowed(p.maximum), limited: beyond(p.minimum) || beyond(p.maximum)]
 }
 
 /** The starting value of a number field: the harness's, else the declared default, else (a number without one) 0 moved into [minimum, maximum]:
@@ -1310,6 +1345,13 @@ ImagePlus asImage(def image) {
 /** Resample `apply_to` into the `relative_to` frame with the returned matrix (maps source px -> target px) and show a green/magenta overlay. */
 void showAffine(Map r, Map images, List results, Map summary, boolean replace = false) {
     def source = asImage(images[r.apply_to]), target = asImage(images[r.relative_to ?: r.apply_to])
+    def found = determinantOf(r.matrix_yx)
+    if (found.singular) {
+        def warning = "the alignment matrix is singular (determinant " + found.det + "): the image collapses onto a line or a point"
+        lcLog("WARNING", warning)
+        IJ.log("LabConstrictor: " + warning)
+        summary.affine_warning = warning
+    }
     def warped = resample(source, target.getWidth(), target.getHeight(), r.matrix_yx)
     summary.affine_matrix = r.matrix_yx
     def workerWarp = results.find { it.type == "image" }      // only used to cross-check Fiji's own application
@@ -1331,17 +1373,39 @@ void showAffine(Map r, Map images, List results, Map summary, boolean replace = 
     summary.overlay_title = overlay.getTitle()
 }
 
-/** `source` mapped through the 2x3 matrix [[a, b, ty], [c, d, tx]] (source px -> target px) onto a width x height plane; refuses non-finite or singular matrices. */
+/** The determinant of the 2x3 matrix [[a, b, ty], [c, d, tx]], and whether it is too small (relative) for the matrix to be inverted. */
+Map determinantOf(List matrix) {
+    def (a, b) = matrix[0]
+    def (c, d) = matrix[1]
+    double det = a * d - b * c
+    return [det: det, singular: !(Math.abs(det) > SINGULAR_TOLERANCE * Math.max(1.0d, Math.abs(a * d) + Math.abs(b * c)))]
+}
+
+/** `source` mapped through the 2x3 matrix [[a, b, ty], [c, d, tx]] (source px -> target px) onto a width x height plane. Refuses non-finite
+ *  matrices; a singular one (it collapses the image onto a line or a point) is still applied, forwards: each source pixel lands on its target pixel. */
 FloatProcessor resample(ImagePlus source, int width, int height, List matrix) {
     def (a, b, ty) = matrix[0]
     def (c, d, tx) = matrix[1]
-    double det = a * d - b * c
     if (!matrix.flatten().every { it instanceof Number && Double.isFinite(it as double) })
         throw new IllegalStateException("the alignment matrix contains values that are not finite numbers")
-    if (!(Math.abs(det) > SINGULAR_TOLERANCE * Math.max(1.0d, Math.abs(a * d) + Math.abs(b * c))))
-        throw new IllegalStateException("the alignment matrix is singular (determinant " + det + "): it cannot be applied")
     def input = source.getProcessor().convertToFloat()
     def output = new FloatProcessor(width, height)
+    def found = determinantOf(matrix)
+    if (found.singular) {
+        def sums = new double[width * height], counts = new int[width * height]
+        for (int y = 0; y < source.getHeight(); y++) {
+            for (int x = 0; x < source.getWidth(); x++) {
+                long ny = Math.round(a * y + b * x + ty), nx = Math.round(c * y + d * x + tx)      // [y', x'] = M [y, x] + t
+                if (ny < 0 || nx < 0 || ny >= height || nx >= width) continue
+                int at = (int) (ny * width + nx)
+                sums[at] += input.getf(x, y)
+                counts[at]++
+            }
+        }
+        for (int i = 0; i < sums.length; i++) if (counts[i] > 0) output.setf(i, (float) (sums[i] / counts[i]))
+        return output
+    }
+    double det = found.det
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             double ry = y - ty, rx = x - tx                   // invert  [y', x'] = M [y, x] + t
@@ -1459,10 +1523,11 @@ def macroNumber(Map p, String text) {
     def number
     def minimum = p.minimum, maximum = p.maximum
     if (p.type == "integer") {
-        if (!(text ==~ INTEGER_TEXT)) throw new IllegalArgumentException("'" + p.label + "' must be a whole number, got '" + text + "'")
+        if (!(text ==~ INTEGER_TEXT)) throw new IllegalArgumentException("'" + p.label + "' must be an integer, got '" + text + "'")
         number = new BigInteger(text.replaceFirst(/^\+/, ""))
-        minimum = minimum != null ? minimum : Integer.MIN_VALUE
-        maximum = maximum != null ? maximum : Integer.MAX_VALUE
+        def limits = integerLimits(p)
+        minimum = limits.minimum != null ? limits.minimum : (limits.limited ? -MAX_FORM_INTEGER : Integer.MIN_VALUE)
+        maximum = limits.maximum != null ? limits.maximum : (limits.limited ? MAX_FORM_INTEGER : Integer.MAX_VALUE)
     } else {
         if (text.replaceFirst(/^[+-]/, "").toLowerCase() in NON_FINITE_WORDS) throw new IllegalArgumentException("'" + p.label + "' must be a finite number, got '" + text + "'")
         if (!(text ==~ FLOAT_TEXT)) throw new IllegalArgumentException("'" + p.label + "' must be a number, got '" + text + "'")
@@ -1471,7 +1536,7 @@ def macroNumber(Map p, String text) {
     }
     if (minimum != null && number < minimum) throw new IllegalArgumentException("'" + p.label + "' must be >= " + minimum + ", got " + text)
     if (maximum != null && number > maximum) throw new IllegalArgumentException("'" + p.label + "' must be <= " + maximum + ", got " + text)
-    return p.type == "integer" ? number.intValue() : number
+    return p.type == "integer" ? (fitsInt(number) ? number.intValue() : number.longValue()) : number
 }
 
 /** The option names a replayed call may use for `tool`. */
@@ -1518,13 +1583,13 @@ void takeMacroParameter(MacroModule module, Map p, String options) {
             break
         case "boolean": module.values[p.name] = macroBoolean(p, text); break
         case "integer":
-            module.values[p.name] = text == null ? (p.default ?: 0) as Integer : macroNumber(p, text)
+            module.values[p.name] = text == null ? (fitsInt(p.default ?: 0) ? (p.default ?: 0) as Integer : p.default as Long) : macroNumber(p, text)
             break
         case "float":
             module.values[p.name] = text == null ? (p.default ?: 0) as Double : macroNumber(p, text)
             break
         case "choice":
-            if (text != null && declaredChoice(p, text) == null) throw new IllegalArgumentException("'" + p.name + "' must be one of " + p.choices + ", got '" + text + "'")
+            if (text != null && declaredChoice(p, text) == null) throw new IllegalArgumentException("'" + p.name + "' must be one of " + choicesText(p) + ", got '" + text + "'")
             module.values[p.name] = text == null ? (p.default != null ? p.default : p.choices[0]) : declaredChoice(p, text)
             break
         default:
@@ -1575,9 +1640,27 @@ def failEarly(Map summary, String message) {
 @Field final String REGION_PLACEHOLDER = "region.tif"   // what a command line names for a selection the host sent as a label image
 @Field final Map<String, String> FILE_PLACEHOLDERS = [image: "image.tif", labels: "labels.tif", table: "table.csv", file: "file", folder: "folder"]
 
-/** `text` quoted for a POSIX shell, or for Windows cmd when `windows` (same rules as labconstrictor_tools.command._quote). */
+@Field final String WINDOWS_SAFE = "-_.:/\\=+,"      // besides letters and digits, what a Windows argument may hold unquoted (labconstrictor_tools.command.WINDOWS_SAFE)
+@Field final String BACKSLASH = "\\"
+@Field final String DOUBLE_QUOTE = '"'
+
+/** One argument for a Windows command line by the rules of the C runtime / CommandLineToArgvW (labconstrictor_tools.command._quote_windows): backslashes
+ *  are literal, except that a run of them in front of a `"` is doubled (and the `"` escaped), and so is a run at the end, which sits in front of the closing quote. */
+String windowsQuoted(String text) {
+    if (text && text.codePoints().allMatch { int c -> Character.isLetterOrDigit(c) || WINDOWS_SAFE.indexOf(c) >= 0 }) return text
+    def out = new StringBuilder(DOUBLE_QUOTE)
+    int run = 0                                           // backslashes seen since the last other character
+    text.each { String c ->
+        if (c == BACKSLASH) { run++; return }
+        out.append(BACKSLASH * (c == DOUBLE_QUOTE ? 2 * run + 1 : run)).append(c)
+        run = 0
+    }
+    return out.append(BACKSLASH * (2 * run)).append(DOUBLE_QUOTE).toString()
+}
+
+/** `text` quoted for a POSIX shell, or for Windows cmd when `windows` (same rules as labconstrictor_tools.command.quote). */
 String shellQuote(String text, boolean windows) {
-    if (windows) return (text && text ==~ /[A-Za-z0-9_.:\/\\=+,-]+/) ? text : '"' + text.replace('"', '\\"') + '"'
+    if (windows) return windowsQuoted(text)
     return (text && text ==~ /[A-Za-z0-9_@%+=:,.\/-]+/) ? text : "'" + text.replace("'", "'\"'\"'") + "'"
 }
 
