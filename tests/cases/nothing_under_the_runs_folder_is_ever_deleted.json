@@ -11,21 +11,19 @@
    ]
   }
  ],
- "runs_prefill": 52,
+ "runs_prefill": 120,
  "expect": {
   "status": "COMPLETE",
   "contains": {
    "run_folders": [
-    "my_own_notes"
+    "my_own_notes",
+    "20200101T000000000_old_tool",
+    "20200101T000000119_old_tool"
    ]
   },
-  "not_contains": {
-   "run_folders": [
-    "20200101T000000000_old_tool"
-   ]
-  },
-  "max": {
-   "run_record_count": 50
+  "equals": {
+   "run_record_count": 121,
+   "run_sentinels_intact": 121
   }
  }
 }

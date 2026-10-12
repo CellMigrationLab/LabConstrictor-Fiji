@@ -46,8 +46,6 @@ import java.nio.file.Files
 @Field final int OUTCOME_WORKER_LINES = 60       // last worker lines kept in the outcome (and the run record)
 @Field final int DIALOG_WORKER_LINES = 8         // last worker lines shown in the error dialog
 @Field final int DIALOG_LINE_CHARS = 300         // longer worker lines are cut in the error dialog (it must not outgrow the screen)
-@Field final int KEPT_RUN_RECORDS = 50           // newest run folders kept under <home>/runs
-@Field final String RUN_FOLDER_PATTERN = /\d{8}T\d{6}\d{3,6}_.+/   // the folders a run record creates (time stamp, app, tool); anything else in runs/ is never deleted
 @Field final int RGB_BIT_DEPTH = 24              // ImageJ's colour images: saved as a trailing axis of RGB_SAMPLES
 @Field final int RGB_SAMPLES = 3                 // red, green, blue
 @Field final long MAX_EXPORT_BYTES = 4L * 1024 * 1024 * 1024   // an open image larger than this (all planes, channels and samples) is not written for the worker (same limit as the Napari form)
@@ -1098,7 +1096,7 @@ String failureMessage(Map outcome, Map summary) {
            "\n\nRun record: " + (summary.run_record ?: "(none)") + "\nLog file: " + new File(lcHome(), "logs/labconstrictor.log").path
 }
 
-/** One folder per run under <home>/runs (the newest KEPT_RUN_RECORDS kept): what was run, by which interpreter, what came back. */
+/** One folder per run under <home>/runs (never deleted by the host: retention belongs to the Tools CLI): what was run, by which interpreter, what came back. */
 String writeRunRecord(Map app, Map tool, Map inputs, Map outcome) {
     try {
         def runs = new File(lcHome(), "runs")
@@ -1110,7 +1108,6 @@ String writeRunRecord(Map app, Map tool, Map inputs, Map outcome) {
             app: app.name, app_version: app.version, tool: tool.id, host: "fiji", status: outcome.status, error: outcome.error,
             seconds: outcome.seconds, inputs: inputs, worker_output_tail: outcome.workerOutput, log_file: new File(lcHome(), "logs/labconstrictor.log").path, progress_events: outcome.progress, interpreter: outcome.outputs?.diagnostics,
             results: (outcome.outputs?.results ?: []).collect { it.findAll { k, v -> k != "matrix_yx" } }]))
-        (runs.listFiles({ File f -> f.isDirectory() && f.name ==~ RUN_FOLDER_PATTERN } as FileFilter) ?: [] as File[]).sort().reverse().drop(KEPT_RUN_RECORDS).each { removeFolder(it, "old run record") }
         return folder.path
     // groovylint-disable-next-line CatchException
     } catch (Exception problem) {                       // a record must never break a run, but its absence must be visible

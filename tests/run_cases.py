@@ -207,11 +207,13 @@ def run_case(path):
         (logs / "labconstrictor.log").write_text("filler\n" * 200000)
         for n in range(1, 6):
             (logs / ("labconstrictor.log.%d" % n)).write_text("old backup %d\n" % n)
-    if case.get("runs_prefill"):  # old run records plus a folder that is not one (a person's own): only the records may ever be pruned
+    if case.get("runs_prefill"):  # old run records plus a folder that is not one (a person's own): the host never deletes any of them (retention is the Tools CLI's job); each holds a sentinel file
         runs = Path(env["LC_HOME"]) / "runs"
         for n in range(case["runs_prefill"]):
             (runs / ("20200101T000000%03d_old_tool" % n)).mkdir(parents=True)
+            (runs / ("20200101T000000%03d_old_tool" % n) / "keep.txt").write_text("keep")
         (runs / "my_own_notes").mkdir()
+        (runs / "my_own_notes" / "keep.txt").write_text("keep")
     if case.get("last_command"):  # a previous run's command text, as the script leaves it for the "Copy last run as command" entry
         state = Path(env["LC_HOME"]) / "state"
         state.mkdir(parents=True, exist_ok=True)
@@ -254,6 +256,7 @@ def run_case(path):
     runs = Path(env["LC_HOME"]) / "runs"
     report["run_folders"] = sorted(p.name for p in runs.iterdir()) if runs.is_dir() else []
     report["run_record_count"] = sum(1 for name in report["run_folders"] if name != "my_own_notes")
+    report["run_sentinels_intact"] = sum(1 for p in report["run_folders"] if (runs / p / "keep.txt").is_file() and (runs / p / "keep.txt").read_text() == "keep")
     report["log_backups"] = {  # first line of each rotated copy of the log
         p.name: (p.read_text(encoding="utf-8", errors="replace").splitlines() or [""])[0]
         for p in sorted(log_file.parent.glob("labconstrictor.log.*"))
