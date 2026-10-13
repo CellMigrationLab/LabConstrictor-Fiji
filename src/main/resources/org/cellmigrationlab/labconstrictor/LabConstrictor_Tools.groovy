@@ -2395,7 +2395,9 @@ def runRequest(Map app, Map tool, def module, Map summary) {
         summary.calibration_states = module.states ?: [:]          // the state of each pixel-size field when the person clicked OK (2.2)
         try {
             exported = exportInputs(tool, module, jobDir)
-        } catch (IllegalArgumentException problem) {           // missing file, nothing chosen for a required image
+        } catch (IllegalArgumentException problem) {           // missing file, nothing chosen for a required image, a number beyond a limit: nothing is run, and it is said everywhere
+            lcLog("INFO", "run refused: " + problem.message)
+            IJ.log("LabConstrictor: " + problem.message)
             if (hooks.interactive) IJ.error("LabConstrictor", problem.message)
             return hooks.finish(summary + [error: problem.message])
         }

@@ -33,6 +33,9 @@
   },
   "equals": {
    "error": "'N' must be <= 9007199254740991, got 9007199254740992"
-  }
+  },
+  "log_contains": [
+   "run refused: 'N' must be <= 9007199254740991, got 9007199254740992"
+  ]
  }
 }
