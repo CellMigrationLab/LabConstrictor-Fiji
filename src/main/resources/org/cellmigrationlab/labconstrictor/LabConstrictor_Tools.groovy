@@ -36,6 +36,7 @@ import java.nio.file.Files
 @Field final int CANCEL_GRACE_MS = 3000          // how long a tool gets to honour Cancel before its worker is killed
 @Field final int EXIT_WAIT_MS = 15000            // heavy interpreters (torch, numba) need a few seconds to exit after stdin closes
 @Field final int CANCEL_POLL_MS = 50             // while a task runs: how often Esc, the harness's cancel time and the task status are looked at
+@Field final int KILL_SETTLE_MS = 10000          // after a worker was killed: how long its task gets to report the end (the client notices the dead process on a thread of its own)
 @Field final int EXIT_POLL_MS = 100              // while a closed worker exits: how often it is looked at
 @Field final int CATALOG_TIMEOUT_S = 30          // how long the app's interpreter gets to name its unit catalog (it only imports the standard library)
 @Field final int MAX_LINKED_FIELDS = 8           // pixel-size fields of one tool that report the person's edits (one callback each: LCModule.edited0 ... edited7)
@@ -1352,11 +1353,21 @@ Long waitForTask(Service service, def task, long started) {
         }
         if (cancelSent != null && System.currentTimeMillis() - cancelSent > CANCEL_GRACE_MS && !task.status.isFinished()) {
             service.kill()                                   // the tool ignored Cancel
+            settleAfterKill(task)
             break
         }
         Thread.sleep(CANCEL_POLL_MS)
     }
     return cancelSent
+}
+
+/** After `service.kill()`: the client learns that its worker is dead on a thread of its own, so the task still reads RUNNING for a moment. The outcome (what the person is
+ *  told, and the done status of the run: a crash after Cancel is cancelled) must not be read before the task has said it ended. This waits for that condition, not for a
+ *  time, for at most KILL_SETTLE_MS; a task that still reads unfinished then is said in the log (its status is then reported as it is). */
+void settleAfterKill(def task) {
+    long deadline = System.currentTimeMillis() + KILL_SETTLE_MS
+    while (!task.status.isFinished() && System.currentTimeMillis() < deadline) Thread.sleep(CANCEL_POLL_MS)
+    if (!task.status.isFinished()) lcLog("ERROR", "the task still reads " + task.status + " " + KILL_SETTLE_MS + " ms after its worker was killed: its end was never reported")
 }
 
 /** Close the worker and make sure it is gone: no worker is ever left behind. */

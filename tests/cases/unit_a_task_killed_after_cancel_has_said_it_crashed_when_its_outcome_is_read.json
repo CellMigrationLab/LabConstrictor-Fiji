@@ -1,0 +1,15 @@
+{
+ "unit_checks": [
+  "kill_settles"
+ ],
+ "script_mode_only": true,
+ "conformance": [],
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 9
+  }
+ }
+}
