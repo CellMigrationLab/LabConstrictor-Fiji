@@ -1,0 +1,26 @@
+{
+ "app": "crashy",
+ "tool": "Raises with a traceback",
+ "register": [
+  {
+   "name": "crashy",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/crashy_app"
+   ]
+  }
+ ],
+ "env": {
+  "LC_TEST_IMPORT_FAILS": "runtime"
+ },
+ "expect": {
+  "status": "CRASHED",
+  "match": {
+   "failure_message": "The app's tool module failed to import (see the traceback below)."
+  },
+  "log_contains": [
+   "cannot import tool module"
+  ]
+ }
+}

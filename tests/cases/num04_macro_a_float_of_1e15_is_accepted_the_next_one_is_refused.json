@@ -1,0 +1,25 @@
+{
+ "app": "numbers",
+ "tool": "Echo numbers",
+ "register": [
+  {
+   "name": "numbers",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/numbers_app"
+   ]
+  }
+ ],
+ "fixtures": [
+  "NUM-04"
+ ],
+ "script_macro": "app=numbers tool=[Echo numbers] n=1 x=1e15 m=1",
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "equals": {
+   "request.x": 1000000000000000.0
+  }
+ }
+}
