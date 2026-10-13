@@ -112,3 +112,14 @@ def inspect(home: Path) -> dict:
 def prune_calls(shots: Path) -> list:
     """What the prune recorder saw (tests/prune_recorder.py): one entry per start, with the done markers present at that moment."""
     return _read(shots / "prune_calls.json") or []
+
+
+def substitute(value, names: dict):
+    """The expectation of a case with the names of this run put in (`$LC_HOME` is the home Fiji was started with): a text that is exactly such a name becomes its value."""
+    if isinstance(value, str):
+        return names.get(value, value)
+    if isinstance(value, list):
+        return [substitute(v, names) for v in value]
+    if isinstance(value, dict):
+        return {k: substitute(v, names) for k, v in value.items()}
+    return value

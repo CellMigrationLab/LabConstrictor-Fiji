@@ -156,9 +156,15 @@ def same(found, wanted):
     return found == wanted
 
 
+KNOWN_EXPECT = {  # every kind of expectation `check` reads; anything else in a case would be silently ignored, so it is a failure of the case
+    "at_set", "at", "status", "status_in", "min_progress_events", "approx", "equals", "log_contains", "match", "file_text_contains", "absent", "max", "min", "min_length",
+    "contains", "not_contains", "absent_keys", "worker_alive_after",
+}
+
+
 def check(expect, report):
     """Return a list of failed expectations (empty = pass)."""
-    failed = []
+    failed = ["unknown expectation %r: it would be ignored (a path under `equals` or `at` is what was meant?)" % key for key in expect if key not in KNOWN_EXPECT]
     for dotted, wanted in expect.get("at_set", {}).items():  # a list of coordinate pairs (the vertices of a polygon) as a set: where a ring starts does not matter
         found = walk(report, dotted)
         if found is MISSING or {tuple(round(v, 9) for v in p) for p in found} != {tuple(round(v, 9) for v in p) for p in wanted}:
@@ -393,7 +399,7 @@ def run_case(path):
         p.name: (p.read_text(encoding="utf-8", errors="replace").splitlines() or [""])[0]
         for p in sorted(log_file.parent.glob("labconstrictor.log.*"))
     } if log_file.parent.is_dir() else {}
-    return name, check(case.get("expect", {}), report), report
+    return name, check(retention_support.substitute(case.get("expect", {}), {"$LC_HOME": env["LC_HOME"]}), report), report
 
 
 def tamper(apps, op):

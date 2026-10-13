@@ -16,7 +16,9 @@
  ],
  "expect": {
   "status": "FAILED",
-  "job_dir_exists": false,
+  "equals": {
+   "job_dir_exists": false
+  },
   "at": {
    "retention.runs.fiji.0.status": "failed",
    "retention.runs.fiji.0.done": true,

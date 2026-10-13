@@ -1502,7 +1502,7 @@ void startPrune(Map app, Map summary) {
     List<String> command = hooks.pruneCommand(lib("LCRetention").pruneCommand(app)) as List<String>
     Map<String, String> environment = [PYTHONPATH: app.runtime_path, PYTHONNOUSERSITE: "1", PYTHONSAFEPATH: "1", PYTHONIOENCODING: "utf-8", LC_HOME: lcHome()]
     Thread watcher = lib("LCRetention").startPrune(command, environment, new File(System.getProperty("user.dir")), { String level, String message, Throwable problem -> lcLog(level, message, problem) })
-    summary.prune = [started: watcher != null, command: command]
+    summary.prune = [started: watcher != null, command: command, environment: environment]
     if (watcher != null && hooks.awaitPrune()) watcher.join()
 }
 

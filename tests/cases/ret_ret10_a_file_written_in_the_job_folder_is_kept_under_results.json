@@ -16,7 +16,9 @@
  ],
  "expect": {
   "status": "COMPLETE",
-  "job_dir_exists": false,
+  "equals": {
+   "job_dir_exists": false
+  },
   "match": {
    "file_report": "/results/"
   },
@@ -32,6 +34,7 @@
    ],
    "retention.results.fiji.0.status": "ok",
    "retention.results.fiji.0.owner_valid": true,
+   "retention.results.fiji.0.name_ok": true,
    "retention.runs.fiji.0.run_json.reported_paths.report": "$present"
   },
   "log_contains": [

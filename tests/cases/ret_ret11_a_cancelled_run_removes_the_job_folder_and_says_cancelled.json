@@ -19,7 +19,9 @@
  ],
  "expect": {
   "status": "CANCELED",
-  "job_dir_exists": false,
+  "equals": {
+   "job_dir_exists": false
+  },
   "at": {
    "retention.runs.fiji.0.status": "cancelled",
    "retention.runs.fiji.0.done": true,

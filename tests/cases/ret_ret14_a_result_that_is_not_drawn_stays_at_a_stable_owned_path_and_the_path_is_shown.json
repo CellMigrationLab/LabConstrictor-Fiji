@@ -16,7 +16,9 @@
  ],
  "expect": {
   "status": "COMPLETE",
-  "job_dir_exists": false,
+  "equals": {
+   "job_dir_exists": false
+  },
   "match": {
    "undrawn_pts.kept": "/results/",
    "undrawn_shp.kept": "/results/"
@@ -29,6 +31,7 @@
    "retention.results.count": 1,
    "retention.results.fiji.0.status": "ok",
    "retention.results.fiji.0.owner_valid": true,
+   "retention.results.fiji.0.name_ok": true,
    "retention.results.fiji.0.files": [
     ".lc-done.json",
     ".lc-owner.json",
