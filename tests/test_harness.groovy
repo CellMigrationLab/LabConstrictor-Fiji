@@ -65,6 +65,35 @@ def typeIntoSpinners = { Window dialog ->
     Thread.sleep(500)
 }
 
+// A sequence of things a person does in the dialog, one after the other, with the number fields as they stand after each (report.steps): cfg.dialog_steps =
+//   {select: "b.tif"}   pick that open image in the chooser that lists it       {type: 0.3, field: 0}  type a value in number field 0 (top to bottom)
+//   {file: "/path"}     put that path in the "(or file)" text field (""  clears it)     {use: true}  tick or untick the first check box named "Use ..."
+def runSteps = { Window dialog ->
+    report.steps = []
+    cfg.dialog_steps.each { step ->
+        if (step.select != null) {
+            def box = components(dialog, JComboBox).find { b -> (0..<b.getItemCount()).any { b.getItemAt(it).toString() == step.select } }
+            def index = (0..<box.getItemCount()).find { box.getItemAt(it).toString() == step.select }
+            SwingUtilities.invokeAndWait { box.setSelectedIndex(index as int) }
+        }
+        if (step.type != null) {
+            def spinner = components(dialog, JSpinner).sort { it.getLocationOnScreen().y }[(step.field ?: 0) as int]
+            SwingUtilities.invokeAndWait { spinner.setValue(step.type as double) }
+        }
+        if (step.file != null) {
+            def field = components(dialog, javax.swing.JTextField).sort { it.getLocationOnScreen().y }[(step.field ?: 0) as int]
+            SwingUtilities.invokeAndWait { field.setText(step.file as String) }
+        }
+        if (step.use != null) {
+            def box = components(dialog, javax.swing.JCheckBox).find { it.text?.startsWith("Use ") }
+            SwingUtilities.invokeAndWait { box.setSelected(step.use as boolean) }
+        }
+        Thread.sleep(1200)                                   // the callbacks of SciJava run on their own thread: let them finish before the next thing is done
+        report.steps << components(dialog, JSpinner).sort { it.getLocationOnScreen().y }.collect { it.getValue() as double }
+    }
+    screenshot(dialog, "dialog_after_steps")
+}
+
 def answerDialog = { Window dialog, String title ->
     Thread.sleep(700)
     screenshot(dialog, "dialog_" + safe(title))
@@ -76,7 +105,7 @@ def answerDialog = { Window dialog, String title ->
             .findAll { box -> box.getItemCount() > 0 && (0..<box.getItemCount()).every { open.contains(box.getItemAt(it).toString()) } }
             .collect { it.getSelectedItem()?.toString() }
     }
-    if (title == cfg.tool) { typeIntoSpinners(dialog); selectImages(dialog) }
+    if (title == cfg.tool) { if (cfg.dialog_steps) runSteps(dialog) else { typeIntoSpinners(dialog); selectImages(dialog) } }
     def ok = components(dialog, JButton).find { it.text == "OK" }
     if (ok) SwingUtilities.invokeLater { ok.doClick() }
 }
@@ -170,6 +199,7 @@ def finish = { Map summary ->
     summary.dialogs = report.dialogs
     summary.combo_items = report.combo_items
     summary.spinner_values_after_selection = report.spinner_values_after_selection
+    summary.steps = report.steps
     summary.chooser_initial = report.chooser_initial
     summary.single_input_prompt = report.single_input_prompt
     summary.open_windows = WindowManager.getImageTitles() as List

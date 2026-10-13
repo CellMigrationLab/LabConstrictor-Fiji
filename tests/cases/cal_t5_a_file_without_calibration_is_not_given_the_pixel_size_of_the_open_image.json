@@ -1,0 +1,55 @@
+{
+ "app": "calibration",
+ "tool": "Pixel size required",
+ "register": [
+  {
+   "name": "calibration",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/calibration_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "a.tif",
+   "pixel_size": 0.25
+  }
+ ],
+ "select": [
+  "a.tif"
+ ],
+ "overrides": {
+  "image": "a.tif"
+ },
+ "script_mode_only": true,
+ "expect": {
+  "at": {
+   "calibration_states_initial.pixel_size": {
+    "state": "auto",
+    "value": 0.25,
+    "source": "image"
+   },
+   "steps": [
+    [
+     0.0
+    ]
+   ],
+   "calibration_states.pixel_size": {
+    "state": "unset"
+   },
+   "error": "'pixel_size' needs a value: 'image' has no pixel size. Enter it in um.",
+   "request": "$absent"
+  }
+ },
+ "dialog_steps": [
+  {
+   "file": "${FIXTURES}/sample.tif"
+  }
+ ],
+ "conformance": [
+  "CAL-T5"
+ ]
+}

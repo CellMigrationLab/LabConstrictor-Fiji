@@ -3,7 +3,8 @@
  "tool": "Kitchen sink",
  "overrides": {
   "image_file": "${FIXTURES}/sample.tif",
-  "required_string": "hello"
+  "required_string": "hello",
+  "scale": 0.5
  },
  "expect": {
   "status": "COMPLETE",

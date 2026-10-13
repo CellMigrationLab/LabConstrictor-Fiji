@@ -66,6 +66,44 @@ def conformance_expected(name):
     raise KeyError("no conformance value called %r" % name)
 
 
+def make_calibration_files(folder):
+    """The TIFF files of the calibration fixtures (conformance.json CAL-10..CAL-14, and a few more of the same kind), written with tifffile into `folder`: the file names are what
+    tests/unit_checks.groovy (group conformance_calibration) reads. Needs numpy and tifffile in the Python that runs this script."""
+    import numpy as np
+    import tifffile
+
+    cases = {c["id"]: c for c in json.loads(Path(CONFORMANCE).read_text(encoding="utf-8"))["wrong_science"]["calibration"]["cases"]}
+    data = np.zeros((4, 4), np.uint8)
+    folder = Path(folder)
+
+    def write(name, **options):
+        tifffile.imwrite(folder / (name + ".tif"), data, **options)
+
+    first, _none_tags, none_unit = cases["CAL-10"]["input"]["variants"]
+    write("CAL-10_0", imagej=True, resolution=(1.0, 1.0), metadata={"unit": first["imagej_unit"], "spacing": first["spacing"]})
+    write("CAL-10_1")  # no resolution of its own (tifffile writes 1 per NONE)
+    write("CAL-10_2", resolution=(100, 100), resolutionunit=none_unit["ResolutionUnit"])
+    for ident in ("CAL-11", "CAL-12"):
+        dpi = cases[ident]["input"]["resolution"][0]
+        write(ident, resolution=(dpi, dpi), resolutionunit=cases[ident]["input"]["ResolutionUnit"])
+    for number, variant in enumerate(cases["CAL-13"]["input"]["variants"]):
+        write("CAL-13_%d" % number, resolution=tuple(variant["resolution"]), resolutionunit=variant["ResolutionUnit"])
+    dpi = cases["CAL-14"]["input"]["resolution"][0]
+    write("CAL-14", resolution=(dpi, dpi), resolutionunit=cases["CAL-14"]["input"]["ResolutionUnit"])
+    # beyond the fixtures: the default test is "within 0.5 %" of 72 or 96 dpi (and per cm), and an OME size is a calibration only with its unit
+    write("INCH_72.3", resolution=(72.3, 72.3), resolutionunit="INCH")  # 0.4 % from 72: a default
+    write("INCH_73", resolution=(73, 73), resolutionunit="INCH")  # 1.4 % from 72: not a default, 25400 / 73 um per pixel
+    write("INCH_72_96", resolution=(72, 96), resolutionunit="INCH")  # one axis looks like a default: unknown
+    write("CM_37.7", resolution=(37.7, 37.7), resolutionunit="CENTIMETER")  # 0.3 % from 37.8: a default
+    write("CM_40000", resolution=(40000, 40000), resolutionunit="CENTIMETER")  # 0.25 um per pixel
+    write("OME_nm", ome=True, metadata={"PhysicalSizeX": 325, "PhysicalSizeXUnit": "nm", "PhysicalSizeY": 325, "PhysicalSizeYUnit": "nm"})
+    write("OME_not_square", ome=True, metadata={"PhysicalSizeX": 0.5, "PhysicalSizeXUnit": "um", "PhysicalSizeY": 0.25, "PhysicalSizeYUnit": "um"})
+    xml = '<?xml version="1.0" encoding="UTF-8"?><OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06"><Image ID="Image:0"><Pixels ID="Pixels:0" DimensionOrder="XYCZT" Type="uint8" SizeX="4" SizeY="4" SizeZ="1" SizeC="1" SizeT="1" PhysicalSizeX="0.5" PhysicalSizeY="0.5"/></Image></OME>'
+    write("OME_no_unit", description=xml, metadata=None, resolution=(1, 1))  # the number alone is no evidence
+    write("IMAGEJ_nm", imagej=True, resolution=(2.0, 2.0), metadata={"unit": "nm"})  # 0.5 nm per pixel = 0.0005 um
+    write("IMAGEJ_inch_text", imagej=True, resolution=(96.0, 96.0), metadata={"unit": "inch"})  # the text 'inch' is not in the catalog: unknown whatever the number
+
+
 def resolve_conformance(value):
     """A string "$CF:name" anywhere in an expectation is replaced by what the conformance file says (conformance_expected)."""
     if isinstance(value, str) and value.startswith("$CF:"):
@@ -235,7 +273,7 @@ def install_into_fiji(case=None):
     return ["--run", str(SCRIPT_DIR / "LabConstrictor_Tools.groovy")]
 
 
-def _tail(process, lines=12):
+def _tail(process, lines=int(os.environ.get("LC_TAIL_LINES", "12"))):
     """Last lines of Fiji's own output: the reason a case hangs or crashes is usually printed there."""
     text = ""
     for stream in (getattr(process, "stdout", None), getattr(process, "stderr", None)):
@@ -251,6 +289,9 @@ def run_case(path):
     name = path.stem
     if case.get("macro") is not None and os.environ.get("LC_FIJI_MODE", "script") != "jar" and os.environ.get("LC_FIJI_MACRO_PROPERTY") == "1":
         case["script_macro"] = case.pop("macro")  # LC_FIJI_MACRO_PROPERTY=1: macro calls through the property the menu command sets, in script mode (no mvn build per case)
+    if case.get("make_files") == "calibration":
+        case["files_dir"] = tempfile.mkdtemp(prefix="lccal_fiji_")
+        make_calibration_files(case["files_dir"])
     case_dir = OUT / name
     case_dir.mkdir(parents=True, exist_ok=True)
     case.update(shots=str(case_dir), report=str(case_dir / "report.json"), script=str(GROOVY))

@@ -12,13 +12,14 @@
   }
  ],
  "overrides": {
-  "image_file": "${FIXTURES}/anisotropic.tif"
+  "image_file": "${FIXTURES}/anisotropic.tif",
+  "scale": 0.25
  },
  "expect": {
   "status": "COMPLETE",
   "log_contains": [
    " WARNING pid=",
-   ": pixel size differs"
+   ": pixels are not square"
   ],
   "absent": {
    "log_text": [

@@ -1,0 +1,19 @@
+{
+ "unit_checks": [
+  "conformance_calibration",
+  "conformance_calibration_request",
+  "conformance_calibration_coverage"
+ ],
+ "make_files": "calibration",
+ "python": "${PREFIX}/bin/python",
+ "cases_dir": "${V3}/tests/cases",
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 200
+  }
+ }
+}

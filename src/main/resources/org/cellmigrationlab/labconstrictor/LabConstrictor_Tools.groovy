@@ -37,6 +37,9 @@ import java.nio.file.Files
 @Field final int EXIT_WAIT_MS = 15000            // heavy interpreters (torch, numba) need a few seconds to exit after stdin closes
 @Field final int CANCEL_POLL_MS = 50             // while a task runs: how often Esc, the harness's cancel time and the task status are looked at
 @Field final int EXIT_POLL_MS = 100              // while a closed worker exits: how often it is looked at
+@Field final int CATALOG_TIMEOUT_S = 30          // how long the app's interpreter gets to name its unit catalog (it only imports the standard library)
+@Field final int MAX_LINKED_FIELDS = 8           // pixel-size fields of one tool that report the person's edits (one callback each: LCModule.edited0 ... edited7)
+@Field final String CALIBRATION_KEY = "_calibration"   // reserved input: the per-axis pixel size with its provenance (tools never see it)
 
 // limits on what is kept, shown or sent
 @Field final long LOG_MAX_BYTES = 1_000_000L     // the log file is rotated (to .log.1) above this size
@@ -81,55 +84,138 @@ import java.nio.file.Files
 @Field final List<Long> EXIT_SEGFAULT = [-11L, 139L, 3221225477L, -1073741819L]    // SIGSEGV / access violation (Windows: 0xC0000005, unsigned in Python, signed in Java)
 @Field final long EXIT_IMPORT_FAILED = 3L                            // the serve command's own code for "tool module failed to import"
 
-// ---- calibration sync: a dialog module that keeps pixel-size fields in step with the chosen image or file
-/** Module whose callbacks keep a calibration field in sync with the image chosen for it (schema: pixel_size_of). */
-class LCModule extends DefaultMutableModule {
-    Map<String, List<String>> links = [:]     // image parameter -> [pixel-size parameters]
-    LCModule(MutableModuleInfo info) { super(info) }
-    @Override
-    void run() {}                              // all work happens after harvesting
+// ---- calibration (docs/SPEC_WRONG_SCIENCE.md section 2): units come from the conformance catalog, unknown is a value
+// The built-in copy of the catalog: used only when the app's own Tools has no conformance module (see useUnitCatalog); tests/unit_checks.groovy compares it with conformance.json.
+@Field final Map UNIT_CATALOG_FALLBACK = [
+    wrong_science: [calibration: [
+        length_units: [
+            nm: [um_per_unit: 0.001d, symbols: ["nm"], words: ["nanometer", "nanometers", "nanometre", "nanometres"]],
+            um: [um_per_unit: 1.0d, symbols: ["um", "\u00b5m", "\u03bcm"], words: ["micron", "microns", "micrometer", "micrometers", "micrometre", "micrometres"]],
+            mm: [um_per_unit: 1000.0d, symbols: ["mm"], words: ["millimeter", "millimeters", "millimetre", "millimetres"]],
+            cm: [um_per_unit: 10000.0d, symbols: ["cm"], words: ["centimeter", "centimeters", "centimetre", "centimetres"]],
+            m: [um_per_unit: 1000000.0d, symbols: ["m"], words: ["meter", "meters", "metre", "metres"]],
+            angstrom: [um_per_unit: 0.0001d, symbols: ["\u00c5", "\u212b"], words: ["angstrom", "angstroms"]],
+        ],
+        micro_sign_spellings: ["\u00b5", "\u03bc", "u"],
+        damaged_micro_prefix: "\ufffd",
+        anisotropy_tolerance: [relative_to_larger: 0.001d],
+        default_resolution_dpi: [values: [72, 96], per_cm: [28.35, 37.8], tolerance_relative: 0.005d, units: ["INCH", "CENTIMETER"]],
+    ]],
+    messages: [
+        calibration_required: [template: "'{param}' needs a value: '{of}' has no pixel size. Enter it in um."],
+        calibration_unknown_tooltip: [template: "not calibrated: '{of}' has no pixel size"],
+        unit_damaged_warning: [template: "unit text '{unit}' is damaged; enter the pixel size"],
+        pixels_not_square_warning: [template: "pixels are not square"],
+        unit_not_length_warning: [template: "unit '{unit}' is not a length"],
+    ],
+]
 
-    static Closure logger = { String level, String message, Throwable problem -> }   // set below to lcLog (a class cannot call the script's methods)
-    private static final double MICRONS_PER_INCH = 25400.0d    // 1 inch = 25.4 mm
-    private static final Map<String, Double> MICRONS_PER_UNIT = [um: 1.0d, micron: 1.0d, microns: 1.0d, micrometer: 1.0d, micrometre: 1.0d,
-                                                                  nm: 1e-3d, nanometer: 1e-3d, mm: 1e3d, millimeter: 1e3d, cm: 1e4d, m: 1e6d]
-    private static final double SQUARE_PIXEL_TOLERANCE = 1e-3d    // Y and X pixel sizes closer than this (relative) count as square: no warning
-    private static final int SIGNIFICANT_DIGITS = 6               // digits of a pixel size in the warning
-    private static final double TYPED_TOLERANCE = 1e-6d           // a field that differs from the value this module put there (relative) was typed by the person
-    Map<String, Double> synced = [:]          // pixel-size parameter -> the value this module last put there itself
-    /** Pixel size of an image as [y, x] micrometres, or null when uncalibrated or in a unit we cannot convert (pixel, inch, ...). */
-    static List<Double> micronsYX(ImagePlus imp) {
+/** What the host can say about the pixel size of an image or file: explicit metadata only (a length unit and a number), converted to micrometres per pixel through
+ *  the unit catalog; anything else is unknown, never a guess (2.1). Every result is [known, value (um/px, the mean of X and Y), x, y (each [value, raw: [scale, unit]]),
+ *  warning, source]. Pure functions apart from reading a TIFF header. */
+class LCCalibration {
+    static Closure logger = { String level, String message, Throwable problem -> }      // set below to lcLog (a class cannot call the script's methods)
+    static Map catalog = null                                                            // the catalog in use (catalogFrom), set once the app is known
+    static final Set<String> NO_UNIT = ["", "pixel", "pixels", "px", "none", "dimensionless"] as Set   // texts that mean "no unit": unknown, and nothing to warn about
+    static final double MICRONS_PER_INCH = 25400.0d      // 1 inch = 25.4 mm: the TIFF ResolutionUnit INCH (a tag value, not a unit name of the catalog)
+    static final double MICRONS_PER_CM = 1.0e4d          // the TIFF ResolutionUnit CENTIMETER
+    static final String OME_MARKER = "<OME"              // the TIFF description of an OME-TIFF is OME-XML
+
+    /** The catalog the rules use, from the conformance data (`wrong_science.calibration` and `messages`); refuses data that does not have the expected shape. */
+    static Map catalogFrom(Map data) {
+        def calibration = data?.wrong_science?.calibration
+        if (!(calibration?.length_units instanceof Map) || !calibration.length_units) throw new IllegalArgumentException("no wrong_science.calibration.length_units")
+        def symbols = [:], words = [:]
+        calibration.length_units.each { name, entry ->
+            if (!(entry.um_per_unit instanceof Number) || !(entry.um_per_unit > 0) || !(entry.symbols instanceof List) || !(entry.words instanceof List))
+                throw new IllegalArgumentException("length unit '" + name + "' has no positive um_per_unit, symbols and words")
+            entry.symbols.each { symbols[it as String] = entry.um_per_unit as double }
+            entry.words.each { words[it as String] = entry.um_per_unit as double }
+        }
+        def dpi = calibration.default_resolution_dpi
+        def tolerance = calibration.anisotropy_tolerance?.relative_to_larger
+        if (!(tolerance instanceof Number) || !(dpi?.values instanceof List) || !(dpi?.per_cm instanceof List) || !(dpi?.tolerance_relative instanceof Number) || !(calibration.damaged_micro_prefix instanceof String))
+            throw new IllegalArgumentException("the anisotropy tolerance, the default resolutions or the damaged micro prefix are missing")
+        def messages = [:]
+        ["calibration_required", "calibration_unknown_tooltip", "unit_damaged_warning", "pixels_not_square_warning", "unit_not_length_warning"].each { key ->
+            if (!(data.messages?.get(key)?.template instanceof String)) throw new IllegalArgumentException("no message '" + key + "'")
+            messages[key] = data.messages[key].template as String
+        }
+        return [symbols: symbols, words: words, damaged: calibration.damaged_micro_prefix as String, tolerance: tolerance as double,
+                inch: dpi.values.collect { it as double }, centimetre: dpi.per_cm.collect { it as double }, resolutionTolerance: dpi.tolerance_relative as double, messages: messages]
+    }
+
+    /** A message of the conformance data with its `{name}` placeholders filled. */
+    static String message(String key, Map values = [:]) {
+        def text = catalog.messages[key] as String
+        values.each { name, value -> text = text.replace("{" + name + "}", value as String) }
+        return text
+    }
+
+    /** One unit text: [factor (um per unit) or null, warning or null]. Symbols (m, nm, um, mm, cm, the micro signs, the Angstrom signs) are exact text, case-sensitive, nothing trimmed;
+     *  words are matched case-insensitively after trimming; U+FFFD followed by m is a damaged micro sign; texts that say "no unit" are unknown quietly; anything else is not a length. */
+    static Map unit(String text) {
+        if (text == null) return noFactor()
+        if (catalog.symbols.containsKey(text)) return [factor: catalog.symbols[text], warning: null]
+        def word = text.trim().toLowerCase(Locale.ROOT)
+        if (catalog.words.containsKey(word)) return [factor: catalog.words[word], warning: null]
+        if (text == catalog.damaged + "m") return [factor: null, warning: message("unit_damaged_warning", [unit: text])]
+        if (word in NO_UNIT) return noFactor()
+        return [factor: null, warning: message("unit_not_length_warning", [unit: text])]
+    }
+
+    /** A unit text that gives no length and nothing to warn about. */
+    static Map noFactor() { return [factor: null, warning: null] }
+
+    /** An axis with no value (unknown). */
+    static Map noValue() { return [value: null] }
+
+    /** One axis: `scale` in the unit `text`, as [value (um per pixel) or null, raw: [scale, unit], warning]. */
+    static Map axis(double scale, String text) {
+        def found = unit(text)
+        def raw = [scale: scale, unit: text]
+        if (found.factor == null || !Double.isFinite(scale) || !(scale > 0.0d)) return [value: null, raw: raw, warning: found.warning]
+        return [value: scale * (found.factor as double), raw: raw, warning: null]
+    }
+
+    /** Both axes as one answer: the scalar is known only when both are, and they agree within the tolerance (relative to the larger, 2.1.5), where it is their mean. */
+    static Map combine(Map x, Map y, String source) {
+        def warning = x.warning ?: y.warning
+        if (x.value == null || y.value == null) return [known: false, value: null, x: x, y: y, warning: warning, source: source]
+        double a = x.value, b = y.value
+        if (Math.abs(a - b) > (catalog.tolerance as double) * Math.max(a, b)) return [known: false, value: null, x: x, y: y, warning: message("pixels_not_square_warning"), source: source]
+        return [known: true, value: (a + b) / 2.0d, x: x, y: y, warning: null, source: source]
+    }
+
+    /** No source, or one that says nothing: the pixel size is unknown. */
+    static Map unknown(String source, String warning = null) {
+        return [known: false, value: null, x: noValue(), y: noValue(), warning: warning, source: source]
+    }
+
+    /** The calibration of an open image: its Calibration (pixelWidth, pixelHeight and the unit of each axis); a bare scale with the default unit is unknown. */
+    static Map ofImage(ImagePlus imp) {
         def calibration = imp?.getCalibration()
-        if (calibration == null || !calibration.scaled()) return null
-        def unit = (calibration.getUnit() ?: "").toLowerCase().replace("\u00b5", "u").replace("\u03bc", "u").replace("\ufffd", "u")
-        def factor = MICRONS_PER_UNIT[unit]
-        return factor == null ? null : [calibration.pixelHeight * factor, calibration.pixelWidth * factor]
+        if (calibration == null) return unknown("image")
+        return combine(axis(calibration.pixelWidth, calibration.getXUnit()), axis(calibration.pixelHeight, calibration.getYUnit()), "image")
     }
-    /** Pixel size of an image in micrometres along X (what a tool with one pixel-size parameter gets), or null. */
-    static Double micronsPerPixel(ImagePlus imp) { return micronsYX(imp)?.getAt(1) }
-    /** The sentence for a pixel that is not square (one value cannot describe it; the tool gets X), or null (same words as the Napari form). */
-    static String anisotropyNote(List<Double> yx) {
-        if (yx == null || Math.abs(yx[0] - yx[1]) <= SQUARE_PIXEL_TOLERANCE * Math.max(Math.abs(yx[0]), Math.abs(yx[1]))) return null
-        return "pixel size differs: Y " + significant(yx[0]) + " \u00b5m, X " + significant(yx[1]) + " \u00b5m - the tool takes one value and gets X"
-    }
-    /** `value` with six significant digits and no trailing zeros (Python's %.6g for the sizes a pixel can have): 0.5, 0.325, 0.123457. */
-    static String significant(double value) {
-        return new BigDecimal(value).round(new java.math.MathContext(SIGNIFICANT_DIGITS)).stripTrailingZeros().toPlainString()
-    }
-    /** Pixel size (um) along X stored in a TIFF file's header, or null. */
-    static Double micronsFromFile(File file) { return micronsYXFromFile(file)?.getAt(1) }
-    /** Pixel size [y, x] (um) stored in a TIFF file's header (ImageJ description or TIFF resolution tags: inch and centimetre), without loading the pixels. */
-    static List<Double> micronsYXFromFile(File file) {
-        if (!file.isFile()) return null            // a path that is still being typed: nothing to read, nothing to complain about
+
+    /** The size, description and calibration of a TIFF file from its header, without loading the pixels: [width, height, calibration (as ImageJ would attach it), description,
+     *  pixel_width, pixel_height, tag_unit], or null for a file that is not there (a path still being typed) or whose header cannot be read (said in the Log: enter the pixel size by hand). */
+    static Map header(File file) {
+        if (file == null || !file.isFile()) return null
         try {
-            def info = new ij.io.TiffDecoder(file.parent + File.separator, file.name).getTiffInfo()
-            if (!info || info[0].pixelWidth <= 0 || info[0].pixelWidth == 1.0d && !info[0].description) return null
-            def unit = (info[0].description =~ /(?m)^unit=(.*)$/).with { it.find() ? it.group(1) : (info[0].unit ?: "") }
-            unit = unit.toLowerCase().replace("\u00b5", "u").replace("\u03bc", "u").replace("\ufffd", "u").trim()
-            def factor = MICRONS_PER_UNIT[unit] ?: (unit == "inch" ? MICRONS_PER_INCH : null)
-            if (factor == null) return null
-            def height = info[0].pixelHeight > 0 && info[0].pixelHeight != 1.0d ? info[0].pixelHeight : info[0].pixelWidth   // no YResolution tag: square pixels
-            return [height * factor, info[0].pixelWidth * factor]
+            def info = new ij.io.TiffDecoder(file.absoluteFile.parent + File.separator, file.name).getTiffInfo()
+            if (!info) return null
+            def first = info[0], calibration = new ij.measure.Calibration()
+            if (first.pixelWidth > 0) calibration.pixelWidth = first.pixelWidth
+            if (first.pixelHeight > 0) calibration.pixelHeight = first.pixelHeight
+            if (first.pixelDepth > 0) calibration.pixelDepth = first.pixelDepth
+            calibration.setUnit(first.unit ?: "")
+            (first.description ?: "").eachLine { String line ->
+                def pair = line.split("=", 2)
+                if (pair.length == 2 && pair[0] in ["xorigin", "yorigin", "zorigin"] && pair[1].trim() ==~ /[+-]?[0-9]*[.]?[0-9]+([eE][+-]?[0-9]+)?/) calibration."${pair[0][0]}Origin" = Double.parseDouble(pair[1].trim())
+            }
+            return [width: first.width, height: first.height, calibration: calibration, description: first.description ?: "", pixel_width: first.pixelWidth, pixel_height: first.pixelHeight, tag_unit: first.unit]
         // groovylint-disable-next-line CatchException
         } catch (Exception problem) {      // not a TIFF / unreadable header (TiffDecoder throws IOException or runtime errors on garbage)
             // not "no calibration" but "could not read it": tell the user instead of silently leaving the field alone
@@ -138,51 +224,135 @@ class LCModule extends DefaultMutableModule {
             return null
         }
     }
-    // SciJava resolves callbacks by method name, so each linked image parameter gets a fixed slot (max 8 per tool).
+
+    /** The calibration of a TIFF file by its metadata (2.1.6): OME PhysicalSize with its unit, else an ImageJ `unit=` line, else the TIFF resolution tags when their unit is
+     *  INCH or CENTIMETER and they do not look like a default (72 or 96 dpi): nothing else is a calibration. */
+    static Map ofFile(File file) {
+        def header = header(file)
+        if (header == null) return unknown("file")
+        def description = header.description as String
+        if (description.contains(OME_MARKER)) {
+            def attribute = { String name -> (description =~ (name + /="([^"]*)"/)).with { it.find() ? it.group(1) : null } }
+            def physical = { String letter ->
+                def size = attribute("PhysicalSize" + letter), unitText = attribute("PhysicalSize" + letter + "Unit")
+                size != null && size.trim() ==~ /[+-]?[0-9]*[.]?[0-9]+([eE][+-]?[0-9]+)?/ && unitText != null ? axis(Double.parseDouble(size.trim()), unitText) : noValue()    // no unit attribute: the number alone is no evidence
+            }
+            return combine(physical("X") as Map, physical("Y") as Map, "file")
+        }
+        def squareHeight = header.pixel_height > 0 && header.pixel_height != 1.0d ? header.pixel_height : header.pixel_width    // no YResolution tag: square pixels, as ImageJ reads it
+        def imagejUnit = (description =~ /(?m)^unit=(.*?)\r?$/).with { it.find() ? it.group(1) : null }
+        if (imagejUnit != null && header.pixel_width > 0) return combine(axis(header.pixel_width, imagejUnit), axis(squareHeight, imagejUnit), "file")
+        return ofResolutionTags(header, squareHeight)
+    }
+
+    /** TIFF resolution tags alone: a length only with the unit INCH (also when the file has no ResolutionUnit tag: the TIFF default) or CENTIMETER, and never when the resolution looks like a default. */
+    static Map ofResolutionTags(Map header, double squareHeight) {
+        def tagUnit = header.tag_unit as String
+        def perInch = tagUnit == "inch" || (tagUnit == null && header.pixel_width != 1.0d)
+        if (!perInch && tagUnit != "cm") return unknown("file")                      // NONE, or no resolution at all
+        if (!(header.pixel_width > 0)) return unknown("file")
+        def defaults = perInch ? catalog.inch : catalog.centimetre
+        def looksDefault = [header.pixel_width, squareHeight].any { double size ->
+            defaults.any { double dpi -> Math.abs(1.0d / size - dpi) <= (catalog.resolutionTolerance as double) * dpi }
+        }
+        if (looksDefault) {
+            logger("INFO", "the TIFF resolution of " + header.pixel_width + " per " + (perInch ? "inch" : "centimetre") + " looks like a default: not a calibration", null)
+            return unknown("file")
+        }
+        double factor = perInch ? MICRONS_PER_INCH : MICRONS_PER_CM
+        def tagAxis = { double size -> [value: size * factor, raw: [scale: size, unit: perInch ? "inch" : "cm"], warning: null] }
+        return combine(tagAxis(header.pixel_width as double) as Map, tagAxis(squareHeight) as Map, "file")
+    }
+}
+
+/** Module whose callbacks keep a calibration field in step with the image chosen for it (schema: pixel_size_of): the field has one of three states, `unset` (the box shows 0), `auto` (the
+ *  calibration of the chosen file or image) or `user` (a value the person entered); the state is set by the events of the dialog, never inferred by comparing values (2.2). */
+class LCModule extends DefaultMutableModule {
+    Map<String, List<String>> links = [:]     // image parameter -> [pixel-size parameters]
+    Map<String, Map> states = [:]             // pixel-size parameter -> [state: unset|auto|user, value, source]
+    Map tool = [:]                            // the tool this dialog is for (which image parameters are optional)
+    LCModule(MutableModuleInfo info) { super(info) }
+    @Override
+    void run() {}                              // all work happens after harvesting
+
+    static Closure logger = { String level, String message, Throwable problem -> }   // set below to lcLog (a class cannot call the script's methods)
+    // SciJava resolves callbacks by method name, so each linked image parameter gets a fixed slot (max 8 per tool), and so does each pixel-size field (`edited`).
     void syncImage0() { sync(0) }
-    void syncFile0() { syncFromFile(0) }
+    void syncFile0() { sync(0) }
     void syncImage1() { sync(1) }
-    void syncFile1() { syncFromFile(1) }
+    void syncFile1() { sync(1) }
     void syncImage2() { sync(2) }
-    void syncFile2() { syncFromFile(2) }
+    void syncFile2() { sync(2) }
     void syncImage3() { sync(3) }
-    void syncFile3() { syncFromFile(3) }
+    void syncFile3() { sync(3) }
     void syncImage4() { sync(4) }
-    void syncFile4() { syncFromFile(4) }
+    void syncFile4() { sync(4) }
     void syncImage5() { sync(5) }
-    void syncFile5() { syncFromFile(5) }
+    void syncFile5() { sync(5) }
     void syncImage6() { sync(6) }
-    void syncFile6() { syncFromFile(6) }
+    void syncFile6() { sync(6) }
     void syncImage7() { sync(7) }
-    void syncFile7() { syncFromFile(7) }
+    void syncFile7() { sync(7) }
+    void edited0() { edited(0) }
+    void edited1() { edited(1) }
+    void edited2() { edited(2) }
+    void edited3() { edited(3) }
+    void edited4() { edited(4) }
+    void edited5() { edited(5) }
+    void edited6() { edited(6) }
+    void edited7() { edited(7) }
     /** The image a chooser names: a window title (dialog) or the image itself (macro replay). */
     static ImagePlus imageOf(def value) { return value instanceof ImagePlus ? value : (value ? WindowManager.getImage(value as String) : null) }
-    /** Callback body: copy the pixel size of the file chosen next to image parameter number `slot` into its linked fields. */
-    private void syncFromFile(int slot) {
-        def imageName = links.keySet().toList()[slot]
-        def file = getInput(imageName + "_file") as File
-        follow(imageName, file ? micronsYXFromFile(file) : null)
+    /** What image parameter `imageName` exports, the file before the open image (2.2): [kind: "file", file], [kind: "image", image] or null (an optional image that is not used, or no image). */
+    static Map sourceOf(Map tool, def module, String imageName) {
+        def file = module.getInput(imageName + "_file") as File
+        if (file) return [kind: "file", file: file]
+        def parameter = (tool.inputs ?: []).find { it.name == imageName }
+        if (parameter != null && !parameter.required && !module.getInput("use_" + imageName)) return null
+        def image = imageOf(module.getInput(imageName))
+        return image == null ? null : [kind: "image", image: image]
     }
-    /** Callback body: copy the pixel size of the image chosen for image parameter number `slot` into its linked fields. */
-    private void sync(int slot) {
-        def imageName = links.keySet().toList()[slot]
-        follow(imageName, micronsYX(imageOf(getInput(imageName))))
+    /** The calibration of what `source` names (unknown when there is none). */
+    static Map calibrationOf(Map source) {
+        return source == null ? LCCalibration.unknown("image") : source.kind == "file" ? LCCalibration.ofFile(source.file as File) : LCCalibration.ofImage(source.image as ImagePlus)
     }
-    /** Put the pixel size [y, x] found for `imageName` into its linked fields (X), warning when the pixels are not square.
-     *  A field whose value is not the one this module put there was typed by the person: it keeps what was typed. */
-    private void follow(String imageName, List<Double> yx) {
-        if (yx == null) return
-        def note = anisotropyNote(yx)
-        if (note) {
-            logger("WARNING", note, null)
-            IJ.log("LabConstrictor: " + note)
+    /** Callback body: the file or image chosen for image parameter number `slot` changed. */
+    private void sync(int slot) { follow(links.keySet().toList()[slot], links.values().flatten() as List<String>) }
+    /** Callback body: the pixel-size field number `slot` was changed by the person: a value above 0 is theirs (`user`); 0, the lowest the box can show, clears it and it follows the image again. */
+    private void edited(int slot) {
+        def name = links.values().flatten().toList()[slot] as String
+        def value = getInput(name) as Double
+        if (value != null && value > 0.0d) {
+            states[name] = [state: "user", value: value, source: "user"]
+            return
         }
-        links[imageName].each { name ->
-            def current = getInput(name) as Double, last = synced[name]
-            if (current != null && last != null && Math.abs(current - last) > TYPED_TOLERANCE * Math.max(1.0d, Math.abs(last))) return
-            setInput(name, yx[1])
-            synced[name] = yx[1]
+        states[name] = unset()
+        follow(links.find { it.value.contains(name) }.key, [name])
+    }
+    /** Put the calibration of the source of `imageName` into the given linked fields: known, the field shows it (`auto`); unknown, the field is cleared (`unset`) and the Log says why.
+     *  A field the person entered a value in is left alone. */
+    private void follow(String imageName, List names) {
+        def source = sourceOf(tool, this, imageName)
+        def found = calibrationOf(source)
+        if (found.warning) say(imageName + ": " + found.warning)
+        links[imageName].findAll { it in names }.each { String name ->
+            def state = states[name]
+            if (state?.state == "user") {
+                say("'" + name + "' keeps the value you entered (" + state.value + " um); it overrides the calibration of '" + imageName + "'")
+            } else if (found.known) {
+                setInput(name, found.value as double)
+                states[name] = [state: "auto", value: found.value, source: source.kind]
+            } else {
+                setInput(name, 0.0d)
+                states[name] = unset()
+                say(LCCalibration.message("calibration_unknown_tooltip", [of: imageName]))
+            }
         }
+    }
+    static Map unset() { return [state: "unset"] }
+    private static void say(String sentence) {
+        logger("INFO", sentence, null)
+        IJ.log("LabConstrictor: " + sentence)
     }
 }
 
@@ -207,6 +377,8 @@ if (harnessPath) hooks += new GroovyShell(this.class.classLoader).evaluate(new F
 String lcHome() { System.getenv("LC_HOME") ?: (System.getProperty("user.home") + "/.labconstrictor") }
 
 LCModule.logger = { String level, String message, Throwable problem -> lcLog(level, message, problem) }
+LCCalibration.logger = LCModule.logger
+LCCalibration.catalog = LCCalibration.catalogFrom(UNIT_CATALOG_FALLBACK)
 
 @Field boolean logRotationFailureShown = false     // a rotation that fails is reported once per session (stderr: the log is what failed)
 
@@ -251,6 +423,36 @@ void removeFolder(File folder, String what) {
         if (folder.exists() && !folder.deleteDir()) lcLog("WARNING", "could not remove the " + what + " " + folder)
     } catch (SecurityException problem) {
         lcLog("WARNING", "could not remove the " + what + " " + folder + ": " + problem, problem)
+    }
+}
+
+/** The unit catalog the calibration rules use: the conformance data of the app's own Tools (`python -m labconstrictor_tools.conformance --path`, run with the app's interpreter,
+ *  so that every later edit of the shared file is followed), or the copy built into this script when that Tools has no conformance module (an older app) or its data is not
+ *  usable: the Log says which. Returns "app" or "built-in". */
+String useUnitCatalog(Map app) {
+    try {
+        def builder = new ProcessBuilder([app.python as String, "-m", "labconstrictor_tools.conformance", "--path"])
+        builder.environment().putAll([PYTHONPATH: app.runtime_path as String, PYTHONNOUSERSITE: "1", PYTHONSAFEPATH: "1", PYTHONIOENCODING: "utf-8"])
+        SCRUBBED_ENV.each { builder.environment().remove(it) }
+        builder.directory(new File(System.getProperty("user.dir")))
+        builder.redirectError(ProcessBuilder.Redirect.DISCARD)
+        def process = builder.start()
+        def output = new StringBuffer()
+        def reader = Thread.start { output << process.inputStream.getText("UTF-8") }
+        if (!process.waitFor(CATALOG_TIMEOUT_S, java.util.concurrent.TimeUnit.SECONDS)) { process.destroyForcibly(); throw new IOException("no answer within " + CATALOG_TIMEOUT_S + " s") }
+        reader.join((CATALOG_TIMEOUT_S * MS_PER_SECOND) as long)
+        if (process.exitValue() != 0) throw new IOException("exit code " + process.exitValue())
+        def file = new File(output.toString().readLines().findAll { it.trim() }.last().trim())
+        if (!file.isFile() || file.name != "conformance.json") throw new IOException("not the conformance file: " + file)
+        LCCalibration.catalog = LCCalibration.catalogFrom(new JsonSlurper().parseText(file.getText("UTF-8")) as Map)
+        lcLog("INFO", "calibration: unit catalog of " + app.name + " (" + file.path + ")")
+        return "app"
+    // groovylint-disable-next-line CatchException
+    } catch (Exception problem) {          // an app whose Tools predates the conformance data, or data that cannot be used: the built-in copy is the fallback, said once
+        LCCalibration.catalog = LCCalibration.catalogFrom(UNIT_CATALOG_FALLBACK)
+        lcLog("WARNING", "calibration: " + app.name + " has no usable unit catalog (" + problem + "): using the one built into this plugin", problem)
+        IJ.log("LabConstrictor: the Tools of " + app.name + " have no unit catalog (" + problem.message + "); using the catalog built into this plugin")
+        return "built-in"
     }
 }
 
@@ -470,11 +672,12 @@ def addItem(MutableModuleInfo info, String name, Class type, Map o) {
 }
 
 /** Show Fiji's native input dialog for `info`; returns the harvested module, or null if cancelled. */
-def harvest(MutableModuleInfo info, String title, Map links = [:]) {
+def harvest(MutableModuleInfo info, String title, Map links = [:], Map tool = [:], Map states = [:]) {
     hooks.beforeDialog(title)
     def module = new LCModule(info)
     module.links = links
-    links.values().flatten().each { name -> module.synced[name as String] = info.getInput(name as String)?.getDefaultValue() as Double }
+    module.tool = tool
+    module.states.putAll(states)              // what the fields start as: set by the dialog's own events from here on (2.2)
     return moduleService.run(module, true).get()
 }
 
@@ -548,7 +751,8 @@ def overrideOr(String key, def fallback) { return hooks.overrides.containsKey(ke
 List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
     def info = newInfo(tool.label)
     def links = pixelSizeLinks(tool)                         // image param -> [pixel-size params]
-    def context = [openImages: openImages, choiceLists: choiceLists, linkedImages: links.keySet().toList(), defaultTitle: defaultImageTitles(tool, openImages)]
+    def context = [openImages: openImages, choiceLists: choiceLists, linkedImages: links.keySet().toList(), linkedFields: links.values().flatten().toList(),
+                   defaultTitle: defaultImageTitles(tool, openImages), states: [:], tool: tool]
     if (openImages && tool.inputs.any { it.type in ["image", "labels"] }) {
         // also keeps SciJava from replacing a one-image dialog by a bare file chooser (the open image is auto-resolved)
         addItem(info, "image_source_note", String, [label: "Image source", message: true, required: false,
@@ -561,13 +765,13 @@ List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
         if (row.heading) addItem(info, "heading_" + (headings++), String, [label: row.heading, message: true, required: false, default: "— " + row.heading + " —"])
         else addParameterItems(info, row.parameter, context)
     }
-    return [info, links]
+    return [info, links, context.states]
 }
 
 /** The dialog items of one parameter: an optional "Set" box for nullable ones, then the field(s) its type needs. */
 void addParameterItems(MutableModuleInfo info, Map p, Map context) {
     def base = [label: p.label + (p.unit ? " (" + p.unit + ")" : ""), description: p.description, required: p.required]
-    if (p.nullable && p.type in ["string", "integer", "float", "choice", "boolean"]) {   // optional with no default: "unset" must stay possible
+    if (p.nullable && !p.pixel_size_of && p.type in ["string", "integer", "float", "choice", "boolean"]) {   // optional with no default: "unset" must stay possible (a linked pixel size is unset when its image has none)
         addItem(info, "set_" + p.name, Boolean, [label: "Set " + p.label.toLowerCase(), required: false, default: overrideOr("set_" + p.name, false)])
     }
     def overridden = hooks.overrides.containsKey(p.name)
@@ -649,7 +853,7 @@ void addImageItems(MutableModuleInfo info, Map p, Map base, Map context) {
     }
     if (openImages) {
         if (!p.required) {                       // SciJava image choosers cannot be empty
-            addItem(info, "use_" + p.name, Boolean, [label: "Use " + p.label.toLowerCase(), required: false, default: overrideOr("use_" + p.name, false)])
+            addItem(info, "use_" + p.name, Boolean, [label: "Use " + p.label.toLowerCase(), required: false, default: overrideOr("use_" + p.name, false), callback: slot >= 0 ? "syncImage" + slot : null])
         }
         addItem(info, p.name, String, base + [choices: openImages, default: defaultTitle, callback: slot >= 0 ? "syncImage" + slot : null])
         addItem(info, p.name + "_file", File, [label: p.label + " (or file)", required: false,
@@ -675,23 +879,49 @@ void addStringItem(MutableModuleInfo info, Map p, Map base, def override, Map ch
     else addItem(info, p.name, String, base + [default: override ?: p.default ?: ""])
 }
 
-/** Float parameter, prefilled from the calibration of the image (or file) it is linked to. */
+/** Float parameter. One linked to an image by PixelSizeOf follows that image's calibration (addLinkedFloatItem); any other is a plain number field. */
 // groovylint-disable-next-line ParameterCount
 void addFloatItem(MutableModuleInfo info, Map p, Map base, boolean overridden, def override, Map context) {
-    def openImages = context.openImages
+    if (p.pixel_size_of) {
+        addLinkedFloatItem(info, p, base, overridden, override, context)
+        return
+    }
     def value = overridden ? override : p.default
-    def source = p.pixel_size_of && openImages ? WindowManager.getImage(context.defaultTitle[p.pixel_size_of] ?: openImages[0]) : null
-    def found = LCModule.micronsYX(source)
-    def fileSource = p.pixel_size_of ? hooks.overrides[p.pixel_size_of + "_file"] : null
-    if (found == null && fileSource) found = LCModule.micronsYXFromFile(new File(fileSource as String))
-    def microns = found?.getAt(1)
-    def squareNote = LCModule.anisotropyNote(found)
-    if (squareNote) { lcLog("WARNING", squareNote); IJ.log("LabConstrictor: " + squareNote) }
-    if (microns != null) value = microns                                                      // calibration prefill (unit-aware)
-    if (p.pixel_size_of && value == null)
-        IJ.log("LabConstrictor: no pixel size found for '" + p.label + "' (the image has no usable calibration): enter it by hand")
     def floatItem = addItem(info, p.name, Double, base + [default: (value != null ? value : startNumber(p, false, null)) as Double, min: p.minimum as Double, max: p.maximum as Double, step: FLOAT_STEP])
     if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) floatItem.setWidgetStyle("slider")   // Widget("slider")
+}
+
+/** The source a pixel-size field starts from: the file given for its image (a file wins), else the image the chooser starts on (an optional image only when it is used). */
+Map initialSource(Map p, Map context) {
+    def imageName = p.pixel_size_of as String
+    def fileOverride = hooks.overrides[imageName + "_file"]
+    if (fileOverride) return [kind: "file", file: new File(fileOverride as String)]
+    def parameter = context.tool.inputs.find { it.name == imageName }
+    if (parameter != null && !parameter.required && !hooks.overrides["use_" + imageName]) return null
+    def image = context.openImages && context.defaultTitle[imageName] ? WindowManager.getImage(context.defaultTitle[imageName] as String) : null
+    return image == null ? null : [kind: "image", image: image]
+}
+
+/** A pixel-size field linked to an image (PixelSizeOf): the calibration of that image or file when it has one (`auto`), else empty (`unset`, the box shows 0 and the run is blocked until
+ *  a value is entered). A declared default is never a stand-in (it was written for the author's example image); a value the harness or a macro gives for it counts as entered (`user`). */
+// groovylint-disable-next-line ParameterCount
+void addLinkedFloatItem(MutableModuleInfo info, Map p, Map base, boolean overridden, def override, Map context) {
+    def imageName = p.pixel_size_of as String
+    def source = initialSource(p, context)
+    def found = LCModule.calibrationOf(source)
+    if (found.warning) { lcLog("WARNING", imageName + ": " + found.warning); IJ.log("LabConstrictor: " + imageName + ": " + found.warning) }
+    def state = LCModule.unset(), value = 0.0d
+    if (found.known) { value = found.value as double; state = [state: "auto", value: value, source: source.kind] }
+    else if (overridden && override != null && (override as double) > 0.0d) { value = override as double; state = [state: "user", value: value, source: "user"] }
+    else {
+        def sentence = LCCalibration.message("calibration_unknown_tooltip", [of: imageName])
+        lcLog("INFO", sentence)
+        IJ.log("LabConstrictor: " + sentence)
+    }
+    context.states[p.name] = state
+    def description = [p.description, state.state == "unset" ? LCCalibration.message("calibration_unknown_tooltip", [of: imageName]) : null].findAll { it }.join(" ")
+    def slot = context.linkedFields.indexOf(p.name)
+    addItem(info, p.name, Double, base + [description: description, default: value, min: 0.0d, max: p.maximum as Double, step: FLOAT_STEP, callback: slot >= 0 && slot < MAX_LINKED_FIELDS ? "edited" + slot : null])
 }
 
 // ---- remembered values and ChoicesFrom (dropdowns filled by asking another tool of the app)
@@ -815,12 +1045,14 @@ Map requestFromDialog(Map found, Map summary) {
     if (toolName == null) return cancelled(summary)
     def tool = choices.find { it[0] == toolName }[1] as Map
 
+    summary.unit_catalog = useUnitCatalog(app)
     def openImages = WindowManager.getImageTitles() as List<String>
     def dialogStarted = System.nanoTime()
-    def (info, links) = buildToolDialog(tool, openImages, choiceListsFor(app, tool))
+    def (info, links, states) = buildToolDialog(tool, openImages, choiceListsFor(app, tool))
     summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / NANOS_PER_SECOND
     describeDialog(summary, info)
-    def module = harvest(info, tool.label, links)
+    summary.calibration_states_initial = states
+    def module = harvest(info, tool.label, links, tool, states)
     if (module == null) return cancelled(summary)
     recordRun(app, tool, module)
     return [app: app, tool: tool, module: module]
@@ -973,11 +1205,33 @@ List exportOpenImage(Map p, def module, File jobDir) {
     return [file.path, chosenImage, p.pick_channel && chosenImage.getNChannels() > 1 ? [channel: (module.getInput(p.name + "_channel") ?: 1) as int] : null]
 }
 
+/** The value of a pixel-size field for the worker, and the `_calibration` entry that says where it came from (SPEC_WRONG_SCIENCE 2.3): the value the person entered (`user`), else the
+ *  calibration of the file or image that is exported, read again now (a window's calibration may have been edited since it was chosen). Unknown: a required field is refused with the
+ *  shared sentence, whatever the declared default, and an Optional one is null (returns null). Returns [value (um/px), entry] or null. */
+Map linkedPixelSize(Map p, Map tool, def module) {
+    def imageName = p.pixel_size_of as String, state = module.states?.get(p.name)
+    if (state?.state == "user") {
+        def value = module.getInput(p.name) as Double
+        if (value == null || !Double.isFinite(value) || value <= 0.0d) throw new IllegalArgumentException("'" + p.label + "' must be a number greater than 0, got " + value)
+        def axes = ["x", "y"].collectEntries { [(it): [value: value, unit: "um", source: "user"]] }
+        return [value: value, entry: [of: imageName, source: "user", axes: axes]]
+    }
+    def source = LCModule.sourceOf(tool, module, imageName)
+    def found = LCModule.calibrationOf(source)
+    if (found.warning) { lcLog("WARNING", imageName + ": " + found.warning); IJ.log("LabConstrictor: " + imageName + ": " + found.warning) }
+    if (!found.known) {
+        if (p.nullable) return null
+        throw new IllegalArgumentException(LCCalibration.message("calibration_required", [param: p.name, of: imageName]))
+    }
+    def axes = ["x", "y"].collectEntries { name -> [(name): [value: found[name].value, unit: "um", source: source.kind, raw: found[name].raw]] }
+    return [value: found.value as double, entry: [of: imageName, source: source.kind, axes: axes]]
+}
+
 /** Harvested values -> worker inputs. Images are saved as TIFF (calibration travels as explicit parameters). Returns [inputs, images, modifiers, frames]:
  *  `modifiers` names, per image parameter, what the worker got that a command line cannot repeat (the selection, one channel); `frames` is the frame
  *  recorded at the click for each exported image (SPEC_WRONG_SCIENCE 1.1.2), which every result is placed by. */
 List exportInputs(Map tool, def module, File jobDir) {
-    def inputs = [:], images = [:], modifiers = [:], frames = [:]
+    def inputs = [:], images = [:], modifiers = [:], frames = [:], calibration = [:]
     tool.inputs.each { p ->
         def value = module.getInput(p.name)
         switch (p.type) {
@@ -998,12 +1252,18 @@ List exportInputs(Map tool, def module, File jobDir) {
                 }
                 break
             default:
+                if (p.pixel_size_of && p.type == "float") {                      // PixelSizeOf: the value and where it came from (2.3), never the declared default
+                    def linked = linkedPixelSize(p, tool, module)
+                    if (linked != null) { inputs[p.name] = linked.value; calibration[p.name] = linked.entry }
+                    break
+                }
                 if (p.nullable && !module.getInput("set_" + p.name)) break      // unset: the tool receives None
                 if (value != null && p.type == "choice") value = typedChoice(p, value)
                 if (value != null) inputs[p.name] = value
         }
     }
     inputs[JOB_DIR_KEY] = jobDir.path
+    if (calibration) inputs[CALIBRATION_KEY] = calibration
     return [inputs, images, modifiers, frames]
 }
 
@@ -1163,31 +1423,6 @@ double placedX(double x, Map frame) { return placed(x, frame.axes_offset.x as do
 /** `y` of a result in the ImageJ coordinates of the image `frame` describes. */
 double placedY(double y, Map frame) { return placed(y, frame.axes_offset.y as double, frame.downsample as double) }
 
-/** The size and header calibration of an image file, read from its TIFF header without loading the pixels: [width, height, calibration], or null for a file
- *  that is not a TIFF (its size is then not compared and no calibration is carried; a missing file is not an error here). The calibration is what ImageJ
- *  itself would attach to the opened image: the unit and pixel size of the ImageJ description, else of the TIFF resolution tags, and the origin. */
-Map fileHeader(File file) {
-    if (!file.isFile()) return null
-    try {
-        def info = new ij.io.TiffDecoder(file.absoluteFile.parent + File.separator, file.name).getTiffInfo()
-        if (!info) return null
-        def first = info[0], calibration = new ij.measure.Calibration()
-        if (first.pixelWidth > 0) calibration.pixelWidth = first.pixelWidth
-        if (first.pixelHeight > 0) calibration.pixelHeight = first.pixelHeight
-        if (first.pixelDepth > 0) calibration.pixelDepth = first.pixelDepth
-        calibration.setUnit(first.unit ?: "")
-        (first.description ?: "").eachLine { String line ->
-            def pair = line.split("=", 2)
-            if (pair.length == 2 && pair[0] in ["xorigin", "yorigin", "zorigin"] && pair[1].trim() ==~ FLOAT_TEXT) calibration."${pair[0][0]}Origin" = Double.parseDouble(pair[1].trim())
-        }
-        return [width: first.width, height: first.height, calibration: calibration]
-    // groovylint-disable-next-line CatchException
-    } catch (Exception problem) {      // not a TIFF (a PNG, a text file): nothing to read, said in the log
-        lcLog("INFO", "no TIFF header read from " + file.path + " (" + problem + "): its size is not compared and no calibration is carried to results")
-        return null
-    }
-}
-
 /** The frame the run records at the click for one exported image (1.1.2): the source (the ImagePlus object, or the file), the exported width x height,
  *  `axes_offset` (the origin of the exported area in the full-resolution image: 0, Fiji writes the whole image), the exported `plane` (channel, z, t, one-based as
  *  ImageJ counts them; channel 0 when every channel was exported, z and t of the window at the click) and `downsample` (1). There is no `transform`: ImageJ
@@ -1199,7 +1434,7 @@ Map frameOf(String name, def source, def modifiers) {
         plane.z = source.getSlice(); plane.t = source.getFrame()
         return frame + [image: source, label: source.getTitle(), width: source.getWidth(), height: source.getHeight(), plane: plane]
     }
-    def file = new File(source as String), header = fileHeader(file)
+    def file = new File(source as String), header = LCCalibration.header(file)
     return frame + [file: file.path, label: file.name, width: header?.width ?: 0, height: header?.height ?: 0, plane: plane, header: header]
 }
 
@@ -1661,6 +1896,7 @@ void reportEnd(Map outcome, Map summary) {
 /** Module stand-in for a macro call: same getInput(name) contract as the harvested dialog module, values from the options string. */
 class MacroModule {
     Map values = [:]
+    Map states = [:]                          // pixel-size parameter -> [state: user, value] when the macro gave one
     def getInput(String name) { values[name] }
 }
 
@@ -1688,6 +1924,11 @@ Map<String, String> toMacroOptions(Map app, Map tool, def module) {
                 if (f) o[p.name] = f.path
                 break
             default:
+                if (p.pixel_size_of) {                                           // a pixel size that is set is replayed as a value; unset stays out (the replay then follows the image)
+                    def size = module.getInput(p.name) as Double
+                    if (size != null && size > 0.0d) o[p.name] = size.toString()
+                    break
+                }
                 if (p.nullable && !module.getInput("set_" + p.name)) break      // unset stays out of the macro
                 def v = module.getInput(p.name)
                 if (v != null) o[p.name] = v.toString()
@@ -1771,7 +2012,7 @@ void takeMacroParameter(MacroModule module, Map p, String options) {
         def channelText = Macro.getValue(options, p.name + "_channel", null)
         module.values[p.name + "_channel"] = channelText == null ? 1 : macroNumber([type: "integer", label: p.label + " channel", minimum: 1], channelText)
     }
-    if (p.nullable && p.type in ["string", "integer", "float", "choice", "boolean"]) {   // optional, no default: not in the macro = unset
+    if (p.nullable && !p.pixel_size_of && p.type in ["string", "integer", "float", "choice", "boolean"]) {   // optional, no default: not in the macro = unset
         module.values["set_" + p.name] = text != null
         if (text == null) return
     }
@@ -1786,6 +2027,11 @@ void takeMacroParameter(MacroModule module, Map p, String options) {
             module.values[p.name] = text == null ? (fitsInt(p.default ?: 0) ? (p.default ?: 0) as Integer : p.default as Long) : macroNumber(p, text)
             break
         case "float":
+            if (p.pixel_size_of) {                                               // a pixel size the macro gives is entered (`user`); one it leaves out follows the image, never the default
+                module.values[p.name] = text == null ? 0.0d : macroNumber(p, text) as Double
+                if (text != null) module.states[p.name] = [state: "user", value: module.values[p.name]]
+                break
+            }
             module.values[p.name] = text == null ? (p.default ?: 0) as Double : macroNumber(p, text)
             break
         case "choice":
@@ -1815,6 +2061,7 @@ Map requestFromMacro(Map found, String macro, Map summary) {
     def appName = found.apps.keySet().find { it.equalsIgnoreCase(appText) }
     if (appName == null) return [aborted: true, result: failEarly(summary, "unknown app '" + Macro.getValue(macro, "app", "") + "' (registered: " + found.apps.keySet().join(", ") + ")")]
     def app = found.apps[appName]
+    summary.unit_catalog = useUnitCatalog(app)
     def tool = toolChoices(app).find { it[0].equalsIgnoreCase(toolText) }?.getAt(1) ?: app.schema.tools.find { it.label.equalsIgnoreCase(toolText) || it.id == Macro.getValue(macro, "tool", "") }
     if (tool == null) return [aborted: true, result: failEarly(summary, "unknown tool '" + Macro.getValue(macro, "tool", "") + "' in " + appName + " (tools: " + app.schema.tools.collect { it.label }.join(", ") + ")")]
     def module
@@ -1984,6 +2231,7 @@ def runRequest(Map app, Map tool, def module, Map summary) {
     def jobDir = Files.createTempDirectory("lcjob_fiji_").toFile()
     try {                                                        // the folder goes whatever happens from here on
         List exported
+        summary.calibration_states = module.states ?: [:]          // the state of each pixel-size field when the person clicked OK (2.2)
         try {
             exported = exportInputs(tool, module, jobDir)
         } catch (IllegalArgumentException problem) {           // missing file, nothing chosen for a required image

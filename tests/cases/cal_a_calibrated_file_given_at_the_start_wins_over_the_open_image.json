@@ -1,0 +1,68 @@
+{
+ "app": "calibration",
+ "tool": "Pixel size required",
+ "register": [
+  {
+   "name": "calibration",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/calibration_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "a.tif",
+   "pixel_size": 0.65
+  }
+ ],
+ "select": [
+  "a.tif"
+ ],
+ "overrides": {
+  "image": "a.tif",
+  "image_file": "${FIXTURES}/cm_resolution.tif"
+ },
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "calibration_states_initial.pixel_size": {
+    "state": "auto",
+    "value": 0.25,
+    "source": "file"
+   },
+   "request.pixel_size": 0.25,
+   "request._calibration.pixel_size": {
+    "of": "image",
+    "source": "file",
+    "axes": {
+     "x": {
+      "value": 0.25,
+      "unit": "um",
+      "source": "file",
+      "raw": {
+       "scale": 2.5e-05,
+       "unit": "cm"
+      }
+     },
+     "y": {
+      "value": 0.25,
+      "unit": "um",
+      "source": "file",
+      "raw": {
+       "scale": 2.5e-05,
+       "unit": "cm"
+      }
+     }
+    }
+   }
+  }
+ },
+ "conformance": [
+  "CAL-T5",
+  "CAL-10"
+ ]
+}

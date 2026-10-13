@@ -1,0 +1,55 @@
+{
+ "app": "calibration",
+ "tool": "Pixel size required",
+ "register": [
+  {
+   "name": "calibration",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/calibration_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "a.tif",
+   "pixel_size": 0.25
+  }
+ ],
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "request.pixel_size": 0.25,
+   "request._calibration.pixel_size": {
+    "of": "image",
+    "source": "image",
+    "axes": {
+     "x": {
+      "value": 0.25,
+      "unit": "um",
+      "source": "image",
+      "raw": {
+       "scale": 0.25,
+       "unit": "\u00b5m"
+      }
+     },
+     "y": {
+      "value": 0.25,
+      "unit": "um",
+      "source": "image",
+      "raw": {
+       "scale": 0.25,
+       "unit": "\u00b5m"
+      }
+     }
+    }
+   }
+  }
+ },
+ "conformance": [
+  "CAL-T1"
+ ],
+ "macro": "app=calibration tool=[Pixel size required] image=a.tif"
+}
