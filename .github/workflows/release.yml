@@ -209,14 +209,14 @@ jobs:
         with:
           path: fiji-dist
           key: fiji-release-${{ matrix.platform }}-${{ env.FIJI_PIN }}
-      - name: Python for the example app (Windows: a conda environment, as the installers make, python.exe at the prefix root)
+      - name: Python for the example app on Windows, a conda environment with python.exe at the prefix root
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           & "$env:CONDA\Scripts\conda.exe" create -y -q -p "$env:RUNNER_TEMP\lcenv" python=3.12
           & "$env:RUNNER_TEMP\lcenv\python.exe" -m pip install git+https://github.com/CellMigrationLab/LabConstrictor-Tools numpy pandas tifffile
           "LC_PYTHON=$env:RUNNER_TEMP\lcenv\python.exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-      - name: Python for the example app (macOS: a venv)
+      - name: Python for the example app, macOS (a venv)
         if: runner.os != 'Windows'
         run: |
           python3 -m venv "$RUNNER_TEMP/lcvenv"
