@@ -1,0 +1,52 @@
+{
+ "app": "frames",
+ "tool": "Marks without an image",
+ "register": [
+  {
+   "name": "frames",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/frames_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/blobs.tif",
+   "title": "DECOY.tif",
+   "pixel_width": 0.5,
+   "x_origin": -200.0,
+   "unit": "um"
+  }
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "absent_keys": [
+   "display_errors"
+  ],
+  "at": {
+   "windows.DECOY_tif.roi": null,
+   "windows.DECOY_tif.overlay": [],
+   "points_pts.image": null,
+   "points_pts.count": 2,
+   "shapes_shp.image": null,
+   "shapes_shp.count": 1,
+   "undrawn_pts.reason": "the tool has no image input to place them on",
+   "undrawn_shp.reason": "the tool has no image input to place them on"
+  },
+  "match": {
+   "undrawn_pts.kept": "/results/",
+   "undrawn_shp.kept": "/results/"
+  },
+  "file_text_contains": {
+   "undrawn_pts.kept": "y,x",
+   "undrawn_shp.kept": "Polygon"
+  },
+  "log_contains": [
+   "not placed on an image: the tool has no image input to place them on: shown as a table. The file is",
+   "outline(s) not placed on an image: the tool has no image input to place them on: listed as a file. The file is"
+  ]
+ }
+}

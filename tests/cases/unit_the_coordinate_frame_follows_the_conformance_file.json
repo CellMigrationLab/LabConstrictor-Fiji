@@ -1,0 +1,17 @@
+{
+ "unit_checks": [
+  "conformance_frame",
+  "conformance_coverage"
+ ],
+ "asym": "${FIXTURES}/ASYM.tif",
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 30
+  }
+ },
+ "cases_dir": "${V3}/tests/cases"
+}

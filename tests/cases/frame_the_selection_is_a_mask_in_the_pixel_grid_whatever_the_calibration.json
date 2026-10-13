@@ -1,0 +1,44 @@
+{
+ "app": "frames",
+ "tool": "Mask seen",
+ "register": [
+  {
+   "name": "frames",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/frames_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/ASYM.tif",
+   "title": "ASYM.tif",
+   "pixel_width": 0.25,
+   "pixel_height": 0.5,
+   "x_origin": -80.0,
+   "y_origin": -20.0,
+   "unit": "um",
+   "polygon_roi_from_conformance": "rect"
+  }
+ ],
+ "select": [
+  "ASYM.tif"
+ ],
+ "overrides": {
+  "image": "ASYM.tif",
+  "selection_region": true
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "values_seen": "$CF:mask_seen"
+  }
+ },
+ "conformance": [
+  "CF-01",
+  "CF-02",
+  "CF-03"
+ ]
+}

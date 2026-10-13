@@ -19,6 +19,7 @@ import javax.swing.SwingUtilities
 
 def cfg = new JsonSlurper().parseText(new File(System.getenv("LC_FIJI_CASE")).text)
 def report = [dialogs: [:], combo_items: [:]]
+def conformance = System.getenv("LC_CONFORMANCE") ? new JsonSlurper().parseText(new File(System.getenv("LC_CONFORMANCE")).getText("UTF-8")) : null   // labconstrictor_tools/conformance.json (run_cases.py sets it)
 def shots = new File(cfg.shots as String)
 shots.mkdirs()
 
@@ -120,13 +121,47 @@ def preload = {
             cal.pixelHeight = item.pixel_size
             cal.setUnit(item.unit ?: "um")
         }
+        if (item.pixel_width != null || item.x_origin != null) {      // a calibration exactly as given: Y and X apart, an origin, the unit text as it is
+            def cal = imp.getCalibration()
+            cal.pixelWidth = item.pixel_width ?: 1.0
+            cal.pixelHeight = item.pixel_height ?: item.pixel_width ?: 1.0
+            cal.xOrigin = item.x_origin ?: 0.0
+            cal.yOrigin = item.y_origin ?: 0.0
+            cal.setUnit(item.unit ?: "pixel")
+        }
         imp.show()
+        if (item.slice) imp.setSlice(item.slice as int)
+        if (item.polygon_roi_from_conformance) {                 // "the person drew a polygon around the pixels of the fixture's rectangle" (vertices [y, x] at pixel centres: +0.5 in ImageJ)
+            def rect = conformance.wrong_science.coordinate[item.polygon_roi_from_conformance as String]
+            imp.setRoi(new ij.gui.PolygonRoi(rect.collect { (it[1] + 0.5) as float } as float[], rect.collect { (it[0] + 0.5) as float } as float[], rect.size(), ij.gui.Roi.POLYGON))
+        }
         if (item.roi) imp.setRoi(new java.awt.Rectangle(item.roi[0] as int, item.roi[1] as int, item.roi[2] as int, item.roi[3] as int))      // "the person drew a region"
         if (item.manager_rois) {                                // "the person listed regions in the ROI Manager and selected some"
             def manager = ij.plugin.frame.RoiManager.getRoiManager()
-            item.manager_rois.each { r -> manager.addRoi(new ij.gui.Roi(r[0] as int, r[1] as int, r[2] as int, r[3] as int)) }
+            item.manager_rois.eachWithIndex { r, i ->
+                def roi = new ij.gui.Roi(r[0] as int, r[1] as int, r[2] as int, r[3] as int)
+                if (item.manager_positions) roi.setPosition(item.manager_positions[i] as int)      // "each region was drawn on another plane of the stack"
+                manager.addRoi(roi)
+            }
             manager.setSelectedIndexes(item.manager_selected as int[])
         }
+    }
+}
+
+// What every open image window holds after the run: its size, calibration, selection and overlay with the coordinates actually drawn (so that a case can say
+// "nothing was drawn on this image"). Keyed by the title with every character that is not a letter or digit as "_" (a title can hold dots).
+def describeRoi = { ij.gui.Roi roi ->
+    def polygon = roi.getFloatPolygon()
+    [type: roi.getTypeAsString(), name: roi.getName(), c: roi.getCPosition(), z: roi.getZPosition(), t: roi.getTPosition(), position: roi.getPosition(),
+     points: (0..<polygon.npoints).collect { [polygon.xpoints[it] as double, polygon.ypoints[it] as double] }]
+}
+def describeWindows = {
+    WindowManager.getImageTitles().collectEntries { String title ->
+        def imp = WindowManager.getImage(title), cal = imp.getCalibration()
+        [(safe(title)): [title: title, width: imp.getWidth(), height: imp.getHeight(), stack: imp.getStackSize(),
+                         calibration: [pixel_width: cal.pixelWidth, pixel_height: cal.pixelHeight, unit: cal.getUnit(), x_origin: cal.xOrigin, y_origin: cal.yOrigin],
+                         roi: imp.getRoi() == null ? null : describeRoi(imp.getRoi()),
+                         overlay: (imp.getOverlay()?.toArray() ?: [] as ij.gui.Roi[]).collect { describeRoi(it) }]]
     }
 }
 
@@ -138,6 +173,7 @@ def finish = { Map summary ->
     summary.chooser_initial = report.chooser_initial
     summary.single_input_prompt = report.single_input_prompt
     summary.open_windows = WindowManager.getImageTitles() as List
+    summary.windows = describeWindows()
     summary.open_tables = WindowManager.getNonImageTitles() as List
     def overlay = summary.overlay_title ? WindowManager.getImage(summary.overlay_title as String) : null
     if (overlay) {

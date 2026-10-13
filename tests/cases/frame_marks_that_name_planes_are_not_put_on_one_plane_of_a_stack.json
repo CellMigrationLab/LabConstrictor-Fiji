@@ -1,0 +1,42 @@
+{
+ "app": "frames",
+ "tool": "Marks with planes",
+ "register": [
+  {
+   "name": "frames",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/frames_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/ASYM_z3.tif",
+   "title": "Z3.tif",
+   "slice": 2
+  }
+ ],
+ "select": [
+  "Z3.tif"
+ ],
+ "overrides": {
+  "image": "Z3.tif"
+ },
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "windows.Z3_tif.roi": null,
+   "windows.Z3_tif.overlay": [],
+   "points_pts.image": null,
+   "shapes_shp.image": null,
+   "undrawn_pts.reason": "it has t / z planes and this version places results on the exported plane only"
+  },
+  "match": {
+   "undrawn_pts.kept": "/results/",
+   "undrawn_shp.kept": "/results/"
+  }
+ }
+}

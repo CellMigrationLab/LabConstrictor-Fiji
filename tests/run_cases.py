@@ -48,6 +48,35 @@ def expand(value):
     return value
 
 
+def conformance_expected(name):
+    """What the shared fixture (conformance.json wrong_science.coordinate) says a Fiji run must show, written without the host's own placement code:
+    ImageJ pixel i spans [i, i+1), so a vertex at pixel-centre coordinate v is drawn at v + 0.5 (x first in a ROI)."""
+    fixture = json.loads(Path(CONFORMANCE).read_text(encoding="utf-8"))["wrong_science"]["coordinate"]
+    rows, columns = fixture["image"]["shape"]
+    if name == "mask_seen":  # the worker's own account of what it received: sizes, how many mask pixels, the image pixel under each
+        seen = {"image_h": rows, "image_w": columns, "mask_h": rows, "mask_w": columns, "mask_count": len(fixture["rect_mask_pixels"])}
+        for (y, x), value in zip(fixture["rect_mask_pixels"], fixture["rect_mask_values"]):
+            seen["v_%d_%d" % (y, x)] = value
+        return seen
+    if name == "point_drawn":
+        y, x = next(c for c in fixture["cases"] if c["id"] == "CF-01")["point"]
+        return [[x + 0.5, y + 0.5]]
+    if name == "rect_drawn":
+        return [[x + 0.5, y + 0.5] for y, x in fixture["rect"]]
+    raise KeyError("no conformance value called %r" % name)
+
+
+def resolve_conformance(value):
+    """A string "$CF:name" anywhere in an expectation is replaced by what the conformance file says (conformance_expected)."""
+    if isinstance(value, str) and value.startswith("$CF:"):
+        return conformance_expected(value[4:])
+    if isinstance(value, list):
+        return [resolve_conformance(v) for v in value]
+    if isinstance(value, dict):
+        return {k: resolve_conformance(v) for k, v in value.items()}
+    return value
+
+
 def lookup(report, dotted):
     """The value under a dotted key of the report (None when a part is missing); a list of lists (the items of several dropdowns) is flattened one level."""
     found = report
@@ -58,9 +87,49 @@ def lookup(report, dotted):
     return found
 
 
+def walk(report, dotted):
+    """The value under a dotted path of the report; a part that is a whole number indexes a list (`windows.a_tif.overlay.0.xs`). `MISSING` when a part is absent."""
+    found = report
+    for part in dotted.split("."):
+        if isinstance(found, dict) and part in found:
+            found = found[part]
+        elif isinstance(found, list) and part.lstrip("-").isdigit() and -len(found) <= int(part) < len(found):
+            found = found[int(part)]
+        else:
+            return MISSING
+    return found
+
+
+MISSING = object()
+
+
+def same(found, wanted):
+    """Equal as JSON values; numbers within 1e-9 (a coordinate that went through a float32 or a unit factor), everything else exactly."""
+    if isinstance(wanted, bool) or isinstance(found, bool):
+        return found is wanted
+    if isinstance(wanted, (int, float)) and isinstance(found, (int, float)):
+        return abs(found - wanted) <= 1e-9 * max(1.0, abs(wanted))
+    if isinstance(wanted, list) and isinstance(found, list):
+        return len(wanted) == len(found) and all(same(f, w) for f, w in zip(found, wanted))
+    if isinstance(wanted, dict) and isinstance(found, dict):
+        return found.keys() == wanted.keys() and all(same(found[k], wanted[k]) for k in wanted)
+    return found == wanted
+
+
 def check(expect, report):
     """Return a list of failed expectations (empty = pass)."""
     failed = []
+    for dotted, wanted in expect.get("at_set", {}).items():  # a list of coordinate pairs (the vertices of a polygon) as a set: where a ring starts does not matter
+        found = walk(report, dotted)
+        if found is MISSING or {tuple(round(v, 9) for v in p) for p in found} != {tuple(round(v, 9) for v in p) for p in wanted}:
+            failed.append("%s = %r, expected the set %r" % (dotted, None if found is MISSING else found, wanted))
+    for dotted, wanted in expect.get("at", {}).items():  # exact value at a path (list indexes allowed; "$absent" = the path must not exist)
+        found = walk(report, dotted)
+        if wanted == "$absent":
+            if found is not MISSING:
+                failed.append("%s must be absent, is %r" % (dotted, found))
+        elif found is MISSING or not same(found, wanted):
+            failed.append("%s = %r, expected %r" % (dotted, None if found is MISSING else found, wanted))
     if "status" in expect and report.get("status") != expect["status"]:
         failed.append("status %r != %r" % (report.get("status"), expect["status"]))
     if "status_in" in expect and report.get("status") not in expect["status_in"]:
@@ -89,6 +158,12 @@ def check(expect, report):
             found = found.get(part) if isinstance(found, dict) else None
         if not isinstance(found, str) or text not in found:
             failed.append("%s = %r does not contain %r" % (dotted, found, text))
+    for dotted, text in expect.get("file_text_contains", {}).items():  # a file the report names (a kept result): it exists and holds the text
+        path = walk(report, dotted)
+        if path is MISSING or not Path(str(path)).is_file():
+            failed.append("%s = %r is not a file" % (dotted, None if path is MISSING else path))
+        elif text not in Path(path).read_text(encoding="utf-8"):
+            failed.append("the file %s lacks %r" % (path, text))
     for dotted, texts in expect.get("absent", {}).items():
         found = report.get(dotted)
         for text in texts:
@@ -172,6 +247,7 @@ def _tail(process, lines=12):
 
 def run_case(path):
     case = expand(json.loads(path.read_text()))
+    case["expect"] = resolve_conformance(case.get("expect", {}))
     name = path.stem
     if case.get("macro") is not None and os.environ.get("LC_FIJI_MODE", "script") != "jar" and os.environ.get("LC_FIJI_MACRO_PROPERTY") == "1":
         case["script_macro"] = case.pop("macro")  # LC_FIJI_MACRO_PROPERTY=1: macro calls through the property the menu command sets, in script mode (no mvn build per case)
@@ -188,7 +264,7 @@ def run_case(path):
         return name, [], {}  # macro calls need the menu command of the jar (LC_FIJI_MODE=jar): not applicable to the loose script
     if case.get("script_mode_only") and os.environ.get("LC_FIJI_MODE", "script") == "jar":
         return name, [], {}  # the harness reads the dialog through hooks that the jar's script engine does not report back (checked by eye: the dialog is right)
-    env = dict(os.environ, LC_FIJI_HARNESS=str(HERE / "test_harness.groovy"), LC_FIJI_CASE=str(case_file))
+    env = dict(os.environ, LC_FIJI_HARNESS=str(HERE / "test_harness.groovy"), LC_FIJI_CASE=str(case_file), LC_CONFORMANCE=CONFORMANCE)
     if "LC_HOME" not in env or not REAL_APPS:  # portable runs get a private registry holding only the example app
         env["LC_HOME"] = PRIVATE_HOME
     if case.get(
@@ -294,6 +370,10 @@ def tamper(apps, op):
 
 
 PRIVATE_HOME = tempfile.mkdtemp(prefix="lchome_fiji_")
+# the shared rules as data (labconstrictor_tools/conformance.json, docs/CONFORMANCE.md): the harness and the unit checks read them from this file, never from copies
+CONFORMANCE = subprocess.run(
+    [sys.executable, "-m", "labconstrictor_tools.conformance", "--path"], check=True, capture_output=True, text=True
+).stdout.strip()
 
 
 def register_example_app():

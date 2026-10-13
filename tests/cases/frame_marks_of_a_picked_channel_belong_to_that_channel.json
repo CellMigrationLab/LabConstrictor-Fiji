@@ -1,0 +1,45 @@
+{
+ "app": "frames",
+ "tool": "Marks of a channel",
+ "register": [
+  {
+   "name": "frames",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/frames_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/three_channels.tif",
+   "title": "three.tif"
+  }
+ ],
+ "select": [
+  "three.tif"
+ ],
+ "overrides": {
+  "image": "three.tif",
+  "image_channel": 2
+ },
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "placed_pts.plane": {
+    "c": 2,
+    "z": 1,
+    "t": 1
+   },
+   "windows.three_tif.roi.position": 2,
+   "windows.three_tif.roi.points": [
+    [
+     3.5,
+     1.5
+    ]
+   ]
+  }
+ }
+}
