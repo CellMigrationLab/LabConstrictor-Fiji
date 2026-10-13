@@ -1,0 +1,36 @@
+{
+ "app": "numbers",
+ "tool": "Echo numbers",
+ "register": [
+  {
+   "name": "numbers",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/numbers_app"
+   ]
+  }
+ ],
+ "conformance": [],
+ "dialog_steps": [
+  {
+   "text": "1e-400",
+   "field": 1
+  }
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "absent_keys": [
+   "status",
+   "request",
+   "worker_alive_after",
+   "run_record"
+  ],
+  "at": {
+   "retention.runs.count": 0
+  },
+  "equals": {
+   "error": "'X' is too close to zero to be held exactly, got '1e-400'"
+  }
+ }
+}

@@ -68,6 +68,7 @@ def typeIntoSpinners = { Window dialog ->
 // A sequence of things a person does in the dialog, one after the other, with the number fields as they stand after each (report.steps): cfg.dialog_steps =
 //   {select: "b.tif"}   pick that open image in the chooser that lists it       {type: 0.3, field: 0}  type a value in number field 0 (top to bottom)
 //   {file: "/path"}     put that path in the "(or file)" text field (""  clears it)     {use: true}  tick or untick the first check box named "Use ..."
+//   {text: "9007199254740991", field: 0}  type that text into text field number `field` (top to bottom; a number field is a text field)
 def runSteps = { Window dialog ->
     report.steps = []
     cfg.dialog_steps.each { step ->
@@ -80,9 +81,9 @@ def runSteps = { Window dialog ->
             def spinner = components(dialog, JSpinner).sort { it.getLocationOnScreen().y }[(step.field ?: 0) as int]
             SwingUtilities.invokeAndWait { spinner.setValue(step.type as double) }
         }
-        if (step.file != null) {
+        if (step.file != null || step.text != null) {          // `text`: what a person types into text field number `field` (top to bottom): a number field is text too
             def field = components(dialog, javax.swing.JTextField).sort { it.getLocationOnScreen().y }[(step.field ?: 0) as int]
-            SwingUtilities.invokeAndWait { field.setText(step.file as String) }
+            SwingUtilities.invokeAndWait { field.setText((step.file != null ? step.file : step.text) as String) }
         }
         if (step.use != null) {
             def box = components(dialog, javax.swing.JCheckBox).find { it.text?.startsWith("Use ") }

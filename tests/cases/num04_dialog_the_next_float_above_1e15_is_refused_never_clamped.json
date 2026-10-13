@@ -1,0 +1,38 @@
+{
+ "app": "numbers",
+ "tool": "Echo numbers",
+ "register": [
+  {
+   "name": "numbers",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/numbers_app"
+   ]
+  }
+ ],
+ "conformance": [
+  "NUM-04"
+ ],
+ "dialog_steps": [
+  {
+   "text": "1.0000000000000002e15",
+   "field": 1
+  }
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "absent_keys": [
+   "status",
+   "request",
+   "worker_alive_after",
+   "run_record"
+  ],
+  "at": {
+   "retention.runs.count": 0
+  },
+  "equals": {
+   "error": "'X' must be <= 1000000000000000.0, got 1.0000000000000002e15"
+  }
+ }
+}

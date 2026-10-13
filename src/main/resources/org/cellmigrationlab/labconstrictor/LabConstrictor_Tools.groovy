@@ -57,10 +57,7 @@ import java.nio.file.Files
 @Field final int RGB_SAMPLES = 3                 // red, green, blue
 @Field final long MAX_EXPORT_BYTES = 4L * 1024 * 1024 * 1024   // an open image larger than this (all planes, channels and samples) is not written for the worker (same limit as the Napari form)
 @Field final double BYTES_PER_GB = 1024.0d * 1024.0d * 1024.0d
-@Field final long MAX_FORM_INTEGER = 9_007_199_254_740_991L       // 2**53 - 1: the largest whole number a form holds exactly (labconstrictor_tools.notebook.MAX_FORM_INTEGER)
-@Field final String INTEGER_TEXT = /[+-]?[0-9]+/                                                  // the number grammar shared by every host (labconstrictor_tools conformance)
-@Field final String FLOAT_TEXT = /[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?/
-@Field final List<String> NON_FINITE_WORDS = ["nan", "inf", "infinity"]                              // refused as "not a finite number", like the worker does after parsing them
+@Field final String IMPORT_FAILED_MARKER = "cannot import tool module"   // what the worker prints last on stderr when it exits with code 3 for a tool module that cannot be imported (labconstrictor_tools.log.IMPORT_FAILED_MARKER)
 @Field final String NOT_FINITE_TEXT = "(not a finite number)"   // how a null in a numeric result reads (PROTOCOL.md: null = not a finite number)
 @Field final int MAX_CHANNELS = 1000             // upper bound of the "channel" field of a PickChannel image
 @Field final int MAX_REGION_OBJECTS = 65535      // labels of the region image (16 bit)
@@ -835,15 +832,7 @@ void addParameterItems(MutableModuleInfo info, Map p, Map context) {
             def choiceItem = addItem(info, p.name, String, base + [choices: p.choices.collect { it.toString() }, default: start.toString()])
             if (p.widget == "radio" && !p.nullable) choiceItem.setWidgetStyle("radioButtonHorizontal")   // Widget("radio")
             break
-        case "integer":
-            def limits = integerLimits(p)
-            def start = Math.max(limits.minimum ?: Long.MIN_VALUE, Math.min(limits.maximum ?: Long.MAX_VALUE, startNumber(p, overridden, override) as long))
-            def wide = [start, limits.minimum, limits.maximum].any { it != null && !fitsInt(it) }       // a 32-bit field would cut the value
-            def description = [p.description, limits.limited ? "Whole numbers up to +-" + MAX_FORM_INTEGER + "." : null].findAll { it }.join(" ")
-            def intItem = addItem(info, p.name, wide ? Long : Integer, base + [description: description, default: wide ? start : start as Integer, step: 1,
-                                                                               min: wide ? limits.minimum : limits.minimum as Integer, max: wide ? limits.maximum : limits.maximum as Integer])
-            if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) intItem.setWidgetStyle("slider")   // Widget("slider")
-            break
+        case "integer": addIntegerItem(info, p, base, overridden, override); break
         case "float": addFloatItem(info, p, base, overridden, override, context); break
         default:
             throw new IllegalArgumentException("parameter '" + p.name + "' has the unsupported type '" + p.type + "'")
@@ -866,13 +855,38 @@ def typedChoice(Map p, def text) {
 /** Whether `number` is within the 32-bit range. */
 boolean fitsInt(def number) { return number >= Integer.MIN_VALUE && number <= Integer.MAX_VALUE }
 
-/** The declared bounds of an integer parameter, kept within +-MAX_FORM_INTEGER (a bound beyond it cannot be held exactly: `limited` says so,
- *  the form states the limit instead of cutting values silently). */
-Map integerLimits(Map p) {
-    def limit = MAX_FORM_INTEGER as BigInteger
-    def narrowed = { def bound -> bound == null ? null : ((bound as BigInteger).max(-limit).min(limit)).longValue() }
-    def beyond = { def bound -> bound != null && (bound as BigInteger).abs() > limit }
-    return [minimum: narrowed(p.minimum), maximum: narrowed(p.maximum), limited: beyond(p.minimum) || beyond(p.maximum)]
+/** The declared bounds of an integer parameter, kept within +-(2**53 - 1) (see LCNumbers.integerLimits). */
+Map integerLimits(Map p) { return lib("LCNumbers").integerLimits(p) as Map }
+
+/** A sentence for the description of a number field: what it takes, so that a person who types a number beyond it knows why it is refused (the box does not cut it). */
+String numberHint(Map p, boolean whole) {
+    List<String> words = []
+    if (p.minimum != null && p.maximum != null) words << ("From " + p.minimum + " to " + p.maximum + ".")
+    else if (p.minimum != null) words << ("At least " + p.minimum + ".")
+    else if (p.maximum != null) words << ("At most " + p.maximum + ".")
+    words << (whole ? "Whole numbers up to +-" + lib("LCNumbers").FORM_INTEGER_MAX + "." : "Numbers up to +-" + lib("LCNumbers").FLOAT_LIMIT_TEXT + ".")
+    return words.join(" ") + " A value beyond a limit is refused, never changed."
+}
+
+/** A number parameter: a text field (the value is exactly what is typed; nothing is cut or rounded: it is checked, and refused if it is beyond a limit, when OK is clicked).
+ *  `Widget("slider")` with both bounds keeps a numeric slider, which cannot hold a number outside its own range. */
+void addNumberItem(MutableModuleInfo info, Map p, Map base, boolean whole, def start) {
+    String description = [p.description, numberHint(p, whole)].findAll { it }.join(" ")
+    if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) {
+        def wide = !whole ? false : [start, p.minimum, p.maximum].any { it != null && !fitsInt(it) }
+        def item = whole ? addItem(info, p.name, wide ? Long : Integer, base + [default: wide ? start as long : start as Integer, step: 1, min: wide ? integerLimits(p).minimum : integerLimits(p).minimum as Integer, max: wide ? integerLimits(p).maximum : integerLimits(p).maximum as Integer])
+                         : addItem(info, p.name, Double, base + [default: start as Double, min: p.minimum as Double, max: p.maximum as Double, step: FLOAT_STEP])
+        item.setWidgetStyle("slider")
+        return
+    }
+    addItem(info, p.name, String, base + [description: description, default: lib("LCNumbers").startText(start)])
+}
+
+/** Integer parameter: text-backed (see addNumberItem). It starts at the harness's value, the declared default, or the allowed value nearest to 0. */
+void addIntegerItem(MutableModuleInfo info, Map p, Map base, boolean overridden, def override) {
+    def limits = integerLimits(p)
+    def start = Math.max(limits.minimum ?: Long.MIN_VALUE, Math.min(limits.maximum ?: Long.MAX_VALUE, startNumber(p, overridden, override) as long))
+    addNumberItem(info, p, base, true, start)
 }
 
 /** The starting value of a number field: the harness's, else the declared default, else (a number without one) 0 moved into [minimum, maximum]:
@@ -932,8 +946,7 @@ void addFloatItem(MutableModuleInfo info, Map p, Map base, boolean overridden, d
         return
     }
     def value = overridden ? override : p.default
-    def floatItem = addItem(info, p.name, Double, base + [default: (value != null ? value : startNumber(p, false, null)) as Double, min: p.minimum as Double, max: p.maximum as Double, step: FLOAT_STEP])
-    if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) floatItem.setWidgetStyle("slider")   // Widget("slider")
+    addNumberItem(info, p, base, false, (value != null ? value : startNumber(p, false, null)) as Double)
 }
 
 /** The source a pixel-size field starts from: the file given for its image (a file wins), else the image the chooser starts on (an optional image only when it is used). */
@@ -1304,6 +1317,7 @@ List exportInputs(Map tool, def module, File jobDir) {
                 }
                 if (p.nullable && !module.getInput("set_" + p.name)) break      // unset: the tool receives None
                 if (value != null && p.type == "choice") value = typedChoice(p, value)
+                if (value instanceof String && p.type in ["integer", "float"]) value = lib("LCNumbers").fromField(p, value)   // a number field is text: checked here, refused beyond a limit
                 if (value != null) inputs[p.name] = value
         }
     }
@@ -1422,7 +1436,7 @@ String crashHint(Map outcome) {
         return "A Python package is missing or broken in the app's environment (see the traceback below)."
     if (exit in EXIT_KILLED) return "The worker was killed (out of memory? the OS OOM killer ends big image jobs this way)."
     if (exit in EXIT_SEGFAULT) return "The worker crashed natively (segmentation fault in a compiled library)."
-    if (exit == EXIT_IMPORT_FAILED) return "The app's tool module failed to import (see the traceback below)."
+    if (exit == EXIT_IMPORT_FAILED && text.contains(IMPORT_FAILED_MARKER)) return "The app's tool module failed to import (see the traceback below)."   // code 3 alone is not proof: the Windows C runtime ends a process with 3 for abort() too
     return "The worker process stopped unexpectedly."
 }
 
@@ -2096,28 +2110,10 @@ List<String> macroKeys(String options) {
     return keys
 }
 
-/** Strict number parsing for macro values: the shared grammar (optional sign, digits with an optional fraction or only a fraction, optional
- *  exponent: nothing else, no spaces, no 1.5f, 1_0, hex floats), no NaN/Infinity, within the declared bounds (or the 32-bit range of an unbounded integer).
- *  The refusals are the worker's sentences with `, got 'x'` after them. */
-def macroNumber(Map p, String text) {
-    def number
-    def minimum = p.minimum, maximum = p.maximum
-    if (p.type == "integer") {
-        if (!(text ==~ INTEGER_TEXT)) throw new IllegalArgumentException("'" + p.label + "' must be an integer, got '" + text + "'")
-        number = new BigInteger(text.replaceFirst(/^\+/, ""))
-        def limits = integerLimits(p)
-        minimum = limits.minimum != null ? limits.minimum : (limits.limited ? -MAX_FORM_INTEGER : Integer.MIN_VALUE)
-        maximum = limits.maximum != null ? limits.maximum : (limits.limited ? MAX_FORM_INTEGER : Integer.MAX_VALUE)
-    } else {
-        if (text.replaceFirst(/^[+-]/, "").toLowerCase() in NON_FINITE_WORDS) throw new IllegalArgumentException("'" + p.label + "' must be a finite number, got '" + text + "'")
-        if (!(text ==~ FLOAT_TEXT)) throw new IllegalArgumentException("'" + p.label + "' must be a number, got '" + text + "'")
-        number = Double.parseDouble(text)
-        if (!Double.isFinite(number)) throw new IllegalArgumentException("'" + p.label + "' must be a finite number, got '" + text + "'")
-    }
-    if (minimum != null && number < minimum) throw new IllegalArgumentException("'" + p.label + "' must be >= " + minimum + ", got " + text)
-    if (maximum != null && number > maximum) throw new IllegalArgumentException("'" + p.label + "' must be <= " + maximum + ", got " + text)
-    return p.type == "integer" ? (fitsInt(number) ? number.intValue() : number.longValue()) : number
-}
+/** Strict number parsing for macro values: the shared grammar (optional sign, digits with an optional fraction or only a fraction, optional exponent: nothing else, no
+ *  spaces, no 1.5f, 1_0, hex floats), no NaN/Infinity, within the declared bounds or the form's own limits (+-(2**53 - 1) for a whole number, +-1e15 for a float):
+ *  a value beyond a limit is refused, never clamped. The refusals are the worker's sentences with `, got 'x'` after them (see LCNumbers.parse). */
+Number macroNumber(Map p, String text) { return lib("LCNumbers").parse(p, text) as Number }
 
 /** The option names a replayed call may use for `tool`. */
 List<String> allowedMacroKeys(Map tool) {

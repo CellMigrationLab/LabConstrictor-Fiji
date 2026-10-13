@@ -1,0 +1,38 @@
+{
+ "app": "numbers",
+ "tool": "Echo numbers",
+ "register": [
+  {
+   "name": "numbers",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/numbers_app"
+   ]
+  }
+ ],
+ "conformance": [
+  "NUM-05"
+ ],
+ "dialog_steps": [
+  {
+   "text": "11",
+   "field": 2
+  }
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "absent_keys": [
+   "status",
+   "request",
+   "worker_alive_after",
+   "run_record"
+  ],
+  "at": {
+   "retention.runs.count": 0
+  },
+  "equals": {
+   "error": "'M' must be <= 10, got 11"
+  }
+ }
+}

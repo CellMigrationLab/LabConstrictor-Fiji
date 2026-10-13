@@ -1,0 +1,32 @@
+{
+ "app": "numbers",
+ "tool": "Echo numbers",
+ "register": [
+  {
+   "name": "numbers",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/numbers_app"
+   ]
+  }
+ ],
+ "conformance": [
+  "NUM-04"
+ ],
+ "dialog_steps": [
+  {
+   "text": "1e15",
+   "field": 1
+  }
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "equals": {
+   "request.x": 1000000000000000.0,
+   "values_values.x": 1000000000000000.0,
+   "values_values.x_is_float": 1.0
+  }
+ }
+}

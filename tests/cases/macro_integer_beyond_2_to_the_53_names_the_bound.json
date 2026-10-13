@@ -11,11 +11,11 @@
    ]
   }
  ],
- "script_macro": "app=parity tool=[Bounded numbers] above=6 below=-3 around=0 free=3000000000",
+ "script_macro": "app=parity tool=[Bounded numbers] above=6 below=-3 around=0 free=9007199254740992",
  "script_mode_only": true,
  "expect": {
   "match": {
-   "error": "'Free' must be <= 2147483647, got 3000000000"
+   "error": "'Free' must be <= 9007199254740991, got 9007199254740992"
   }
  }
 }

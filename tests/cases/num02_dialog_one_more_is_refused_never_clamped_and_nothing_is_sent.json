@@ -1,0 +1,38 @@
+{
+ "app": "numbers",
+ "tool": "Echo numbers",
+ "register": [
+  {
+   "name": "numbers",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/numbers_app"
+   ]
+  }
+ ],
+ "conformance": [
+  "NUM-02"
+ ],
+ "dialog_steps": [
+  {
+   "text": "9007199254740992",
+   "field": 0
+  }
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "absent_keys": [
+   "status",
+   "request",
+   "worker_alive_after",
+   "run_record"
+  ],
+  "at": {
+   "retention.runs.count": 0
+  },
+  "equals": {
+   "error": "'N' must be <= 9007199254740991, got 9007199254740992"
+  }
+ }
+}

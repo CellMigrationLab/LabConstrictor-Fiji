@@ -1,0 +1,14 @@
+{
+ "unit_checks": [
+  "exit_code_rule"
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 15
+  }
+ }
+}
