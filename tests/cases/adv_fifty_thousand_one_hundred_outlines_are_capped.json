@@ -34,7 +34,8 @@
     "holes": 0,
     "image": "blobs.tif",
     "overlay_size": 50000,
-    "manager_count": 1000
+    "manager_count": 1000,
+    "features": 50100
    }
   },
   "approx": {

@@ -1,0 +1,33 @@
+{
+ "app": "parity",
+ "tool": "Plane only",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "plane.tif"
+  }
+ ],
+ "overrides": {
+  "image": "plane.tif"
+ },
+ "max_export_bytes": 32768,
+ "expect": {
+  "status": "COMPLETE",
+  "approx": {
+   "values_values.ndim": [
+    2,
+    0
+   ]
+  }
+ }
+}

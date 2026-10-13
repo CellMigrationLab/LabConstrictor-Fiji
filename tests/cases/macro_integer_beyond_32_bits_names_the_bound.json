@@ -1,0 +1,21 @@
+{
+ "app": "parity",
+ "tool": "Bounded numbers",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "script_macro": "app=parity tool=[Bounded numbers] above=6 below=-3 around=0 free=3000000000",
+ "script_mode_only": true,
+ "expect": {
+  "match": {
+   "error": "'Free' must be <= 2147483647, got 3000000000"
+  }
+ }
+}

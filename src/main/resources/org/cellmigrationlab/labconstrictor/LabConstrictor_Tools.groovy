@@ -31,6 +31,8 @@ import java.nio.file.Files
 @Field final List<Integer> SUPPORTED_PROTOCOLS = [1]   // schema protocol versions this script understands
 
 // timeouts and polling
+@Field final String CANCELLED_AFTER_KILL = "cancelled (worker stopped)"   // the status after a Cancel the tool ignored (same words as the Napari form)
+@Field final List<String> SCRUBBED_ENV = ["PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX", "QT_PLUGIN_PATH"]   // variables of the host's environment the worker must not inherit (PYTHONPATH is always set)
 @Field final int CANCEL_GRACE_MS = 3000          // how long a tool gets to honour Cancel before its worker is killed
 @Field final int EXIT_WAIT_MS = 15000            // heavy interpreters (torch, numba) need a few seconds to exit after stdin closes
 @Field final int CANCEL_POLL_MS = 50             // while a task runs: how often Esc, the harness's cancel time and the task status are looked at
@@ -38,12 +40,21 @@ import java.nio.file.Files
 
 // limits on what is kept, shown or sent
 @Field final long LOG_MAX_BYTES = 1_000_000L     // the log file is rotated (to .log.1) above this size
+@Field final int LOG_BACKUPS = 5                 // rotated copies kept (.log.1 newest ... .log.5 oldest), like labconstrictor_tools.log
 @Field final int MAX_KEPT_LINES = 500            // worker output and progress events kept per run (the log has the rest)
 @Field final int LOG_WORKER_LINES = 40           // last worker lines copied into the log when a task does not complete
 @Field final int OUTCOME_WORKER_LINES = 60       // last worker lines kept in the outcome (and the run record)
 @Field final int DIALOG_WORKER_LINES = 8         // last worker lines shown in the error dialog
 @Field final int DIALOG_LINE_CHARS = 300         // longer worker lines are cut in the error dialog (it must not outgrow the screen)
-@Field final int KEPT_RUN_RECORDS = 50           // newest run folders kept under <home>/runs
+@Field final int RGB_BIT_DEPTH = 24              // ImageJ's colour images: saved as a trailing axis of RGB_SAMPLES
+@Field final int RGB_SAMPLES = 3                 // red, green, blue
+@Field final long MAX_EXPORT_BYTES = 4L * 1024 * 1024 * 1024   // an open image larger than this (all planes, channels and samples) is not written for the worker (same limit as the Napari form)
+@Field final double BYTES_PER_GB = 1024.0d * 1024.0d * 1024.0d
+@Field final long MAX_FORM_INTEGER = 9_007_199_254_740_991L       // 2**53 - 1: the largest whole number a form holds exactly (labconstrictor_tools.notebook.MAX_FORM_INTEGER)
+@Field final String INTEGER_TEXT = /[+-]?[0-9]+/                                                  // the number grammar shared by every host (labconstrictor_tools conformance)
+@Field final String FLOAT_TEXT = /[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?/
+@Field final List<String> NON_FINITE_WORDS = ["nan", "inf", "infinity"]                              // refused as "not a finite number", like the worker does after parsing them
+@Field final String NOT_FINITE_TEXT = "(not a finite number)"   // how a null in a numeric result reads (PROTOCOL.md: null = not a finite number)
 @Field final int MAX_CHANNELS = 1000             // upper bound of the "channel" field of a PickChannel image
 @Field final int MAX_REGION_OBJECTS = 65535      // labels of the region image (16 bit)
 @Field final int MAX_SHAPES = 50000              // outlines shown on the image
@@ -63,7 +74,7 @@ import java.nio.file.Files
 
 // worker exit codes (POSIX shell convention: 128 + signal; Windows: NTSTATUS) that crashHint explains
 @Field final List<Long> EXIT_KILLED = [-9L, 137L]                    // SIGKILL (the OOM killer)
-@Field final List<Long> EXIT_SEGFAULT = [-11L, 139L, 3221225477L]    // SIGSEGV / access violation
+@Field final List<Long> EXIT_SEGFAULT = [-11L, 139L, 3221225477L, -1073741819L]    // SIGSEGV / access violation (Windows: 0xC0000005, unsigned in Python, signed in Java)
 @Field final long EXIT_IMPORT_FAILED = 3L                            // the serve command's own code for "tool module failed to import"
 
 // ---- calibration sync: a dialog module that keeps pixel-size fields in step with the chosen image or file
@@ -78,16 +89,33 @@ class LCModule extends DefaultMutableModule {
     private static final double MICRONS_PER_INCH = 25400.0d    // 1 inch = 25.4 mm
     private static final Map<String, Double> MICRONS_PER_UNIT = [um: 1.0d, micron: 1.0d, microns: 1.0d, micrometer: 1.0d, micrometre: 1.0d,
                                                                   nm: 1e-3d, nanometer: 1e-3d, mm: 1e3d, millimeter: 1e3d, cm: 1e4d, m: 1e6d]
-    /** Pixel size of an image in micrometres, or null when uncalibrated or in a unit we cannot convert (pixel, inch, ...). */
-    static Double micronsPerPixel(ImagePlus imp) {
+    private static final double SQUARE_PIXEL_TOLERANCE = 1e-3d    // Y and X pixel sizes closer than this (relative) count as square: no warning
+    private static final int SIGNIFICANT_DIGITS = 6               // digits of a pixel size in the warning
+    private static final double TYPED_TOLERANCE = 1e-6d           // a field that differs from the value this module put there (relative) was typed by the person
+    Map<String, Double> synced = [:]          // pixel-size parameter -> the value this module last put there itself
+    /** Pixel size of an image as [y, x] micrometres, or null when uncalibrated or in a unit we cannot convert (pixel, inch, ...). */
+    static List<Double> micronsYX(ImagePlus imp) {
         def calibration = imp?.getCalibration()
         if (calibration == null || !calibration.scaled()) return null
         def unit = (calibration.getUnit() ?: "").toLowerCase().replace("\u00b5", "u").replace("\u03bc", "u").replace("\ufffd", "u")
         def factor = MICRONS_PER_UNIT[unit]
-        return factor == null ? null : calibration.pixelWidth * factor
+        return factor == null ? null : [calibration.pixelHeight * factor, calibration.pixelWidth * factor]
     }
-    /** Pixel size (um) stored in a TIFF file's header (ImageJ description or TIFF resolution tags), without loading the pixels. */
-    static Double micronsFromFile(File file) {
+    /** Pixel size of an image in micrometres along X (what a tool with one pixel-size parameter gets), or null. */
+    static Double micronsPerPixel(ImagePlus imp) { return micronsYX(imp)?.getAt(1) }
+    /** The sentence for a pixel that is not square (one value cannot describe it; the tool gets X), or null (same words as the Napari form). */
+    static String anisotropyNote(List<Double> yx) {
+        if (yx == null || Math.abs(yx[0] - yx[1]) <= SQUARE_PIXEL_TOLERANCE * Math.max(Math.abs(yx[0]), Math.abs(yx[1]))) return null
+        return "pixel size differs: Y " + significant(yx[0]) + " \u00b5m, X " + significant(yx[1]) + " \u00b5m - the tool takes one value and gets X"
+    }
+    /** `value` with six significant digits and no trailing zeros (Python's %.6g for the sizes a pixel can have): 0.5, 0.325, 0.123457. */
+    static String significant(double value) {
+        return new BigDecimal(value).round(new java.math.MathContext(SIGNIFICANT_DIGITS)).stripTrailingZeros().toPlainString()
+    }
+    /** Pixel size (um) along X stored in a TIFF file's header, or null. */
+    static Double micronsFromFile(File file) { return micronsYXFromFile(file)?.getAt(1) }
+    /** Pixel size [y, x] (um) stored in a TIFF file's header (ImageJ description or TIFF resolution tags: inch and centimetre), without loading the pixels. */
+    static List<Double> micronsYXFromFile(File file) {
         if (!file.isFile()) return null            // a path that is still being typed: nothing to read, nothing to complain about
         try {
             def info = new ij.io.TiffDecoder(file.parent + File.separator, file.name).getTiffInfo()
@@ -95,11 +123,13 @@ class LCModule extends DefaultMutableModule {
             def unit = (info[0].description =~ /(?m)^unit=(.*)$/).with { it.find() ? it.group(1) : (info[0].unit ?: "") }
             unit = unit.toLowerCase().replace("\u00b5", "u").replace("\u03bc", "u").replace("\ufffd", "u").trim()
             def factor = MICRONS_PER_UNIT[unit] ?: (unit == "inch" ? MICRONS_PER_INCH : null)
-            return factor == null ? null : info[0].pixelWidth * factor
+            if (factor == null) return null
+            def height = info[0].pixelHeight > 0 && info[0].pixelHeight != 1.0d ? info[0].pixelHeight : info[0].pixelWidth   // no YResolution tag: square pixels
+            return [height * factor, info[0].pixelWidth * factor]
         // groovylint-disable-next-line CatchException
         } catch (Exception problem) {      // not a TIFF / unreadable header (TiffDecoder throws IOException or runtime errors on garbage)
             // not "no calibration" but "could not read it": tell the user instead of silently leaving the field alone
-            logger("WARN", "could not read the pixel size from " + file.path + ": " + problem, problem)
+            logger("WARNING", "could not read the pixel size from " + file.path + ": " + problem, problem)
             IJ.log("LabConstrictor: could not read the pixel size from " + file.name + " (" + problem + "); enter it by hand")
             return null
         }
@@ -127,15 +157,28 @@ class LCModule extends DefaultMutableModule {
     private void syncFromFile(int slot) {
         def imageName = links.keySet().toList()[slot]
         def file = getInput(imageName + "_file") as File
-        def microns = file ? micronsFromFile(file) : null
-        if (microns != null) links[imageName].each { setInput(it, microns) }
+        follow(imageName, file ? micronsYXFromFile(file) : null)
     }
     /** Callback body: copy the pixel size of the image chosen for image parameter number `slot` into its linked fields. */
     private void sync(int slot) {
         def imageName = links.keySet().toList()[slot]
-        def imp = imageOf(getInput(imageName))
-        def microns = micronsPerPixel(imp)
-        if (microns != null) links[imageName].each { setInput(it, microns) }
+        follow(imageName, micronsYX(imageOf(getInput(imageName))))
+    }
+    /** Put the pixel size [y, x] found for `imageName` into its linked fields (X), warning when the pixels are not square.
+     *  A field whose value is not the one this module put there was typed by the person: it keeps what was typed. */
+    private void follow(String imageName, List<Double> yx) {
+        if (yx == null) return
+        def note = anisotropyNote(yx)
+        if (note) {
+            logger("WARNING", note, null)
+            IJ.log("LabConstrictor: " + note)
+        }
+        links[imageName].each { name ->
+            def current = getInput(name) as Double, last = synced[name]
+            if (current != null && last != null && Math.abs(current - last) > TYPED_TOLERANCE * Math.max(1.0d, Math.abs(last))) return
+            setInput(name, yx[1])
+            synced[name] = yx[1]
+        }
     }
 }
 
@@ -147,6 +190,8 @@ hooks = [
     setup        : { },                       // called once when a run starts
     beforeDialog : { String title -> },       // called just before each dialog is shown
     cancelAfterMs: { null },                  // ms after the start at which Cancel is sent on its own (null: never)
+    maxShapes     : { null },                 // a smaller outline cap (null: MAX_SHAPES), so that a test needs no 50 000 outlines
+    maxExportBytes: { null },                 // a smaller export limit (null: MAX_EXPORT_BYTES), so that a test needs no huge image
     finish       : { Map summary -> },        // called with the run's summary on every way out; its value is the script's result
 ]
 
@@ -159,12 +204,31 @@ String lcHome() { System.getenv("LC_HOME") ?: (System.getProperty("user.home") +
 
 LCModule.logger = { String level, String message, Throwable problem -> lcLog(level, message, problem) }
 
-/** Append one entry to the log shared with the Python tools (<LC_HOME>/logs/labconstrictor.log, rotated to .log.1 at 1 MB). Never throws. */
+@Field boolean logRotationFailureShown = false     // a rotation that fails is reported once per session (stderr: the log is what failed)
+
+/** Rotate the log: .log.4 becomes .log.5 (the oldest copy is dropped), ... the log becomes .log.1. Each step replaces what is there
+ *  (File.renameTo does not on Windows). A step that fails (Windows: the file is open in another program) leaves the log to grow and is reported once. */
+void rotateLog(File file) {
+    try {
+        for (int n = LOG_BACKUPS; n >= 1; n--) {
+            def from = n == 1 ? file : new File(file.parentFile, file.name + "." + (n - 1))
+            if (from.exists()) Files.move(from.toPath(), new File(file.parentFile, file.name + "." + n).toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        }
+    } catch (IOException problem) {
+        if (!logRotationFailureShown) {
+            logRotationFailureShown = true
+            // groovylint-disable-next-line SystemErrPrint
+            System.err.println("LabConstrictor: could not rotate the log file " + file + " (it keeps growing): " + problem)
+        }
+    }
+}
+
+/** Append one entry to the log shared with the Python tools (<LC_HOME>/logs/labconstrictor.log, rotated at 1 MB, five copies kept). Never throws. */
 void lcLog(String level, String message, Throwable problem = null) {
     try {
         def file = new File(lcHome(), "logs/labconstrictor.log")
         file.parentFile.mkdirs()
-        if (file.length() > LOG_MAX_BYTES) file.renameTo(new File(file.parentFile, "labconstrictor.log.1"))
+        if (file.length() > LOG_MAX_BYTES) rotateLog(file)
         def stamp = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.ROOT).format(new Date())
         def text = stamp + " " + level.padRight(7) + " pid=" + ProcessHandle.current().pid() + " fiji: " + message.replace("\r", "") + "\n"
         if (problem) { def w = new StringWriter(); problem.printStackTrace(new PrintWriter(w)); text += w.toString() }
@@ -180,9 +244,9 @@ void lcLog(String level, String message, Throwable problem = null) {
 /** Delete a temporary folder; a folder that cannot be removed is logged once (it stays on disk), never ignored. */
 void removeFolder(File folder, String what) {
     try {
-        if (folder.exists() && !folder.deleteDir()) lcLog("WARN", "could not remove the " + what + " " + folder)
+        if (folder.exists() && !folder.deleteDir()) lcLog("WARNING", "could not remove the " + what + " " + folder)
     } catch (SecurityException problem) {
-        lcLog("WARN", "could not remove the " + what + " " + folder + ": " + problem, problem)
+        lcLog("WARNING", "could not remove the " + what + " " + folder + ": " + problem, problem)
     }
 }
 
@@ -218,7 +282,7 @@ boolean isPosixHost() { return !System.getProperty("os.name").toLowerCase().cont
 Integer unixMode(java.nio.file.Path path) {
     try { return java.nio.file.Files.getAttribute(path, "unix:mode") as Integer }
     catch (UnsupportedOperationException | IllegalArgumentException problem) {
-        lcLog("WARN", "no unix permission bits for " + path + " (" + problem + "): the permission checks do not apply to it")
+        lcLog("WARNING", "no unix permission bits for " + path + " (" + problem + "): the permission checks do not apply to it")
         return null
     }
 }
@@ -257,7 +321,7 @@ String untrustedReason(File entryFile, Map entry, boolean userDir) {
         if (!isPosixHost()) return null                                  // Windows: no POSIX ownership/mode to check (known, not an error)
         try { java.nio.file.Files.getPosixFilePermissions(entryFile.toPath()) }
         catch (UnsupportedOperationException problem) {                  // a file system without POSIX permissions (known): the entry cannot be checked
-            lcLog("WARN", "the registry entry " + entryFile + " is not checked for permissions: its file system has no POSIX permissions (" + problem + ")")
+            lcLog("WARNING", "the registry entry " + entryFile + " is not checked for permissions: its file system has no POSIX permissions (" + problem + ")")
             return null
         }
         def reason = fileReason(entryFile, userDir, "entry file")
@@ -307,11 +371,22 @@ String schemaProblem(def schema) {
         for (p in tool.inputs) {
             if (!(p instanceof Map) || !identifier(p.name) || !(p.label instanceof String))
                 return "tool '" + tool.id + "' has a parameter without an identifier name and a text label"
-            if (!(p.type in PARAMETER_TYPES)) return "tool '" + tool.id + "': parameter '" + p.name + "' has the unsupported type " + p.type
             if (p.type == "choice" && !(p.choices instanceof List && p.choices)) return "tool '" + tool.id + "': choice parameter '" + p.name + "' has no choices"
         }
     }
     return null
+}
+
+/** The tools of a checked schema that the dialog can show, and the sentences for those it cannot: a tool with a parameter of a type this host does not know
+ *  is left out (the other tools of the app stay usable), like the Napari form. */
+Map usableTools(Map schema) {
+    def tools = [], skipped = []
+    schema.tools.each { tool ->
+        def unknown = tool.inputs.find { !(it.type in PARAMETER_TYPES) }
+        if (unknown) skipped << ("tool '" + tool.id + "': this tool cannot be shown: parameter '" + unknown.name + "' has the unknown type '" + unknown.type + "'")
+        else tools << tool
+    }
+    return [tools: tools, skipped: skipped]
 }
 
 /** Read every registry directory and return [home, apps (name -> entry + schema), problems]: one broken or untrusted app never hides the others. */
@@ -335,6 +410,10 @@ Map discoverApps() {
                 def schema = slurper.parseText(new File(entry.schema_path).text)
                 def badSchema = schemaProblem(schema)
                 if (badSchema) throw new IllegalStateException(badSchema)
+                def usable = usableTools(schema)
+                usable.skipped.each { problems << (name + ": " + it) }
+                if (!usable.tools) throw new IllegalStateException("no tool of the app can be shown")
+                schema = schema + [tools: usable.tools]
                 apps[name] = entry + [pythonpath: entry.pythonpath ?: [], runtime_path: entry.runtime_path ?: "", schema: schema]
             } catch (IllegalStateException e) {                    // an invalid schema: expected, reported below with the other problems
                 problems << (file.name + ": " + e.message)
@@ -391,7 +470,14 @@ def harvest(MutableModuleInfo info, String title, Map links = [:]) {
     hooks.beforeDialog(title)
     def module = new LCModule(info)
     module.links = links
+    links.values().flatten().each { name -> module.synced[name as String] = info.getInput(name as String)?.getDefaultValue() as Double }
     return moduleService.run(module, true).get()
+}
+
+/** [name shown in the chooser, tool] for each tool of the app: the label, or `label (id)` when two tools share a label (never pick the wrong one). */
+List toolChoices(Map app) {
+    def labels = app.schema.tools.collect { it.label }
+    return app.schema.tools.collect { t -> [labels.count(t.label) == 1 ? t.label : t.label + " (" + t.id + ")", t] }
 }
 
 /** Ask the user to pick one of `choices`; a single choice needs no dialog (and avoids SciJava's single-input prompt). */
@@ -464,6 +550,8 @@ List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
         addItem(info, "image_source_note", String, [label: "Image source", message: true, required: false,
                                                     default: "Images are taken from the open windows. To use a file instead, choose it in the matching '(or file)' field."])
     }
+    if (tool.description)                                    // the tool's description above the form, as in the other hosts
+        addItem(info, "tool_description", String, [label: "Description", message: true, required: false, default: tool.description as String])
     int headings = 0
     dialogRows(tool.inputs).each { row ->
         if (row.heading) addItem(info, "heading_" + (headings++), String, [label: row.heading, message: true, required: false, default: "— " + row.heading + " —"])
@@ -490,18 +578,58 @@ void addParameterItems(MutableModuleInfo info, Map p, Map context) {
         case "boolean":
             addItem(info, p.name, Boolean, base + [default: overridden ? override : (p.default ?: false)]); break
         case "choice":
-            def choiceItem = addItem(info, p.name, String, base + [choices: p.choices, default: override ?: p.default ?: p.choices[0]])
+            def start = overridden ? override : (p.default != null ? p.default : p.choices[0])
+            def choiceItem = addItem(info, p.name, String, base + [choices: p.choices.collect { it.toString() }, default: start.toString()])
             if (p.widget == "radio" && !p.nullable) choiceItem.setWidgetStyle("radioButtonHorizontal")   // Widget("radio")
             break
         case "integer":
-            def intItem = addItem(info, p.name, Integer, base + [default: (overridden ? override : (p.default ?: 0)) as Integer,
-                                                                min: p.minimum as Integer, max: p.maximum as Integer, step: 1])
+            def limits = integerLimits(p)
+            def start = Math.max(limits.minimum ?: Long.MIN_VALUE, Math.min(limits.maximum ?: Long.MAX_VALUE, startNumber(p, overridden, override) as long))
+            def wide = [start, limits.minimum, limits.maximum].any { it != null && !fitsInt(it) }       // a 32-bit field would cut the value
+            def description = [p.description, limits.limited ? "Whole numbers up to +-" + MAX_FORM_INTEGER + "." : null].findAll { it }.join(" ")
+            def intItem = addItem(info, p.name, wide ? Long : Integer, base + [description: description, default: wide ? start : start as Integer, step: 1,
+                                                                               min: wide ? limits.minimum : limits.minimum as Integer, max: wide ? limits.maximum : limits.maximum as Integer])
             if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) intItem.setWidgetStyle("slider")   // Widget("slider")
             break
         case "float": addFloatItem(info, p, base, overridden, override, context); break
         default:
             throw new IllegalArgumentException("parameter '" + p.name + "' has the unsupported type '" + p.type + "'")
     }
+}
+
+/** The declared choice whose text is `text`, or null. Choices are typed (Literal[1, 2, 3] means the numbers 1, 2, 3, which the worker
+ *  insists on) while a dialog or a macro only has text: the text is mapped back to the declared value. */
+def declaredChoice(Map p, def text) { return p.choices.find { it.toString() == text?.toString() } }
+
+/** The declared choices as the worker writes them in `must be one of [...]` (a Python list: text in quotes, numbers as they are). */
+String choicesText(Map p) { return "[" + p.choices.collect { pythonLiteral(it) }.join(", ") + "]" }
+
+/** The value to send for a choice: the declared choice that `text` names (the worker's refusal, in its words, when there is none). */
+def typedChoice(Map p, def text) {
+    if (declaredChoice(p, text) == null) throw new IllegalArgumentException("'" + p.name + "' must be one of " + choicesText(p))
+    return declaredChoice(p, text)
+}
+
+/** Whether `number` is within the 32-bit range. */
+boolean fitsInt(def number) { return number >= Integer.MIN_VALUE && number <= Integer.MAX_VALUE }
+
+/** The declared bounds of an integer parameter, kept within +-MAX_FORM_INTEGER (a bound beyond it cannot be held exactly: `limited` says so,
+ *  the form states the limit instead of cutting values silently). */
+Map integerLimits(Map p) {
+    def limit = MAX_FORM_INTEGER as BigInteger
+    def narrowed = { def bound -> bound == null ? null : ((bound as BigInteger).max(-limit).min(limit)).longValue() }
+    def beyond = { def bound -> bound != null && (bound as BigInteger).abs() > limit }
+    return [minimum: narrowed(p.minimum), maximum: narrowed(p.maximum), limited: beyond(p.minimum) || beyond(p.maximum)]
+}
+
+/** The starting value of a number field: the harness's, else the declared default, else (a number without one) 0 moved into [minimum, maximum]:
+ *  the nearest allowed value, so that a required number never starts outside its own bounds (same rule as the QuPath form). */
+def startNumber(Map p, boolean overridden, def override) {
+    if (overridden) return override
+    if (p.default != null) return p.default
+    if (p.minimum != null && p.minimum > 0) return p.minimum
+    if (p.maximum != null && p.maximum < 0) return p.maximum
+    return 0
 }
 
 /** Image / labels parameter: the chooser of open windows, the "(or file)" field, and the extras (selection, "use" box, channel). */
@@ -549,13 +677,16 @@ void addFloatItem(MutableModuleInfo info, Map p, Map base, boolean overridden, d
     def openImages = context.openImages
     def value = overridden ? override : p.default
     def source = p.pixel_size_of && openImages ? WindowManager.getImage(context.defaultTitle[p.pixel_size_of] ?: openImages[0]) : null
-    def microns = LCModule.micronsPerPixel(source)
+    def found = LCModule.micronsYX(source)
     def fileSource = p.pixel_size_of ? hooks.overrides[p.pixel_size_of + "_file"] : null
-    if (microns == null && fileSource) microns = LCModule.micronsFromFile(new File(fileSource as String))
+    if (found == null && fileSource) found = LCModule.micronsYXFromFile(new File(fileSource as String))
+    def microns = found?.getAt(1)
+    def squareNote = LCModule.anisotropyNote(found)
+    if (squareNote) { lcLog("WARNING", squareNote); IJ.log("LabConstrictor: " + squareNote) }
     if (microns != null) value = microns                                                      // calibration prefill (unit-aware)
     if (p.pixel_size_of && value == null)
         IJ.log("LabConstrictor: no pixel size found for '" + p.label + "' (the image has no usable calibration): enter it by hand")
-    def floatItem = addItem(info, p.name, Double, base + [default: (value ?: 0) as Double, min: p.minimum as Double, max: p.maximum as Double, step: FLOAT_STEP])
+    def floatItem = addItem(info, p.name, Double, base + [default: (value != null ? value : startNumber(p, false, null)) as Double, min: p.minimum as Double, max: p.maximum as Double, step: FLOAT_STEP])
     if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) floatItem.setWidgetStyle("slider")   // Widget("slider")
 }
 
@@ -664,6 +795,7 @@ void describeDialog(Map summary, def info) {
     summary.dialog_choices = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getChoices() as List] }
     summary.dialog_styles = info.inputs().findAll { it.getWidgetStyle() }.collectEntries { [(it.getName()): it.getWidgetStyle()] }
     summary.dialog_defaults = info.inputs().findAll { it.getChoices() }.collectEntries { [(it.getName()): it.getDefaultValue()] }
+    summary.dialog_messages = info.inputs().findAll { it.getVisibility() == org.scijava.ItemVisibility.MESSAGE }.collectEntries { [(it.getName()): it.getDefaultValue()] }
 }
 
 /** The way out of an interactive request that the person cancelled: nothing is run. */
@@ -671,12 +803,13 @@ Map cancelled(Map summary) { return [aborted: true, result: hooks.finish(summary
 
 /** Interactive run: choose the app and tool, show the tool's dialog, record the run. Returns [app, tool, module], or [aborted: true, result: ...] when cancelled. */
 Map requestFromDialog(Map found, Map summary) {
-    def appName = pickOne("LabConstrictor", "Application", found.apps.keySet().toList(), hooks.preferred("app"))
+    def appName = pickOne("LabConstrictor", "Application", found.apps.keySet().toList().sort(), hooks.preferred("app"))
     if (appName == null) return cancelled(summary)
     def app = found.apps[appName]
-    def toolLabel = pickOne("LabConstrictor: " + app.display_name, "Tool", app.schema.tools.collect { it.label }, hooks.preferred("tool"))
-    if (toolLabel == null) return cancelled(summary)
-    def tool = app.schema.tools.find { it.label == toolLabel }
+    def choices = toolChoices(app)
+    def toolName = pickOne("LabConstrictor: " + app.display_name, "Tool", choices.collect { it[0] as String }, hooks.preferred("tool"))
+    if (toolName == null) return cancelled(summary)
+    def tool = choices.find { it[0] == toolName }[1] as Map
 
     def openImages = WindowManager.getImageTitles() as List<String>
     def dialogStarted = System.nanoTime()
@@ -685,7 +818,7 @@ Map requestFromDialog(Map found, Map summary) {
     describeDialog(summary, info)
     def module = harvest(info, tool.label, links)
     if (module == null) return cancelled(summary)
-    recordRun(appName, tool, module)
+    recordRun(app, tool, module)
     return [app: app, tool: tool, module: module]
 }
 
@@ -721,12 +854,12 @@ File selectionMask(Map p, Map tool, def module, File jobDir) {
     return file
 }
 
-/** An image parameter's value for the worker: [file the worker reads, what to remember as the image (an ImagePlus, or the path to open later)],
- *  or null when the parameter is optional and was not given. */
+/** An image parameter's value for the worker: [file the worker reads, what to remember as the image (an ImagePlus, or the path to open later), what the
+ *  worker did not get that a command line cannot say (`[selection: true]` or `[channel: n]`, or null)], or null when the parameter is optional and was not given. */
 List exportImage(Map p, Map tool, def module, File jobDir) {
     if (p.region_of && module.getInput("selection_" + p.name)) {   // RegionOf: the selection is the value
         def maskFile = selectionMask(p, tool, module, jobDir)
-        return [maskFile.path, maskFile.path]
+        return [maskFile.path, maskFile.path, [selection: true]]
     }
     def chosen = module.getInput(p.name + "_file") as File
     if (chosen) return exportImageFile(p, module, chosen, jobDir)   // a file wins over the open image: the worker reads it directly
@@ -745,9 +878,13 @@ ImagePlus openForChannel(File file) {
     }
 }
 
+/** The path the worker is given: absolute. A relative path is resolved here, against the folder Fiji runs in (the same one the existence checks
+ *  use), because the worker runs in the app's own folder, where the same text could be another file or none. */
+String workerPath(File file) { return file.absolutePath }
+
 /** An image given as a file: the worker reads it directly, except that PickChannel writes the chosen channel of it for the worker. */
 List exportImageFile(Map p, def module, File chosen, File jobDir) {
-    if (!chosen.isFile()) throw new IllegalArgumentException("'" + p.label + "': file not found: " + chosen.path)
+    if (!chosen.isFile()) throw new IllegalArgumentException(coded("file_not_found", "image file not found: " + chosen.path))
     if (p.pick_channel) {                                     // PickChannel: the file's chosen channel is written for the worker
         def channelNumber = (module.getInput(p.name + "_channel") ?: 1) as int
         def opened = openForChannel(chosen)
@@ -760,63 +897,103 @@ List exportImageFile(Map p, def module, File chosen, File jobDir) {
         def picked = channelOf(opened, channelNumber, p.label as String)
         def channelFile = new File(jobDir, p.name + ".tif")
         new FileSaver(picked).saveAsTiff(channelFile.path)
-        return [channelFile.path, chosen.path]
+        return [channelFile.path, workerPath(chosen), opened.getNChannels() > 1 ? [channel: channelNumber] : null]
     }
-    return [chosen.path, chosen.path]                         // opened later only if a result needs it (see asImage)
+    return [workerPath(chosen), workerPath(chosen), null]     // opened later only if a result needs it (see asImage)
 }
 
-/** An image chosen from the open windows, saved into the job folder as TIFF (one channel for PickChannel, one plane for axes "YX"). */
+/** `message` with its error code in front, the way the worker words its own refusals: `[code] message`. */
+String coded(String code, String message) { return "[" + code + "] " + message }
+
+/** The shape the worker reads back from the TIFF saved for `imp` (numpy order, T Z C of size 1 left out as tifffile does), e.g. [3, 32, 32]. */
+List<Integer> savedShape(ImagePlus imp) {
+    def shape = [imp.getNFrames(), imp.getNSlices(), imp.getNChannels()].findAll { it > 1 }
+    shape += [imp.getHeight(), imp.getWidth()]
+    if (imp.getBitDepth() == RGB_BIT_DEPTH) shape << RGB_SAMPLES
+    return shape
+}
+
+/** A parameter declared with `Axes` wants exactly that many dimensions (same refusal as the worker's, same words): no plane is ever chosen for the person. */
+void checkAxes(Map p, ImagePlus imp) {
+    def shape = savedShape(imp)
+    if (p.axes && shape.size() != p.axes.length())
+        throw new IllegalArgumentException(coded("wrong_dimensions", "'" + p.label + "' must be a " + p.axes.length() + "D image (" + p.axes + ") but got " + shape.size() +
+                                                 "D with shape (" + shape.join(", ") + ")"))
+}
+
+/** Bytes of the TIFF saved for `imp`: every plane, channel and colour sample at the pixel type's size. */
+long exportBytes(ImagePlus imp) {
+    long bytesPerSample = imp.getBitDepth() == RGB_BIT_DEPTH ? 1L : imp.getBitDepth() / Byte.SIZE
+    long samples = imp.getBitDepth() == RGB_BIT_DEPTH ? RGB_SAMPLES : 1L
+    return (long) imp.getWidth() * imp.getHeight() * imp.getStackSize() * samples * bytesPerSample
+}
+
+/** An image above the export limit is refused with a clear sentence, never cropped or sent in part (same words and limit as the Napari form). */
+void checkExportSize(ImagePlus imp) {
+    long limit = hooks.maxExportBytes() ?: MAX_EXPORT_BYTES
+    long size = exportBytes(imp)
+    if (size > limit)
+        throw new IllegalArgumentException(String.format(Locale.ROOT, "image '%s' is %.1f GB; exporting more than %.0f GB is not supported", imp.getTitle(), size / BYTES_PER_GB, limit / BYTES_PER_GB))
+}
+
+/** An image chosen from the open windows, saved into the job folder as TIFF (one channel for PickChannel; a tool with Axes gets exactly that many dimensions or a refusal). */
 List exportOpenImage(Map p, def module, File jobDir) {
     def chosenImage = LCModule.imageOf(module.getInput(p.name))
-    if (chosenImage == null) throw new IllegalArgumentException("'" + p.label + "' is required: open an image or choose a file")
+    if (chosenImage == null) throw new IllegalArgumentException(coded("missing_parameter", "'" + p.label + "' is required: open an image or choose a file"))
     def file = new File(jobDir, p.name + ".tif")
     if (file.canonicalFile.parentFile != jobDir.canonicalFile) throw new IllegalArgumentException("'" + p.label + "': refusing to write outside " + jobDir)
     def imp = chosenImage
     if (p.pick_channel) {                                   // PickChannel: exactly the channel that was chosen, at the current Z and T
         imp = channelOf(imp, (module.getInput(p.name + "_channel") ?: 1) as int, p.label as String)
-    } else if (p.axes == "YX" && imp.getStackSize() > 1) {          // tool wants one plane: send the one on screen
-        IJ.log("LabConstrictor: '" + p.label + "' needs a single 2D plane - using the current plane (" + imp.getCurrentSlice() + " of " + imp.getStackSize() + ")")
-        imp = new ImagePlus(imp.getTitle(), imp.getProcessor().duplicate())
-        imp.setCalibration(chosenImage.getCalibration())
     }
+    checkAxes(p, imp)
+    checkExportSize(imp)
     new FileSaver(imp).saveAsTiff(file.path)
-    return [file.path, chosenImage]
+    return [file.path, chosenImage, p.pick_channel && chosenImage.getNChannels() > 1 ? [channel: (module.getInput(p.name + "_channel") ?: 1) as int] : null]
 }
 
-/** Harvested values -> worker inputs. Images are saved as TIFF (calibration travels as explicit parameters). Returns [inputs, images]. */
+/** Harvested values -> worker inputs. Images are saved as TIFF (calibration travels as explicit parameters). Returns [inputs, images, modifiers]:
+ *  `modifiers` names, per image parameter, what the worker got that a command line cannot repeat (the selection, one channel). */
 List exportInputs(Map tool, def module, File jobDir) {
-    def inputs = [:], images = [:]
+    def inputs = [:], images = [:], modifiers = [:]
     tool.inputs.each { p ->
         def value = module.getInput(p.name)
         switch (p.type) {
             case ["image", "labels"]:
                 def exported = exportImage(p, tool, module, jobDir)
-                if (exported != null) { inputs[p.name] = exported[0]; images[p.name] = exported[1] }
+                if (exported != null) { inputs[p.name] = exported[0]; images[p.name] = exported[1]; if (exported[2]) modifiers[p.name] = exported[2] }
                 break
             case ["table", "file"]:
-                if (value) inputs[p.name] = (value as File).path
+                if (value) inputs[p.name] = workerPath(value as File)
                 break
             case "folder":
                 if (value) {
-                    if (!(value as File).isDirectory()) throw new IllegalArgumentException("'" + p.label + "': folder not found: " + (value as File).path)
-                    inputs[p.name] = (value as File).path
+                    if (!(value as File).isDirectory()) throw new IllegalArgumentException(coded("folder_not_found", "'" + p.label + "': folder not found: " + (value as File).path))
+                    inputs[p.name] = workerPath(value as File)
                 }
                 break
             default:
                 if (p.nullable && !module.getInput("set_" + p.name)) break      // unset: the tool receives None
+                if (value != null && p.type == "choice") value = typedChoice(p, value)
                 if (value != null) inputs[p.name] = value
         }
     }
     inputs[JOB_DIR_KEY] = jobDir.path
-    return [inputs, images]
+    return [inputs, images, modifiers]
 }
 
 // ---- running the worker
 /** The worker process of an app (not started yet); its stderr goes to the log and, as a tail, into `workerOutput`. */
 Service newWorkerService(Map app, List<String> workerOutput) {
     def command = [app.python, "-m", "labconstrictor_tools", "serve", "--module", app.module] + app.pythonpath.collectMany { ["--pythonpath", it] }
-    def env = [PYTHONPATH: app.runtime_path, PYTHONNOUSERSITE: "1", PYTHONIOENCODING: "utf-8", PYTHONUNBUFFERED: "1"]
-    def service = new Service(new File(app.prefix), env, command as String[])
+    def env = [PYTHONPATH: app.runtime_path, PYTHONNOUSERSITE: "1", PYTHONSAFEPATH: "1", PYTHONIOENCODING: "utf-8", PYTHONUNBUFFERED: "1"]
+    // Appose can only add variables to the worker's environment, not remove them: what must not leak in from Fiji's own environment (the
+    // conda or venv it was started from) is set to the empty string, which Python, conda and Qt read as "not set"
+    SCRUBBED_ENV.findAll { System.getenv(it) != null }.each { name ->
+        env[name] = ""
+        lcLog("INFO", "worker environment: " + name + " is set in Fiji's environment and is emptied for the worker")
+    }
+    def service = new Service(new File(System.getProperty("user.dir")), env, command as String[])   // the host's working directory, like labconstrictor_tools.client
     service.debug { String line -> synchronized (workerOutput) { workerOutput << line; if (workerOutput.size() > MAX_KEPT_LINES) workerOutput.removeFirst() }; lcLog("DEBUG", "worker " + line) }
     return service
 }
@@ -919,7 +1096,7 @@ String failureMessage(Map outcome, Map summary) {
            "\n\nRun record: " + (summary.run_record ?: "(none)") + "\nLog file: " + new File(lcHome(), "logs/labconstrictor.log").path
 }
 
-/** One folder per run under <home>/runs (the newest KEPT_RUN_RECORDS kept): what was run, by which interpreter, what came back. */
+/** One folder per run under <home>/runs (never deleted by the host: retention belongs to the Tools CLI): what was run, by which interpreter, what came back. */
 String writeRunRecord(Map app, Map tool, Map inputs, Map outcome) {
     try {
         def runs = new File(lcHome(), "runs")
@@ -931,7 +1108,6 @@ String writeRunRecord(Map app, Map tool, Map inputs, Map outcome) {
             app: app.name, app_version: app.version, tool: tool.id, host: "fiji", status: outcome.status, error: outcome.error,
             seconds: outcome.seconds, inputs: inputs, worker_output_tail: outcome.workerOutput, log_file: new File(lcHome(), "logs/labconstrictor.log").path, progress_events: outcome.progress, interpreter: outcome.outputs?.diagnostics,
             results: (outcome.outputs?.results ?: []).collect { it.findAll { k, v -> k != "matrix_yx" } }]))
-        (runs.listFiles({ File f -> f.isDirectory() } as FileFilter) ?: [] as File[]).sort().reverse().drop(KEPT_RUN_RECORDS).each { removeFolder(it, "old run record") }
         return folder.path
     // groovylint-disable-next-line CatchException
     } catch (Exception problem) {                       // a record must never break a run, but its absence must be visible
@@ -962,8 +1138,8 @@ Map showResults(Map app, List results, Map images, Map tool = null) {
         try {
             switch (r.type) {
                 case ["image", "labels"]: showImage(app, r, summary, r.name in replaced); break
-                case "table": showTable(r, summary); break
-                case "values": IJ.log(app.display_name + " " + r.name + ": " + r.values); summary["values_" + r.name] = r.values; break
+                case "table": showTable(r, summary, r.name in replaced); break
+                case "values": showValues(app, r, summary); break
                 case "message": showMessage(app, r, summary); break
                 case "points": showPoints(app, r, images, summary, r.name in replaced); break
                 case "shapes": showShapes(app, r, images, summary, r.name in replaced); break
@@ -982,6 +1158,20 @@ Map showResults(Map app, List results, Map images, Map tool = null) {
         }
     }
     return summary
+}
+
+/** One value of a `values` result as text. JSON cannot hold NaN or Infinity, so the worker sends them as null: the protocol says a host reads that as "not a finite number". */
+String valueText(def value) {
+    if (value == null) return NOT_FINITE_TEXT
+    return value instanceof List ? "[" + value.collect { valueText(it) }.join(", ") + "]" : value.toString()
+}
+
+/** A values result: `name=value` pairs in the Log (and in the log file, for support). */
+void showValues(Map app, Map r, Map summary) {
+    def text = r.values.collect { key, value -> key + "=" + valueText(value) }.join(", ")
+    IJ.log(app.display_name + " " + r.name + ": " + text)
+    lcLog("INFO", "result values " + r.name + ": " + text)
+    summary["values_" + r.name] = r.values
 }
 
 /** An image / labels result: opened as a new window `<app>:<name>` (numbered when the title is taken; replace=true closes the previous one first). */
@@ -1008,16 +1198,31 @@ void showMessage(Map app, Map r, Map summary) {
     if (hooks.interactive) IJ.showMessage("LabConstrictor: " + app.display_name, text)
 }
 
-/** Points (columns y, x in pixels of the image named by apply_to, else of the first image of this run, else the current image):
+/** The image window a points or shapes result is placed on: the image `apply_to` names, else the first image input of the run (PROTOCOL.md).
+ *  Only a tool without any image input falls back to the image its run showed last, else the current image. Returns null when the
+ *  image is a file that is not open as a window (the result is not put on some other image: that would be another frame). */
+ImagePlus resultTarget(Map r, Map images) {
+    def name = r.apply_to ?: (images ? images.keySet().first() : null)
+    def source = name == null ? null : images[name]
+    if (source instanceof ImagePlus) return source
+    if (source != null) return null
+    return lastShownImage ?: WindowManager.getCurrentImage()
+}
+
+/** Why a points or shapes result has no window to be placed on. */
+String noWindowReason(Map images) {
+    return images ? "the image they belong to was given as a file, so there is no open window to place them on" : "no image is open to place them on"
+}
+
+/** Points (columns y, x in pixels of the image named by apply_to, else of the first image input, else the current image):
  *  a multi-point ROI on that image, also kept in the ROI Manager under the output's name, and a table with the properties. */
 void showPoints(Map app, Map r, Map images, Map summary, boolean replace) {
     def table = ResultsTable.open(r.path)
-    def target = images[r.apply_to]
-    if (!(target instanceof ImagePlus)) target = lastShownImage ?: WindowManager.getCurrentImage()
-    if (!(target instanceof ImagePlus)) {                    // nothing to place them on: the table is still the result
-        table.show(app.name + ":" + r.name)
-        lcLog("INFO", "points '" + r.name + "' shown as a table: no image is open to place " + table.size() + " point(s) on")
-        IJ.log("LabConstrictor: '" + r.name + "' has " + table.size() + " point(s) but no image is open to place them on: shown as a table (open an image and run again to see them on it)")
+    def target = resultTarget(r, images)
+    if (target == null) {                                    // nothing to place them on: the table is still the result
+        showTableWindow(table, app.name + ":" + r.name, replace)
+        lcLog("INFO", "points '" + r.name + "' shown as a table: " + noWindowReason(images) + " (" + table.size() + " point(s))")
+        IJ.log("LabConstrictor: '" + r.name + "' has " + table.size() + " point(s) but " + noWindowReason(images) + ": shown as a table (open an image and run again to see them on it)")
         summary["points_" + r.name] = [count: table.size(), image: null, columns: table.getHeadings() as List]
         return
     }
@@ -1032,7 +1237,7 @@ void showPoints(Map app, Map r, Map images, Map summary, boolean replace) {
     }
     target.setRoi(roi)
     manager.addRoi(roi)
-    table.show(app.name + ":" + r.name)
+    showTableWindow(table, app.name + ":" + r.name, replace)
     summary["points_" + r.name] = [count: table.size(), image: target.getTitle(), columns: table.getHeadings() as List]
 }
 
@@ -1049,15 +1254,16 @@ ij.gui.ShapeRoi polygonRoi(List part) {
     return new ij.gui.ShapeRoi(path)
 }
 
-/** The ROIs of a GeoJSON feature collection (at most MAX_SHAPES, named `prefix label[.n]`), how many polygons it had and how many have holes. */
-Map outlinesOf(def collection, String prefix) {
-    def rois = [], holes = 0, total = 0
-    collection.features.each { feature ->
+/** The ROIs of a GeoJSON feature collection (every polygon of the first `limit` features, named `prefix label[.n]`), the polygons and features it had
+ *  in all and how many polygons have holes. The cap counts features, the author's objects, like the other hosts. */
+Map outlinesOf(def collection, String prefix, int limit) {
+    def rois = [], holes = 0, polygons = 0
+    collection.features.eachWithIndex { feature, index ->
         def geometry = feature.geometry
         def parts = geometry.type == "Polygon" ? [geometry.coordinates] : geometry.coordinates
+        polygons += parts.size()
+        if (index >= limit) return
         parts.each { part ->
-            total++
-            if (rois.size() >= MAX_SHAPES) return
             if (part.size() > 1) holes++
             def roi = polygonRoi(part)
             def label = feature.properties?.label
@@ -1065,7 +1271,7 @@ Map outlinesOf(def collection, String prefix) {
             rois << roi
         }
     }
-    return [rois: rois, holes: holes, total: total]
+    return [rois: rois, holes: holes, total: polygons, features: collection.features.size()]
 }
 
 /** Replace(): remove the earlier outlines of this output (named `prefix ...`) from the overlay and the ROI Manager. */
@@ -1076,17 +1282,17 @@ void removeEarlierOutlines(def overlay, def manager, String prefix) {
 }
 
 /** Outlines (GeoJSON Polygon / MultiPolygon, [x, y] with pixel centres at integers) in the frame of the image named by apply_to
- *  (else the first image of this run, else the current image): an overlay on that image with holes kept (composite ROIs), and the
+ *  (else the first image input, else the current image): an overlay on that image with holes kept (composite ROIs), and the
  *  first MAX_MANAGER_SHAPES also in the ROI Manager. Replace() swaps this output's previous outlines. */
 void showShapes(Map app, Map r, Map images, Map summary, boolean replace) {
     def collection = new JsonSlurper().parse(new File(r.path as String), "UTF-8")
-    def target = images[r.apply_to]
-    if (!(target instanceof ImagePlus)) target = lastShownImage ?: WindowManager.getCurrentImage()
+    def target = resultTarget(r, images)
     def prefix = app.name + ":" + r.name
-    def outlines = outlinesOf(collection, prefix)
+    def limit = hooks.maxShapes() ?: MAX_SHAPES
+    def outlines = outlinesOf(collection, prefix, limit)
     def rois = outlines.rois, holes = outlines.holes, total = outlines.total
-    if (!(target instanceof ImagePlus)) {
-        IJ.log("LabConstrictor: '" + r.name + "' has " + total + " outline(s) but no image is open to place them on (open an image and run again)")
+    if (target == null) {
+        IJ.log("LabConstrictor: '" + r.name + "' has " + total + " outline(s) but " + noWindowReason(images) + " (open an image and run again)")
         summary["shapes_" + r.name] = [count: total, shown: 0, image: null]
         return
     }
@@ -1098,17 +1304,31 @@ void showShapes(Map app, Map r, Map images, Map summary, boolean replace) {
     overlay.setStrokeColor(java.awt.Color.YELLOW)
     target.updateAndDraw()
     rois.take(MAX_MANAGER_SHAPES).each { manager.addRoi(it.clone() as ij.gui.Roi) }
-    if (total > MAX_SHAPES) IJ.log("LabConstrictor: '" + r.name + "': showing the first " + MAX_SHAPES + " of " + total + " outlines")
+    if (outlines.features > limit) {
+        def sentence = "'" + r.name + "': showing the first " + limit + " of " + outlines.features + " outlines"
+        IJ.log("LabConstrictor: " + sentence)
+        lcLog("INFO", "shapes " + sentence)
+    }
     if (rois.size() > MAX_MANAGER_SHAPES) IJ.log("LabConstrictor: '" + r.name + "': the ROI Manager lists the first " + MAX_MANAGER_SHAPES + " of " + rois.size() + " outlines (all are in the overlay)")
     if (holes) IJ.log("LabConstrictor: '" + r.name + "': " + holes + " outline(s) have holes (kept in the overlay and the ROI Manager)")
-    summary["shapes_" + r.name] = [count: total, shown: rois.size(), holes: holes, image: target.getTitle(), overlay_size: overlay.size(), manager_count: manager.getCount()]
+    summary["shapes_" + r.name] = [count: total, shown: rois.size(), holes: holes, image: target.getTitle(), overlay_size: overlay.size(), manager_count: manager.getCount(),
+                                   features: outlines.features]
 }
 
-/** A table result: opened as a results window named after the output. */
-void showTable(Map r, Map summary) {
+/** Show `table` in a results window called `title`. ImageJ would overwrite an open window of that name, so a table that does not replace its
+ *  previous result gets a new window `title [n]` (the manifest: add, unless the output declares Replace). Returns the title shown. */
+String showTableWindow(ResultsTable table, String title, boolean replace) {
+    def shown = title
+    if (!replace) for (int n = 1; WindowManager.getFrame(shown) != null; n++) shown = title + " [" + n + "]"
+    table.show(shown)
+    return shown
+}
+
+/** A table result: opened as a results window named after the output (`name [n]` when that one is open, unless the output replaces its previous result). */
+void showTable(Map r, Map summary, boolean replace) {
     def table = ResultsTable.open(r.path)
-    table.show(r.name)
-    summary["table_" + r.name] = [rows: table.size(), cols: table.getHeadings() as List, first: table.getRowAsString(0)]
+    def title = showTableWindow(table, r.name as String, replace)
+    summary["table_" + r.name] = [rows: table.size(), cols: table.getHeadings() as List, first: table.getRowAsString(0), title: title]
 }
 
 /** An input image of the run: the image itself, or the file it was given as (opened only when a result needs it). */
@@ -1122,6 +1342,13 @@ ImagePlus asImage(def image) {
 /** Resample `apply_to` into the `relative_to` frame with the returned matrix (maps source px -> target px) and show a green/magenta overlay. */
 void showAffine(Map r, Map images, List results, Map summary, boolean replace = false) {
     def source = asImage(images[r.apply_to]), target = asImage(images[r.relative_to ?: r.apply_to])
+    def found = determinantOf(r.matrix_yx)
+    if (found.singular) {
+        def warning = "the alignment matrix is singular (determinant " + found.det + "): the image collapses onto a line or a point"
+        lcLog("WARNING", warning)
+        IJ.log("LabConstrictor: " + warning)
+        summary.affine_warning = warning
+    }
     def warped = resample(source, target.getWidth(), target.getHeight(), r.matrix_yx)
     summary.affine_matrix = r.matrix_yx
     def workerWarp = results.find { it.type == "image" }      // only used to cross-check Fiji's own application
@@ -1143,17 +1370,39 @@ void showAffine(Map r, Map images, List results, Map summary, boolean replace = 
     summary.overlay_title = overlay.getTitle()
 }
 
-/** `source` mapped through the 2x3 matrix [[a, b, ty], [c, d, tx]] (source px -> target px) onto a width x height plane; refuses non-finite or singular matrices. */
+/** The determinant of the 2x3 matrix [[a, b, ty], [c, d, tx]], and whether it is too small (relative) for the matrix to be inverted. */
+Map determinantOf(List matrix) {
+    def (a, b) = matrix[0]
+    def (c, d) = matrix[1]
+    double det = a * d - b * c
+    return [det: det, singular: !(Math.abs(det) > SINGULAR_TOLERANCE * Math.max(1.0d, Math.abs(a * d) + Math.abs(b * c)))]
+}
+
+/** `source` mapped through the 2x3 matrix [[a, b, ty], [c, d, tx]] (source px -> target px) onto a width x height plane. Refuses non-finite
+ *  matrices; a singular one (it collapses the image onto a line or a point) is still applied, forwards: each source pixel lands on its target pixel. */
 FloatProcessor resample(ImagePlus source, int width, int height, List matrix) {
     def (a, b, ty) = matrix[0]
     def (c, d, tx) = matrix[1]
-    double det = a * d - b * c
     if (!matrix.flatten().every { it instanceof Number && Double.isFinite(it as double) })
         throw new IllegalStateException("the alignment matrix contains values that are not finite numbers")
-    if (!(Math.abs(det) > SINGULAR_TOLERANCE * Math.max(1.0d, Math.abs(a * d) + Math.abs(b * c))))
-        throw new IllegalStateException("the alignment matrix is singular (determinant " + det + "): it cannot be applied")
     def input = source.getProcessor().convertToFloat()
     def output = new FloatProcessor(width, height)
+    def found = determinantOf(matrix)
+    if (found.singular) {
+        def sums = new double[width * height], counts = new int[width * height]
+        for (int y = 0; y < source.getHeight(); y++) {
+            for (int x = 0; x < source.getWidth(); x++) {
+                long ny = Math.round(a * y + b * x + ty), nx = Math.round(c * y + d * x + tx)      // [y', x'] = M [y, x] + t
+                if (ny < 0 || nx < 0 || ny >= height || nx >= width) continue
+                int at = (int) (ny * width + nx)
+                sums[at] += input.getf(x, y)
+                counts[at]++
+            }
+        }
+        for (int i = 0; i < sums.length; i++) if (counts[i] > 0) output.setf(i, (float) (sums[i] / counts[i]))
+        return output
+    }
+    double det = found.det
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             double ry = y - ty, rx = x - tx                   // invert  [y', x'] = M [y, x] + t
@@ -1191,9 +1440,18 @@ void reportOutcome(Map app, Map tool, Map outcome, Map images, Map summary) {
         summary.failure_message = failureMessage(outcome, summary)
         if (hooks.interactive) IJ.error("LabConstrictor: " + app.display_name, summary.failure_message)
     } else {
-        IJ.showStatus("LabConstrictor: " + outcome.status.toLowerCase())
-        IJ.log("LabConstrictor: the run was " + (outcome.cancelRequested ? "cancelled" : outcome.status.toLowerCase()))
+        reportEnd(outcome, summary)
     }
+}
+
+/** A run that ended with no results and no fault (Cancel, or a status such as running): said in the status bar and the Log. After a Cancel that had
+ *  to kill the worker it reads "cancelled (worker stopped)" like the Napari form: the person asked for the stop, so it is never called a crash. */
+void reportEnd(Map outcome, Map summary) {
+    def ended = !outcome.cancelRequested ? outcome.status.toLowerCase() : (outcome.status == "CRASHED" ? CANCELLED_AFTER_KILL : "cancelled")
+    summary.status_line = "LabConstrictor: " + ended
+    IJ.showStatus(summary.status_line)
+    IJ.log("LabConstrictor: the run was " + ended + (outcome.cancelRequested && outcome.status == "CRASHED" ? ": " + crashHint(outcome) : ""))
+    if (outcome.cancelRequested) lcLog("INFO", "the run was " + ended + " (Cancel was pressed)")
 }
 
 // ---- macro replay
@@ -1210,8 +1468,8 @@ String macroOptions() {
 }
 
 /** The dialog's choices as macro options (key -> text). Images by window title, or `<name>_file` for a file. */
-Map<String, String> toMacroOptions(String appName, Map tool, def module) {
-    def o = [app: appName, tool: tool.label] as LinkedHashMap
+Map<String, String> toMacroOptions(Map app, Map tool, def module) {
+    def o = [app: app.name, tool: toolChoices(app).find { it[1].id == tool.id }[0]] as LinkedHashMap
     tool.inputs.each { p ->
         switch (p.type) {
             case ["image", "labels"]:
@@ -1236,13 +1494,13 @@ Map<String, String> toMacroOptions(String appName, Map tool, def module) {
 }
 
 /** Tell the macro recorder what this run was (only when the recorder is open); the command line becomes a replayable run(...). */
-void recordRun(String appName, Map tool, def module) {
+void recordRun(Map app, Map tool, def module) {
     try {
         if (!Recorder.record) return
-        toMacroOptions(appName, tool, module).each { k, v -> Recorder.recordOption(k, v) }
+        toMacroOptions(app, tool, module).each { k, v -> Recorder.recordOption(k, v) }
     // groovylint-disable-next-line CatchException
     } catch (Exception problem) {            // broad on purpose: recording must never break a run, but the failure is not hidden
-        lcLog("WARN", "could not record the run for the macro recorder: " + problem, problem)
+        lcLog("WARNING", "could not record the run for the macro recorder: " + problem, problem)
         IJ.log("LabConstrictor: this run could not be recorded for the macro recorder (" + problem + ")")
     }
 }
@@ -1255,21 +1513,27 @@ List<String> macroKeys(String options) {
     return keys
 }
 
-/** Strict number parsing for macro values: no truncation, no NaN/Infinity, within the declared bounds. */
+/** Strict number parsing for macro values: the shared grammar (optional sign, digits with an optional fraction or only a fraction, optional
+ *  exponent: nothing else, no spaces, no 1.5f, 1_0, hex floats), no NaN/Infinity, within the declared bounds (or the 32-bit range of an unbounded integer).
+ *  The refusals are the worker's sentences with `, got 'x'` after them. */
 def macroNumber(Map p, String text) {
     def number
+    def minimum = p.minimum, maximum = p.maximum
     if (p.type == "integer") {
-        if (!(text.trim() ==~ /[+-]?\d+/)) throw new IllegalArgumentException("'" + p.label + "' must be a whole number, got '" + text + "'")
-        number = new BigInteger(text.trim().replaceFirst(/^\+/, ""))
-        if (number > Integer.MAX_VALUE || number < Integer.MIN_VALUE) throw new IllegalArgumentException("'" + p.label + "' is out of range: " + text)
-        number = number.intValue()
+        if (!(text ==~ INTEGER_TEXT)) throw new IllegalArgumentException("'" + p.label + "' must be an integer, got '" + text + "'")
+        number = new BigInteger(text.replaceFirst(/^\+/, ""))
+        def limits = integerLimits(p)
+        minimum = limits.minimum != null ? limits.minimum : (limits.limited ? -MAX_FORM_INTEGER : Integer.MIN_VALUE)
+        maximum = limits.maximum != null ? limits.maximum : (limits.limited ? MAX_FORM_INTEGER : Integer.MAX_VALUE)
     } else {
-        try { number = Double.parseDouble(text.trim()) } catch (NumberFormatException ignored) { throw new IllegalArgumentException("'" + p.label + "' must be a number, got '" + text + "'") }
+        if (text.replaceFirst(/^[+-]/, "").toLowerCase() in NON_FINITE_WORDS) throw new IllegalArgumentException("'" + p.label + "' must be a finite number, got '" + text + "'")
+        if (!(text ==~ FLOAT_TEXT)) throw new IllegalArgumentException("'" + p.label + "' must be a number, got '" + text + "'")
+        number = Double.parseDouble(text)
         if (!Double.isFinite(number)) throw new IllegalArgumentException("'" + p.label + "' must be a finite number, got '" + text + "'")
     }
-    if (p.minimum != null && number < p.minimum) throw new IllegalArgumentException("'" + p.label + "' must be >= " + p.minimum + ", got " + text)
-    if (p.maximum != null && number > p.maximum) throw new IllegalArgumentException("'" + p.label + "' must be <= " + p.maximum + ", got " + text)
-    return number
+    if (minimum != null && number < minimum) throw new IllegalArgumentException("'" + p.label + "' must be >= " + minimum + ", got " + text)
+    if (maximum != null && number > maximum) throw new IllegalArgumentException("'" + p.label + "' must be <= " + maximum + ", got " + text)
+    return p.type == "integer" ? (fitsInt(number) ? number.intValue() : number.longValue()) : number
 }
 
 /** The option names a replayed call may use for `tool`. */
@@ -1282,7 +1546,7 @@ void takeMacroImage(MacroModule module, Map p, String text, String fileText) {
     if (p.region_of && module.values["selection_" + p.name]) return          // the selection is the value (taken when the run starts)
     if (fileText) { module.values[p.name + "_file"] = new File(fileText); module.values["use_" + p.name] = true; return }
     if (text == null && !p.required) return
-    if (text == null) throw new IllegalArgumentException("'" + p.label + "' is required: give " + p.name + "=<window title> or " + p.name + "_file=<path> (a macro never guesses the current image)")
+    if (text == null) throw new IllegalArgumentException(coded("missing_parameter", "'" + p.label + "' is required: give " + p.name + "=<window title> or " + p.name + "_file=<path> (a macro never guesses the current image)"))
     def imp = WindowManager.getImage(text)
     if (imp == null) throw new IllegalArgumentException("'" + p.label + "': no open image" + (text ? " called '" + text + "'" : "") + " (use " + p.name + "=<window title> or " + p.name + "_file=<path>)")
     module.values[p.name] = imp; module.values["use_" + p.name] = true
@@ -1316,14 +1580,14 @@ void takeMacroParameter(MacroModule module, Map p, String options) {
             break
         case "boolean": module.values[p.name] = macroBoolean(p, text); break
         case "integer":
-            module.values[p.name] = text == null ? (p.default ?: 0) as Integer : macroNumber(p, text)
+            module.values[p.name] = text == null ? (fitsInt(p.default ?: 0) ? (p.default ?: 0) as Integer : p.default as Long) : macroNumber(p, text)
             break
         case "float":
             module.values[p.name] = text == null ? (p.default ?: 0) as Double : macroNumber(p, text)
             break
         case "choice":
-            if (text != null && !(text in p.choices)) throw new IllegalArgumentException("'" + p.label + "' must be one of " + p.choices + ", got '" + text + "'")
-            module.values[p.name] = text == null ? (p.default ?: p.choices[0]) : text
+            if (text != null && declaredChoice(p, text) == null) throw new IllegalArgumentException("'" + p.name + "' must be one of " + choicesText(p) + ", got '" + text + "'")
+            module.values[p.name] = text == null ? (p.default != null ? p.default : p.choices[0]) : declaredChoice(p, text)
             break
         default:
             module.values[p.name] = text == null ? (p.default ?: "") : text
@@ -1348,7 +1612,7 @@ Map requestFromMacro(Map found, String macro, Map summary) {
     def appName = found.apps.keySet().find { it.equalsIgnoreCase(appText) }
     if (appName == null) return [aborted: true, result: failEarly(summary, "unknown app '" + Macro.getValue(macro, "app", "") + "' (registered: " + found.apps.keySet().join(", ") + ")")]
     def app = found.apps[appName]
-    def tool = app.schema.tools.find { it.label.equalsIgnoreCase(toolText) || it.id == Macro.getValue(macro, "tool", "") }
+    def tool = toolChoices(app).find { it[0].equalsIgnoreCase(toolText) }?.getAt(1) ?: app.schema.tools.find { it.label.equalsIgnoreCase(toolText) || it.id == Macro.getValue(macro, "tool", "") }
     if (tool == null) return [aborted: true, result: failEarly(summary, "unknown tool '" + Macro.getValue(macro, "tool", "") + "' in " + appName + " (tools: " + app.schema.tools.collect { it.label }.join(", ") + ")")]
     def module
     try { module = moduleFromMacro(tool, macro) } catch (IllegalArgumentException | NumberFormatException problem) { return [aborted: true, result: failEarly(summary, problem.message ?: problem.toString())] }
@@ -1365,35 +1629,78 @@ def failEarly(Map summary, String message) {
 }
 
 // ---- copy as command (same text as labconstrictor_tools.command)
+// the Unicode categories Python's str.isprintable() refuses (everything except the ASCII space among the separators)
+@Field final List<Integer> NOT_PRINTABLE_TYPES = [Character.CONTROL, Character.FORMAT, Character.SURROGATE, Character.PRIVATE_USE, Character.UNASSIGNED,
+                                                  Character.LINE_SEPARATOR, Character.PARAGRAPH_SEPARATOR, Character.SPACE_SEPARATOR].collect { it as int }
+@Field final Map<Integer, String> PYTHON_ESCAPES = [(0x5c): "\\\\", (0x27): "\\'", (0x0a): "\\n", (0x0d): "\\r", (0x09): "\\t"]   // backslash, quote, newline, return, tab
+@Field final int SPACE_CODE_POINT = 0x20
+@Field final String REGION_PLACEHOLDER = "region.tif"   // what a command line names for a selection the host sent as a label image
 @Field final Map<String, String> FILE_PLACEHOLDERS = [image: "image.tif", labels: "labels.tif", table: "table.csv", file: "file", folder: "folder"]
 
-/** `text` quoted for a POSIX shell, or for Windows cmd when `windows` (same rules as labconstrictor_tools.command._quote). */
+@Field final String WINDOWS_SAFE = "-_.:/\\=+,"      // besides letters and digits, what a Windows argument may hold unquoted (labconstrictor_tools.command.WINDOWS_SAFE)
+@Field final String BACKSLASH = "\\"
+@Field final String DOUBLE_QUOTE = '"'
+
+/** One argument for a Windows command line by the rules of the C runtime / CommandLineToArgvW (labconstrictor_tools.command._quote_windows): backslashes
+ *  are literal, except that a run of them in front of a `"` is doubled (and the `"` escaped), and so is a run at the end, which sits in front of the closing quote. */
+String windowsQuoted(String text) {
+    if (text && text.codePoints().allMatch { int c -> Character.isLetterOrDigit(c) || WINDOWS_SAFE.indexOf(c) >= 0 }) return text
+    def out = new StringBuilder(DOUBLE_QUOTE)
+    int run = 0                                           // backslashes seen since the last other character
+    text.each { String c ->
+        if (c == BACKSLASH) { run++; return }
+        out.append(BACKSLASH * (c == DOUBLE_QUOTE ? 2 * run + 1 : run)).append(c)
+        run = 0
+    }
+    return out.append(BACKSLASH * (2 * run)).append(DOUBLE_QUOTE).toString()
+}
+
+/** `text` quoted for a POSIX shell, or for Windows cmd when `windows` (same rules as labconstrictor_tools.command.quote). */
 String shellQuote(String text, boolean windows) {
-    if (windows) return (text && text ==~ /[A-Za-z0-9_.:\/\\=+,-]+/) ? text : '"' + text.replace('"', '\\"') + '"'
+    if (windows) return windowsQuoted(text)
     return (text && text ==~ /[A-Za-z0-9_@%+=:,.\/-]+/) ? text : "'" + text.replace("'", "'\"'\"'") + "'"
 }
 
-/** The values a command line needs: the file behind each image (its own file, or the file the open image came from), else a placeholder. */
-Map commandValues(Map tool, Map inputs, Map images) {
-    def values = [:], missing = []
+/** The values a command line needs: the file behind each image (its own file, or the file the open image came from), else a placeholder; the notes
+ *  for what a command line cannot say (a selection, one channel). Same sentences as the QuPath form. */
+Map commandValues(Map tool, Map inputs, Map images, Map modifiers) {
+    def values = [:], missing = [], notes = []
     tool.inputs.each { p ->
         def value = inputs[p.name]
         if (p.type in ["image", "labels"]) {
             def source = images[p.name]
             def path = source instanceof ImagePlus ? ((source.getOriginalFileInfo()?.directory && source.getOriginalFileInfo()?.fileName) ? new File(source.getOriginalFileInfo().directory, source.getOriginalFileInfo().fileName).path : null)
                      : source instanceof String ? source : null
+            if (modifiers[p.name]?.selection) {
+                path = REGION_PLACEHOLDER
+                notes << ("# " + p.name + ": the selection cannot be copied; save it as a label image and put its path here")
+            }
+            if (modifiers[p.name]?.channel != null)
+                notes << ("# " + p.name + ": the host sent only channel " + modifiers[p.name].channel + "; the command sends the whole file")
             if (path != null) values[p.name] = path
         } else if (value != null) values[p.name] = value
         if (p.type in FILE_PLACEHOLDERS.keySet() && p.required && values[p.name] == null) { values[p.name] = FILE_PLACEHOLDERS[p.type]; missing << p.name }
     }
-    return [values: values, missing: missing]
+    return [values: values, missing: missing, notes: notes]
+}
+
+/** One character of a Python string literal the way `repr` writes it: \n \r \t, quote and backslash escaped, other characters that are not printable
+ *  (controls, format characters, line separators, unassigned code points) as \xNN, \uNNNN or \UNNNNNNNN. */
+String pythonEscaped(int codePoint) {
+    if (PYTHON_ESCAPES.containsKey(codePoint)) return PYTHON_ESCAPES[codePoint]
+    boolean printable = codePoint == SPACE_CODE_POINT || !(Character.getType(codePoint) in NOT_PRINTABLE_TYPES)
+    if (printable) return new String(Character.toChars(codePoint))
+    return codePoint <= 0xff ? String.format("\\x%02x", codePoint) : codePoint <= 0xffff ? String.format("\\u%04x", codePoint) : String.format("\\U%08x", codePoint)
 }
 
 /** `value` as a Python literal (True / False, a number, or a quoted string): the only quoting used in the Python snippet. */
 String pythonLiteral(def value) {
     if (value instanceof Boolean) return value ? "True" : "False"
     if (value instanceof Number) return value.toString()
-    return "'" + value.toString().replace("\\", "\\\\").replace("'", "\\'") + "'"
+    def text = value.toString()
+    def literal = new StringBuilder("'")
+    text.codePoints().forEach { int codePoint -> literal.append(pythonEscaped(codePoint)) }
+    return literal.append("'").toString()
 }
 
 /** A client.run_once snippet that repeats the run; every name and value goes through pythonLiteral. */
@@ -1415,9 +1722,9 @@ String terminalLine(Map app, Map tool, List given, Map values, String note) {
 }
 
 /** The text that repeats a run outside Fiji: kind "terminal" (one command line) or "python" (a client.run_once snippet), with a note line when a file had to be a placeholder. */
-String commandText(String kind, Map app, Map tool, Map inputs, Map images) {
-    def built = commandValues(tool, inputs, images)
-    def note = built.missing ? "# replace the file for: " + built.missing.join(", ") + "\n" : ""
+String commandText(String kind, Map app, Map tool, Map built) {
+    def head = (built.missing ? ["# replace the file for: " + built.missing.join(", ")] : []) + built.notes
+    def note = head ? head.join("\n") + "\n" : ""
     def given = tool.inputs.findAll { built.values.containsKey(it.name) }
     return kind == "python" ? pythonSnippet(app, tool, given, built.values, note) : terminalLine(app, tool, given, built.values, note)
 }
@@ -1428,7 +1735,7 @@ String putOnClipboard(String text) {
         java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new java.awt.datatransfer.StringSelection(text), null)
         return null
     } catch (java.awt.HeadlessException | IllegalStateException | SecurityException problem) {
-        lcLog("WARN", "clipboard not available: " + problem, problem)
+        lcLog("WARNING", "clipboard not available: " + problem, problem)
         return problem.toString()
     }
 }
@@ -1454,14 +1761,15 @@ def copyLastRun(String macro, Map summary) {
 /** Log the command that repeats this run outside Fiji and keep it for "Copy last run as command". Never breaks a run. */
 void rememberCommand(Map app, Map tool, Map inputs, Map images, Map summary) {
     try {
-        summary.command_line = commandText("terminal", app, tool, inputs, images)
-        summary.python_snippet = commandText("python", app, tool, inputs, images)
+        def built = commandValues(tool, inputs, images, summary.modifiers ?: [:])
+        summary.command_line = commandText("terminal", app, tool, built)
+        summary.python_snippet = commandText("python", app, tool, built)
         IJ.log("LabConstrictor: to repeat this run outside Fiji, copy from here:\n" + summary.command_line + "\n--- or in Python:\n" + summary.python_snippet)
         def stateDir = new File(lcHome(), "state"); stateDir.mkdirs()
         new File(stateDir, "last_command.json").setText(groovy.json.JsonOutput.toJson([app: app.name, tool: tool.id, terminal: summary.command_line, python: summary.python_snippet]), "UTF-8")
     // groovylint-disable-next-line CatchException
     } catch (Exception problem) {          // broad on purpose: the copyable command is a convenience and must never break a run; the failure is shown, not hidden
-        lcLog("WARN", "could not build the command text: " + problem, problem)
+        lcLog("WARNING", "could not build the command text: " + problem, problem)
         IJ.log("LabConstrictor: could not build the command to repeat this run (" + problem + ")")
         summary.command_error = problem.toString()
     }
@@ -1479,7 +1787,8 @@ def runRequest(Map app, Map tool, def module, Map summary) {
             if (hooks.interactive) IJ.error("LabConstrictor", problem.message)
             return hooks.finish(summary + [error: problem.message])
         }
-        def (inputs, images) = exported
+        def (inputs, images, modifiers) = exported
+        summary.modifiers = modifiers
         runAndShow(app, tool, inputs, images, summary)
         if (summary.status == "COMPLETE") rememberDepends(app, tool, inputs)
     } finally {

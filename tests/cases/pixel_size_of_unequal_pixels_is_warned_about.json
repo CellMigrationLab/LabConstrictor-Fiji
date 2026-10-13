@@ -1,0 +1,29 @@
+{
+ "app": "parity",
+ "tool": "Calibrated",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "overrides": {
+  "image_file": "${FIXTURES}/anisotropic.tif"
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "approx": {
+   "request.scale": [
+    0.25,
+    1e-06
+   ]
+  },
+  "log_contains": [
+   "pixel size differs: Y 0.5 µm, X 0.25 µm - the tool takes one value and gets X"
+  ]
+ }
+}

@@ -1,0 +1,28 @@
+{
+ "app": "parity",
+ "tool": "Plane only",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/three_channels.tif",
+   "title": "channels.tif"
+  }
+ ],
+ "overrides": {
+  "image": "channels.tif"
+ },
+ "expect": {
+  "match": {
+   "error": "[wrong_dimensions] 'Image' must be a 2D image (YX) but got 3D with shape (3,"
+  }
+ }
+}

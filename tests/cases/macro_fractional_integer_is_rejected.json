@@ -4,7 +4,7 @@
  "macro": "app=synthetic tool=[Slow with progress] steps=3.9",
  "expect": {
   "match": {
-   "error": "must be a whole number"
+   "error": "must be an integer"
   }
  }
 }

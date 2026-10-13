@@ -1,0 +1,29 @@
+{
+ "app": "parity",
+ "tool": "Plane only",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "plane.tif"
+  }
+ ],
+ "overrides": {
+  "image": "plane.tif"
+ },
+ "max_export_bytes": 32767,
+ "expect": {
+  "match": {
+   "error": "image 'plane.tif' is 0.0 GB; exporting more than 0 GB is not supported"
+  }
+ }
+}

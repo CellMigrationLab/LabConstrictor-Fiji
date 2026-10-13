@@ -1,0 +1,40 @@
+{
+ "app": "zeta",
+ "tool": "Plane only",
+ "register": [
+  {
+   "name": "zeta",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  },
+  {
+   "name": "alpha",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  },
+  {
+   "name": "mid",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "combo_items.LabConstrictor": [
+    "alpha",
+    "mid",
+    "zeta"
+   ]
+  }
+ }
+}

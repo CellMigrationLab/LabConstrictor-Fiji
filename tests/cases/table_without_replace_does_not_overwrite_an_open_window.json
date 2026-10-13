@@ -1,0 +1,31 @@
+{
+ "app": "parity",
+ "tool": "Table out",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "preload_tables": [
+  {
+   "title": "rows"
+  }
+ ],
+ "expect": {
+  "status": "COMPLETE",
+  "match": {
+   "table_rows.title": "rows [1]"
+  },
+  "contains": {
+   "open_tables": [
+    "rows",
+    "rows [1]"
+   ]
+  }
+ }
+}

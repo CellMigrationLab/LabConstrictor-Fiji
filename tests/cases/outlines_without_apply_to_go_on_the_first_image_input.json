@@ -1,0 +1,31 @@
+{
+ "app": "parity",
+ "tool": "Outlines without apply_to",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "a.tif"
+  },
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "b.tif"
+  }
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "match": {
+   "shapes_shp.image": "a.tif"
+  }
+ }
+}

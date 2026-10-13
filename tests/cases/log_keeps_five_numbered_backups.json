@@ -1,0 +1,31 @@
+{
+ "app": "parity",
+ "tool": "Typed choices",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "log_prefill": true,
+ "expect": {
+  "status": "COMPLETE",
+  "equals": {
+   "log_backups": {
+    "labconstrictor.log.1": "filler",
+    "labconstrictor.log.2": "old backup 1",
+    "labconstrictor.log.3": "old backup 2",
+    "labconstrictor.log.4": "old backup 3",
+    "labconstrictor.log.5": "old backup 4"
+   }
+  },
+  "log_contains": [
+   " INFO    pid=",
+   " fiji: ---- session start"
+  ]
+ }
+}

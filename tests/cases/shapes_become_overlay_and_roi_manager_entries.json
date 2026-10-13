@@ -34,7 +34,8 @@
     "holes": 1,
     "image": "blobs.tif",
     "overlay_size": 4,
-    "manager_count": 4
+    "manager_count": 4,
+    "features": 4
    }
   }
  }

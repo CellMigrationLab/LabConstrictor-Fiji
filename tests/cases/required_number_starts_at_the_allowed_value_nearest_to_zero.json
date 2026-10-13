@@ -1,0 +1,35 @@
+{
+ "app": "parity",
+ "tool": "Bounded numbers",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "expect": {
+  "status": "COMPLETE",
+  "approx": {
+   "values_values.above": [
+    5,
+    0
+   ],
+   "values_values.below": [
+    -2,
+    0
+   ],
+   "values_values.around": [
+    0,
+    0
+   ],
+   "values_values.free": [
+    0,
+    0
+   ]
+  }
+ }
+}

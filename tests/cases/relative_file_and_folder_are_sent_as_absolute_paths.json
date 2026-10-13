@@ -1,0 +1,36 @@
+{
+ "app": "parity",
+ "tool": "Path echo",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "cwd": "${FIXTURES}",
+ "overrides": {
+  "some_file": "sample.tif",
+  "some_folder": "options"
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "approx": {
+   "values_values.file_is_absolute": [
+    1,
+    0
+   ],
+   "values_values.folder_is_absolute": [
+    1,
+    0
+   ],
+   "values_values.file_exists": [
+    1,
+    0
+   ]
+  }
+ }
+}

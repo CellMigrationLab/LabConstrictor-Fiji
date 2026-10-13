@@ -1,0 +1,40 @@
+{
+ "app": "parity",
+ "tool": "Typed choices",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "log_contains": [
+   "tool 'bounded_numbers': this tool cannot be shown: parameter 'above' has the unknown type 'imagge'"
+  ],
+  "contains": {
+   "combo_items.LabConstrictor: parity": [
+    "Typed choices"
+   ]
+  },
+  "not_contains": {
+   "combo_items.LabConstrictor: parity": [
+    "Bounded numbers"
+   ]
+  }
+ },
+ "tamper": [
+  {
+   "app": "parity",
+   "schema_replace": [
+    "\"label\": \"Above\",\n          \"required\": true,\n          \"type\": \"integer\"",
+    "\"label\": \"Above\",\n          \"required\": true,\n          \"type\": \"imagge\""
+   ]
+  }
+ ]
+}

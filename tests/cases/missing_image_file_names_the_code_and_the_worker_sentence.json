@@ -1,0 +1,22 @@
+{
+ "app": "parity",
+ "tool": "Calibrated",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "overrides": {
+  "image_file": "${FIXTURES}/does_not_exist.tif"
+ },
+ "expect": {
+  "match": {
+   "error": "[file_not_found] image file not found: "
+  }
+ }
+}

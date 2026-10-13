@@ -1,0 +1,53 @@
+{
+ "app": "parity",
+ "tool": "Worker environment",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "cwd": "${FIXTURES}",
+ "env": {
+  "PYTHONHOME": "/nonexistent/pythonhome",
+  "VIRTUAL_ENV": "/nonexistent/venv",
+  "CONDA_PREFIX": "/nonexistent/conda",
+  "QT_PLUGIN_PATH": "/nonexistent/qt"
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "approx": {
+   "values_values.python_home_unset": [
+    1,
+    0
+   ],
+   "values_values.virtual_env_unset": [
+    1,
+    0
+   ],
+   "values_values.conda_prefix_unset": [
+    1,
+    0
+   ],
+   "values_values.qt_plugin_path_unset": [
+    1,
+    0
+   ],
+   "values_values.safe_path": [
+    1,
+    0
+   ],
+   "values_values.in_host_directory": [
+    1,
+    0
+   ]
+  },
+  "log_contains": [
+   "worker environment: PYTHONHOME is set in Fiji's environment and is emptied for the worker"
+  ]
+ }
+}
