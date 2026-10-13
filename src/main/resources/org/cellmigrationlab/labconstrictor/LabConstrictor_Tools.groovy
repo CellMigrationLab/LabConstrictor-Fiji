@@ -34,7 +34,8 @@ import java.nio.file.Files
 @Field final String CANCELLED_AFTER_KILL = "cancelled (worker stopped)"   // the status after a Cancel the tool ignored (same words as the Napari form)
 @Field final List<String> SCRUBBED_ENV = ["PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX", "QT_PLUGIN_PATH"]   // variables of the host's environment the worker must not inherit (PYTHONPATH is always set)
 @Field final int CANCEL_GRACE_MS = 3000          // how long a tool gets to honour Cancel before its worker is killed
-@Field final int EXIT_WAIT_MS = 15000            // heavy interpreters (torch, numba) need a few seconds to exit after stdin closes
+@Field final int EXIT_WAIT_MS = 10000            // how long a worker gets to exit after its input is closed, then it is killed: the 10 s the worker itself promises (conformance.json limits.worker_close_timeout_s; HOST_PARITY K03)
+@Field final int LOOKUP_TIMEOUT_MS = 60000       // a ChoicesFrom lookup that has not answered by then is cancelled and its worker is thrown away (conformance.json limits.lookup_timeout_s, a default not yet confirmed)
 @Field final int CANCEL_POLL_MS = 50             // while a task runs: how often Esc, the harness's cancel time and the task status are looked at
 @Field final int KILL_SETTLE_MS = 10000          // after a worker was killed: how long its task gets to report the end (the client notices the dead process on a thread of its own)
 @Field final int EXIT_POLL_MS = 100              // while a closed worker exits: how often it is looked at
@@ -368,6 +369,9 @@ hooks = [
     maxShapes     : { null },                 // a smaller outline cap (null: MAX_SHAPES), so that a test needs no 50 000 outlines
     maxExportBytes: { null },                 // a smaller export limit (null: MAX_EXPORT_BYTES), so that a test needs no huge image
     pruneCommand : { List<String> command -> command },   // the command started after a run to prune (a test puts a recorder, or a failing command, in its place)
+    lookupTimeoutMs: { null },                // a shorter time limit for a ChoicesFrom lookup (null: LOOKUP_TIMEOUT_MS), so that a test needs no 60 s
+    whileWaiting : { long elapsedMs -> },     // called at every look at a run or a lookup in flight (a test ends Fiji from here: no worker may outlive it)
+    cancelWhen   : { long elapsedMs -> false },   // true: Cancel is sent now (a test presses it when its tool is certainly inside its blocking call; no time can say that)
     awaitPrune   : { false },                 // true: the run waits for the prune it started (a test reads the folders afterwards); never in normal use
     finish       : { Map summary -> },        // called with the run's summary on every way out; its value is the script's result
 ]
@@ -658,6 +662,9 @@ Map discoverApps() {
                 def schema = slurper.parseText(new File(entry.schema_path).text)
                 def badSchema = schemaProblem(schema)
                 if (badSchema) throw new IllegalStateException(badSchema)
+                def compat = lib("LCCompat").checkForHost(schema as Map, SUPPORTED_PROTOCOLS)         // docs/PROTOCOL.md: may this host use what this Tools wrote?
+                if (compat.status == "refuse") { problems << (name + ": ignored: " + compat.reason); skip << name; return }
+                if (compat.status == "warn") { lcLog("WARNING", name + ": " + compat.reason); IJ.log("LabConstrictor: " + name + ": " + compat.reason) }
                 def usable = usableTools(schema)
                 usable.skipped.each { problems << (name + ": " + it) }
                 if (!usable.tools) throw new IllegalStateException("no tool of the app can be shown")
@@ -1042,47 +1049,70 @@ Map choiceRequest(Map tool, Map p, Map state) {
     return request
 }
 
-/** Run the source tool of a ChoicesFrom with `request` and return the options it answered, or null when it gave none. */
-List askSourceTool(Map app, Map source, Map p, Map request) {
-    def jobDir = Files.createTempDirectory("lcchoices_fiji_").toFile()
-    try {
-        request[JOB_DIR_KEY] = jobDir.path
-        def outcome = runTool(app, source, request)
-        if (!outcome.complete) { lcLog("WARNING", "choices of '" + p.name + "' not available: " + outcome.error); return null }
-        def found = outcome.outputs.results.find { it.type == "values" && it.values?.get(p.choices_from.field ?: "choices") instanceof List }
-        def options = found?.values?.get(p.choices_from.field ?: "choices")?.collect { it.toString() }
-        return options ?: null
-    } finally { removeFolder(jobDir, "job folder of the choices request") }
-}
-
-/** The options for one ChoicesFrom parameter, or null (it stays a text field). One failing source tool must not break the dialog. */
-List choicesFor(Map app, Map tool, Map p, Map state) {
+/** What one ChoicesFrom needs, or why there is nothing to ask: [options: List] when the harness gave them, [question: [param, script, inputs, field], job: folder] to be asked of
+ *  the source tool, or null (the parameter stays a text field, said in the log). Nothing is run here. */
+Map choiceQuestion(Map app, Map tool, Map p, Map state) {
     def source = app.schema.tools.find { it.id == p.choices_from.tool }
     def given = hooks.overrides.containsKey("_choices_" + p.name) ? hooks.overrides["_choices_" + p.name] : null
-    try {
-        if (given instanceof List) return given
-        if (source == null || !(p.choices_from.depends instanceof List)) {
-            lcLog("WARNING", "choices of '" + p.name + "' cannot be asked: the source tool '" + p.choices_from.tool + "' is not in the app or 'depends' is not a list (text field)")
-            return null
-        }
-        def request = choiceRequest(tool, p, state)
-        return request == null ? null : askSourceTool(app, source, p, request)
-    // groovylint-disable-next-line CatchException
-    } catch (Exception problem) {          // broad on purpose: one failing source tool must not break the dialog; the field stays a text field
-        lcLog("WARNING", "could not get the choices of '" + p.name + "': " + problem, problem)
-        IJ.log("LabConstrictor: could not get the choices of '" + p.label + "' (" + problem + "); type the value instead")
+    if (given instanceof List) return [options: given]
+    if (source == null || !(p.choices_from.depends instanceof List)) {
+        lcLog("WARNING", "choices of '" + p.name + "' cannot be asked: the source tool '" + p.choices_from.tool + "' is not in the app or 'depends' is not a list (text field)")
         return null
     }
+    def request = choiceRequest(tool, p, state)
+    if (request == null) return null
+    def jobDir = Files.createTempDirectory("lcchoices_fiji_").toFile()
+    request[JOB_DIR_KEY] = jobDir.path
+    return [question: [param: p.name, script: TOOL_PREFIX + source.id, inputs: request, field: p.choices_from.field ?: "choices"], job: jobDir]
+}
+
+/** Ask all the questions of one dialog (see LCLookups): one at a time, one worker for all of them, each bounded by the time limit and by Esc, the worker closed when the last
+ *  is answered. Returns param -> the options it answered (null when none: the parameter stays a text field, and the log says why). One failing source tool breaks nothing. */
+Map askChoices(Map app, List<Map> questions) {
+    if (!questions) return [:]
+    Map<String, Object> options = [timeoutMs: (hooks.lookupTimeoutMs() ?: LOOKUP_TIMEOUT_MS) as long, graceMs: CANCEL_GRACE_MS as long, escape: { IJ.escapePressed() },
+                                   whileWaiting: { long elapsed -> hooks.whileWaiting(elapsed) }, log: { String level, String message, Throwable problem -> lcLog(level, message, problem) }]
+    // groovylint-disable-next-line ExplicitLinkedListInstantiation
+    def output = new LinkedList<String>()                    // the worker's stderr tail (newWorkerService keeps it with removeFirst)
+    lcLog("INFO", "starting the lookup worker for " + app.name + ": " + questions.size() + " question(s), one at a time")
+    IJ.resetEscape()                                         // an Esc pressed before the questions began is not a Cancel of them
+    Map<String, Map<String, Object>> answers = lib("LCLookups").ask(questions.collect { it.question as Map<String, Object> }, options,
+                                                                    { lcLog("INFO", "lookup worker started for " + app.name); newWorkerService(app, output) }, { Service service -> closeWorker(service) }) as Map
+    def lists = [:]
+    questions.each { Map q ->
+        def answer = answers[q.question.param as String]
+        if (answer == null) return                                       // never asked: the worker could not be made (said by the exception below)
+        def options2 = (answer.options as List) ?: null
+        if (answer.status != "COMPLETE") lcLog("WARNING", "choices of '" + q.question.param + "' not available: " + (answer.error ?: answer.status))
+        lists[q.question.param] = options2
+    }
+    return lists
 }
 
 /** ChoicesFrom parameters of `tool` -> their options, asked of the source tool with the values of the previous run; unanswered ones are left out (text field). */
 Map choiceListsFor(Map app, Map tool) {
-    def lists = [:]
+    def lists = [:], questions = [], jobs = []
     def state = null
     tool.inputs.findAll { it.choices_from instanceof Map }.each { p ->
         state = state ?: readState(app)
-        def options = choicesFor(app, tool, p, state)
-        if (options != null) lists[p.name] = options
+        try {
+            def asked = choiceQuestion(app, tool, p, state)
+            if (asked?.options != null) lists[p.name] = asked.options
+            else if (asked != null) { questions << asked; jobs << asked.job }
+        // groovylint-disable-next-line CatchException
+        } catch (Exception problem) {          // broad on purpose: one parameter that cannot be asked about must not break the dialog; its field stays a text field
+            lcLog("WARNING", "could not get the choices of '" + p.name + "': " + problem, problem)
+            IJ.log("LabConstrictor: could not get the choices of '" + p.label + "' (" + problem + "); type the value instead")
+        }
+    }
+    try {
+        askChoices(app, questions).each { name, options -> if (options != null) lists[name] = options }
+    // groovylint-disable-next-line CatchException
+    } catch (Exception problem) {              // the worker could not be made or asked: every field of the questions stays a text field
+        lcLog("WARNING", "could not get the choices (" + questions*.question.param.join(", ") + "): " + problem, problem)
+        IJ.log("LabConstrictor: could not get the choices (" + problem + "); type the values instead")
+    } finally {
+        jobs.each { removeFolder(it as File, "job folder of the choices request") }
     }
     return lists
 }
@@ -1345,6 +1375,8 @@ Service newWorkerService(Map app, List<String> workerOutput) {
     }
     def service = new Service(new File(System.getProperty("user.dir")), env, command as String[])   // the host's working directory, like labconstrictor_tools.client
     service.debug { String line -> synchronized (workerOutput) { workerOutput << line; if (workerOutput.size() > MAX_KEPT_LINES) workerOutput.removeFirst() }; lcLog("DEBUG", "worker " + line) }
+    lib("LCWorkers").hookLog = { String level, String message, Throwable problem -> lcLog(level, message, problem) }
+    lib("LCWorkers").register(service)                 // every worker is known to one registry: closed once, and killed if Fiji quits first
     return service
 }
 
@@ -1366,7 +1398,8 @@ Long waitForTask(Service service, def task, long started) {
     IJ.resetEscape()
     def cancelAfter = hooks.cancelAfterMs()
     while (!task.status.isFinished()) {
-        if (cancelSent == null && (IJ.escapePressed() || (cancelAfter != null && System.currentTimeMillis() - started > cancelAfter))) {
+        hooks.whileWaiting(System.currentTimeMillis() - started)
+        if (cancelSent == null && (IJ.escapePressed() || hooks.cancelWhen(System.currentTimeMillis() - started) || (cancelAfter != null && System.currentTimeMillis() - started > cancelAfter))) {
             task.cancel()
             cancelSent = System.currentTimeMillis()
             IJ.showStatus("LabConstrictor: cancelling...")
@@ -1390,9 +1423,15 @@ void settleAfterKill(def task) {
     if (!task.status.isFinished()) lcLog("ERROR", "the task still reads " + task.status + " " + KILL_SETTLE_MS + " ms after its worker was killed: its end was never reported")
 }
 
-/** Close the worker and make sure it is gone: no worker is ever left behind. */
+/** Close the worker and make sure it is gone: no worker is ever left behind. The worker is claimed from the registry first, so that exactly one caller closes it (the run, a
+ *  lookup, the shutdown hook); a worker somebody else already closed is left to them. */
 void closeWorker(Service service) {
     IJ.showProgress(1.0)
+    if (!lib("LCWorkers").release(service, { Service closing -> closeLiveWorker(closing) })) lcLog("INFO", "worker already closed by another caller")
+}
+
+/** Close a worker this caller owns: ask it to exit, wait EXIT_WAIT_MS, kill it when it stays. */
+void closeLiveWorker(Service service) {
     try { service.close(); waitForExit(service, EXIT_WAIT_MS) }
     // groovylint-disable-next-line CatchThrowable
     catch (Throwable problem) {                          // cleanup: broad on purpose, whatever close() throws the worker must still be killed

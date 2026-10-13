@@ -1,0 +1,40 @@
+{
+ "app": "lookups",
+ "tool": "Pick from two",
+ "register": [
+  {
+   "name": "lookups",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/lookups_app"
+   ]
+  }
+ ],
+ "fixtures": [
+  "ASY-04",
+  "ASY-05"
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "match": {
+   "dialog_choices.a.1": "A-",
+   "dialog_choices.b.1": "B-"
+  },
+  "at": {
+   "dialog_choices.a.0": "x",
+   "dialog_choices.b.0": "x"
+  },
+  "same_after_dash": [
+   [
+    "dialog_choices.a.1",
+    "dialog_choices.b.1"
+   ]
+  ],
+  "log_count": {
+   "fiji: lookup worker started for lookups": 1,
+   "fiji: starting worker for lookups": 1
+  }
+ }
+}

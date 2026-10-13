@@ -234,6 +234,13 @@ return [
     pruneCommand : { List<String> command ->
         cfg.prune ? [System.getenv("LC_PYTHON"), System.getenv("LC_PRUNE_RECORDER"), cfg.prune as String, new File(cfg.shots as String, "prune_calls.json").path] + command : command
     },
+    lookupTimeoutMs: { cfg.lookup_timeout_s ? (long) (cfg.lookup_timeout_s * 1000) : null },    // a short time limit for a ChoicesFrom lookup instead of 60 s
+    // "exit_when_worker_started": Fiji is ended from inside the run (System.exit, which runs the shutdown hooks) as soon as the tool has written its pid (the condition, not a time)
+    whileWaiting : { long elapsedMs ->
+        if (cfg.exit_when_worker_started && cfg.pidfile && new File(cfg.pidfile as String).text.trim()) System.exit(0)
+    },
+    // "cancel_when_worker_started": Cancel is pressed as soon as the tool has written its pid, i.e. when it is certainly inside its blocking call (the condition, not a time after the start)
+    cancelWhen   : { long elapsedMs -> cfg.cancel_when_worker_started && cfg.pidfile && new File(cfg.pidfile as String).text.trim() },
     awaitPrune   : { true },                                 // the report is read after the run: the prune it started has ended by then
     finish       : finish,
 ]
