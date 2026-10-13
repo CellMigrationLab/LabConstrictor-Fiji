@@ -1,0 +1,1 @@
+{"app": "LabConstrictorPlayground", "tool": "Look inside a file", "overrides": {"file": "${REAL_FIXTURES}/playground/settings.json"}, "expect": {"status": "COMPLETE"}}

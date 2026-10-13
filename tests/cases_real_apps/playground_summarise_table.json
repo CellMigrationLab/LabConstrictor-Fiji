@@ -1,0 +1,1 @@
+{"app": "LabConstrictorPlayground", "tool": "Summarise a table", "overrides": {"table": "${REAL_FIXTURES}/playground/measurements.csv"}, "expect": {"status": "COMPLETE"}}
