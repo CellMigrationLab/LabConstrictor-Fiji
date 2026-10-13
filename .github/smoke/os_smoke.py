@@ -47,7 +47,7 @@ if registered.returncode:
     done(1, "FAIL: could not register the example app: " + (registered.stderr or registered.stdout)[-300:])
 entry = json.loads((home / "apps" / "synthetic.json").read_text(encoding="utf-8"))
 say("registered interpreter: %s (exists: %s; inside prefix %s: %s)" % (
-    entry["python"], Path(entry["python"]).exists(), entry["prefix"], Path(entry["python"]).resolve().as_posix().startswith(Path(entry["prefix"]).resolve().as_posix())))
+    entry["python"], Path(entry["python"]).exists(), entry["prefix"], os.path.abspath(entry["python"]).startswith(os.path.abspath(entry["prefix"]) + os.sep)))
 (out / "registry_entry.json").write_text(json.dumps(entry, indent=1), encoding="utf-8")
 
 launcher = next((p for p in sorted(fiji.rglob("*")) if p.is_file() and re.fullmatch(r"(fiji|ImageJ)-(windows|win|macos|macosx)[-a-z0-9]*(\.exe)?", p.name, re.I)), None)
@@ -66,7 +66,7 @@ for log in (home / "logs").glob("*.log"):
 report_file = out / "report.json"
 report = json.loads(report_file.read_text(encoding="utf-8")) if report_file.exists() else {}
 say("Fiji exit code: %s; report stage: %s" % (code, report.get("stage")))
-for key in ("os", "arch", "java", "imagej", "headless", "menu_entry", "dialog_opened", "app_listed", "dialog_titles", "problem"):
+for key in ("os", "arch", "java", "imagej", "headless", "menu_entry", "dialog_opened", "app_listed", "dialog_titles", "dialog_texts", "problem"):
     if key in report:
         say("%s: %s" % (key, report[key]))
 tail = "\n".join(output.strip().splitlines()[-15:])

@@ -58,7 +58,8 @@ Thread.start {
             titles << (w.hasProperty("title") ? String.valueOf(w.title) : w.class.name)
             texts(w, into)
         }
-        if (into.any { it.toLowerCase().contains(wanted.toLowerCase()) }) {
+        // the app is listed when a field of the dialog names it or the dialog's own title does ("LabConstrictor: <app>")
+        if ((into + titles).any { it.toLowerCase().contains(wanted.toLowerCase()) }) {
             report.dialog_titles = titles
             report.dialog_texts = into.take(60)
             report.app_listed = true
