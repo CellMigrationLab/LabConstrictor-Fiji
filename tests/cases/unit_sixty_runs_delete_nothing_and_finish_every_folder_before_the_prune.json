@@ -12,7 +12,7 @@
    ]
   }
  ],
- "conformance": [
+ "fixtures": [
   "HRET-01"
  ],
  "script_mode_only": true,

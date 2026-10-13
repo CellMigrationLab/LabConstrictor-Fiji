@@ -12,7 +12,7 @@
   }
  ],
  "prune": "recorder",
- "conformance": [
+ "fixtures": [
   "HRET-04"
  ],
  "expect": {

@@ -12,7 +12,7 @@
   }
  ],
  "prune": "failing",
- "conformance": [
+ "fixtures": [
   "HRET-04"
  ],
  "expect": {

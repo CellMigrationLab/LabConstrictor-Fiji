@@ -11,7 +11,7 @@
    ]
   }
  ],
- "conformance": [
+ "fixtures": [
   "RET-10"
  ],
  "expect": {

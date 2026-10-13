@@ -13,7 +13,7 @@
   "seconds": 60.0
  },
  "cancel_after_s": 2.0,
- "conformance": [
+ "fixtures": [
   "HRET-05"
  ],
  "expect": {

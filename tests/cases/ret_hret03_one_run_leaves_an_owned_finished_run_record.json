@@ -11,7 +11,7 @@
    ]
   }
  ],
- "conformance": [
+ "fixtures": [
   "HRET-03"
  ],
  "expect": {

@@ -68,10 +68,10 @@ import groovy.json.JsonSlurper
             }
         },
         conformance_retention_coverage: {
-            // no silent skip: every host fixture of the conformance file is run by a case file ("conformance": [ids]), by a group of this file, or named here as not applicable
+            // no silent skip: every host fixture of the conformance file is run by a case file ("fixtures": [ids]), by a group of this file, or named here as not applicable
             def named = [] as Set
             new File(t.cfg.cases_dir as String).listFiles({ File f -> f.name.endsWith(".json") } as FileFilter).sort().each { File f ->
-                (new JsonSlurper().parseText(f.getText("UTF-8")).conformance ?: []).each { String id -> named << id }
+                (new JsonSlurper().parseText(f.getText("UTF-8")).fixtures ?: []).each { String id -> named << id }
             }
             def groups = ["HRET-01": "unit group retention_sixty_runs (60 runs through the host's own finishing, with the prune replaced by a recorder)"]
             def notApplicable = [:]

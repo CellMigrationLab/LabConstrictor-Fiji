@@ -268,7 +268,9 @@ def install_into_fiji(case=None):
     if os.environ.get("LC_FIJI_MODE", "script") == "jar":
         global JAR_INSTALLED
         if not JAR_INSTALLED:  # one build and one copy per run of this script, not per case
-            subprocess.run(["mvn", "-q", "-B", "package"], cwd=PLUGIN, check=True, capture_output=True)
+            built = subprocess.run(["mvn", "-q", "-B", "package"], cwd=PLUGIN, capture_output=True, text=True)
+            if built.returncode:  # the reason must be in the log of the run, not only in the exit code
+                raise SystemExit("mvn package failed (exit code %d):\n%s\n%s" % (built.returncode, built.stdout[-4000:], built.stderr[-4000:]))
             shutil.copyfile(next((PLUGIN / "target").glob("labconstrictor-fiji-*.jar")), JAR_IN_FIJI)
             JAR_INSTALLED = True
         shutil.rmtree(SCRIPT_DIR, ignore_errors=True)  # never both: the menu would list the tool twice

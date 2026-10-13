@@ -3,7 +3,7 @@
   "kill_settles"
  ],
  "script_mode_only": true,
- "conformance": [],
+ "fixtures": [],
  "expect": {
   "equals": {
    "failures": []
