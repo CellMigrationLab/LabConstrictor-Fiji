@@ -1,0 +1,44 @@
+{
+ "app": "parity",
+ "tool": "Typed choices",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "fixtures": [
+  "HRET-03"
+ ],
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "retention.runs.count": 1,
+   "retention.runs.fiji.0.owner_valid": true,
+   "retention.runs.fiji.0.done": true,
+   "retention.runs.fiji.0.status": "ok",
+   "retention.runs.fiji.0.name_ok": true,
+   "retention.runs.fiji.0.host": "fiji",
+   "retention.runs.fiji.0.leftover_temporary": false,
+   "retention.runs.fiji.0.files": [
+    ".lc-done.json",
+    ".lc-owner.json",
+    "run.json"
+   ],
+   "retention.runs.fiji.0.run_json.status": "COMPLETE",
+   "retention.runs.fiji.0.run_json.host": "fiji",
+   "retention.runs.fiji.0.run_json.tool": "typed_choices",
+   "retention.runs.fiji.0.run_json.run_id": "$present",
+   "retention.runs.fiji.0.run_json.started_utc": "$present",
+   "retention.runs.fiji.0.run_json.log_file": "$present",
+   "retention.runs.fiji.0.has_inputs": true,
+   "done_status": "ok",
+   "prune.started": true,
+   "retention.results.count": 0
+  }
+ }
+}

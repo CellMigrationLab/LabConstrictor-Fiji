@@ -1,0 +1,39 @@
+{
+ "app": "synthetic",
+ "tool": "Stubborn (ignores cancel)",
+ "register": [
+  {
+   "name": "synthetic",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "overrides": {
+  "seconds": 60.0
+ },
+ "cancel_after_s": 2.0,
+ "fixtures": [
+  "HRET-05"
+ ],
+ "expect": {
+  "equals": {
+   "status_line": "LabConstrictor: cancelled (worker stopped)"
+  },
+  "match": {
+   "retention.runs.fiji.0.run_json.error": "exit code"
+  },
+  "absent_keys": [
+   "failure_message"
+  ],
+  "at": {
+   "status": "CRASHED",
+   "cancel_requested": true,
+   "done_status": "cancelled",
+   "retention.runs.fiji.0.status": "cancelled",
+   "retention.runs.fiji.0.done": true,
+   "retention.runs.fiji.0.run_json.status": "CRASHED",
+   "prune.started": true
+  }
+ }
+}

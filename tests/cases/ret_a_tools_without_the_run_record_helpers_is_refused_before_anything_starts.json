@@ -1,0 +1,34 @@
+{
+ "app": "parity",
+ "tool": "Typed choices",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "tamper": [
+  {
+   "app": "parity",
+   "entry": {
+    "runtime_path": "${V3}/tests/fake_tools/no_helpers"
+   }
+  }
+ ],
+ "expect": {
+  "match": {
+   "error": "It also lacks runs.build_record, runs.record_json, runs.done_status."
+  },
+  "absent_keys": [
+   "status",
+   "run_record"
+  ],
+  "at": {
+   "retention.runs.count": 0
+  }
+ }
+}

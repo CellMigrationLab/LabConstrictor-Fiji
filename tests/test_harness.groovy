@@ -229,5 +229,10 @@ return [
     cancelAfterMs: { cfg.cancel_after_s ? (long) (cfg.cancel_after_s * 1000) : null },
     maxShapes     : { cfg.max_shapes ? (int) cfg.max_shapes : null },
     maxExportBytes: { cfg.max_export_bytes ? (long) cfg.max_export_bytes : null },       // a small limit instead of a 4 GB image
+    // the prune the host starts after a run: the real one (cfg.prune absent), a recorder ("recorder") or a command that fails ("failing"); tests/prune_recorder.py
+    pruneCommand : { List<String> command ->
+        cfg.prune ? [System.getenv("LC_PYTHON"), System.getenv("LC_PRUNE_RECORDER"), cfg.prune as String, new File(cfg.shots as String, "prune_calls.json").path] + command : command
+    },
+    awaitPrune   : { true },                                 // the report is read after the run: the prune it started has ended by then
     finish       : finish,
 ]

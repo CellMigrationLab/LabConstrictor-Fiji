@@ -1,0 +1,30 @@
+{
+ "unit_checks": [
+  "retention_sixty_runs"
+ ],
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "fixtures": [
+  "HRET-01"
+ ],
+ "script_mode_only": true,
+ "retention_prefill": {
+  "foreign": true
+ },
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 60
+  }
+ }
+}
