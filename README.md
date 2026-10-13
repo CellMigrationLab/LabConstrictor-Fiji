@@ -44,7 +44,7 @@ The release also carries `LabConstrictor_Tools.groovy`: the no-jar alternative. 
 and use **Plugins > LabConstrictor > LabConstrictor Tools**; macro calls (`run("LabConstrictor Tools...", ...)`) need the jar.
 `SHA256SUMS` lists the checksums of both files. Every release jar is installed in Fiji and run on a small GUI case before it is attached.
 
-**Support.** Tested on the Fiji build named in the release notes, on Linux. Windows and macOS are not tested.
+**Support.** The release gate is Linux: the exact jar is installed in the Fiji build named in the release notes and run on GUI cases. Windows and macOS (arm64) get a best-effort check in the same release run (the menu entry exists and the dialog lists a registered app); its result is shown in that run's summary, it can fail without blocking a release, and nobody has used the plugin on those systems by hand yet, so treat them as untested.
 
 **If it does not work**
 * No menu entry: the jar is not in `Fiji.app/plugins/` (not in a subfolder), or Fiji was not restarted. With both the jar and the script installed the menu lists the tool twice, so keep one.
