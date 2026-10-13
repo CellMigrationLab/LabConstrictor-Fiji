@@ -1,0 +1,29 @@
+{
+ "app": "victim",
+ "tool": "Scalar echo",
+ "register": [
+  {
+   "name": "victim",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "tamper": [
+  {
+   "app": "victim",
+   "schema_replace": [
+    "\"features\": [",
+    "\"featurez\": ["
+   ]
+  }
+ ],
+ "expect": {
+  "equals": {
+   "error": "no apps registered"
+  },
+  "log_contains": [
+   "too old (it lists no features, this host needs reserved_inputs_v1): update it"
+  ]
+ }
+}

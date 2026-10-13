@@ -1,0 +1,17 @@
+{
+ "unit_checks": [
+  "workers_registry"
+ ],
+ "fixtures": [
+  "ASY-08"
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 8
+  }
+ }
+}

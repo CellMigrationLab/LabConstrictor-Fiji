@@ -21,6 +21,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import check_extras
+import process_support
 import retention_support
 
 HERE = Path(__file__).resolve().parent
@@ -164,7 +166,7 @@ KNOWN_EXPECT = {  # every kind of expectation `check` reads; anything else in a 
 
 def check(expect, report):
     """Return a list of failed expectations (empty = pass)."""
-    failed = ["unknown expectation %r: it would be ignored (a path under `equals` or `at` is what was meant?)" % key for key in expect if key not in KNOWN_EXPECT]
+    failed = ["unknown expectation %r: it would be ignored (a path under `equals` or `at` is what was meant?)" % key for key in expect if key not in KNOWN_EXPECT | check_extras.KINDS]
     for dotted, wanted in expect.get("at_set", {}).items():  # a list of coordinate pairs (the vertices of a polygon) as a set: where a ring starts does not matter
         found = walk(report, dotted)
         if found is MISSING or {tuple(round(v, 9) for v in p) for p in found} != {tuple(round(v, 9) for v in p) for p in wanted}:
@@ -244,7 +246,7 @@ def check(expect, report):
             failed.append("%s must not be present" % dotted)
     if "worker_alive_after" in expect and report.get("worker_alive_after") != expect["worker_alive_after"]:
         failed.append("worker_alive_after = %r" % report.get("worker_alive_after"))
-    return failed
+    return failed + check_extras.check(expect, report)
 
 
 PLUGIN = V3
@@ -302,6 +304,8 @@ def run_case(path):
     name = path.stem
     if case.get("macro") is not None and os.environ.get("LC_FIJI_MODE", "script") != "jar" and os.environ.get("LC_FIJI_MACRO_PROPERTY") == "1":
         case["script_macro"] = case.pop("macro")  # LC_FIJI_MACRO_PROPERTY=1: macro calls through the property the menu command sets, in script mode (no mvn build per case)
+    probe = {}
+    process_support.prepare(case, probe)  # a case that watches its worker process: the file the tool writes its pid to
     if case.get("make_files") == "calibration":
         case["files_dir"] = tempfile.mkdtemp(prefix="lccal_fiji_")
         make_calibration_files(case["files_dir"])
@@ -319,7 +323,7 @@ def run_case(path):
     if case.get("script_mode_only") and os.environ.get("LC_FIJI_MODE", "script") == "jar":
         return name, [], {}  # the harness reads the dialog through hooks that the jar's script engine does not report back (checked by eye: the dialog is right)
     env = dict(os.environ, LC_FIJI_HARNESS=str(HERE / "test_harness.groovy"), LC_FIJI_CASE=str(case_file), LC_CONFORMANCE=CONFORMANCE,
-               LC_PYTHON=sys.executable, LC_PRUNE_RECORDER=str(HERE / "prune_recorder.py"))
+               LC_PYTHON=sys.executable, LC_PRUNE_RECORDER=str(HERE / "prune_recorder.py"), **probe)
     if case.get("unit_checks"):
         env["LC_UNIT_GROUPS"] = str(HERE)  # the groups kept in tests/unit_groups_*.groovy
         env["LC_FIJI_LIB"] = str(GROOVY.parent / "lib")  # the unit checks run from a script of their own: the helpers come from the repository's folder
@@ -384,9 +388,10 @@ def run_case(path):
     except OSError as problem:
         return name, ["could not start Fiji: %s" % problem], {}
     report_path = case_dir / "report.json"
-    if not report_path.exists():
+    if not report_path.exists() and not case.get("no_report"):  # "no_report": Fiji is made to end in the middle of the run, so there is none
         return name, ["no report written (script crashed or blocked)" + _tail(finished)], {}
-    report = json.loads(report_path.read_text())
+    report = json.loads(report_path.read_text()) if report_path.exists() else {}
+    process_support.settle(case, report)
     log_file = Path(env["LC_HOME"]) / "logs" / "labconstrictor.log"
     report["log_text"] = log_file.read_text(encoding="utf-8") if log_file.exists() else ""
     runs = Path(env["LC_HOME"]) / "runs"

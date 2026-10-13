@@ -1,0 +1,29 @@
+{
+ "app": "victim",
+ "tool": "Scalar echo",
+ "register": [
+  {
+   "name": "victim",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "tamper": [
+  {
+   "app": "victim",
+   "schema_replace": [
+    "\"reserved_inputs_v1\"",
+    "\"reserved_inputs_v0\""
+   ]
+  }
+ ],
+ "expect": {
+  "equals": {
+   "error": "no apps registered"
+  },
+  "log_contains": [
+   "this app's labconstrictor-tools lacks reserved_inputs_v1: update it"
+  ]
+ }
+}

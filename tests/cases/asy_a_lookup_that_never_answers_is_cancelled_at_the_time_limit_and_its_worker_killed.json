@@ -1,0 +1,34 @@
+{
+ "app": "lookups",
+ "tool": "Pick from a source that never answers",
+ "register": [
+  {
+   "name": "lookups",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/lookups_app"
+   ]
+  }
+ ],
+ "fixtures": [
+  "ASY-07"
+ ],
+ "script_mode_only": true,
+ "worker_pidfile": true,
+ "lookup_timeout_s": 2,
+ "worker_gone_within_s": 2,
+ "expect": {
+  "status": "COMPLETE",
+  "equals": {
+   "worker_gone": true
+  },
+  "at": {
+   "dialog_choices.a": "$absent"
+  },
+  "log_contains": [
+   "the lookup of 'a' did not answer within 2.0 s: cancelled and its worker was killed",
+   "choices of 'a' not available"
+  ]
+ }
+}

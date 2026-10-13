@@ -1,20 +1,34 @@
 {
- "app": "synthetic",
- "tool": "Stubborn (ignores cancel)",
+ "app": "lookups",
+ "tool": "Blocks",
+ "register": [
+  {
+   "name": "lookups",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/lookups_app"
+   ]
+  }
+ ],
  "overrides": {
   "seconds": 60.0
  },
- "cancel_after_s": 2.0,
+ "worker_pidfile": true,
+ "cancel_when_worker_started": true,
+ "worker_gone_within_s": 2,
  "expect": {
+  "status": "CRASHED",
   "equals": {
-   "status_line": "LabConstrictor: cancelled (worker stopped)"
+   "status_line": "LabConstrictor: cancelled (worker stopped)",
+   "worker_gone": true
   },
-  "worker_alive_after": false,
   "log_contains": [
    "the run was cancelled (worker stopped) (Cancel was pressed)"
   ],
   "absent_keys": [
    "failure_message"
-  ]
+  ],
+  "worker_alive_after": false
  }
 }

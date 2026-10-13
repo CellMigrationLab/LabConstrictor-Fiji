@@ -1,0 +1,14 @@
+{
+ "unit_checks": [
+  "conformance_compat"
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 30
+  }
+ }
+}
