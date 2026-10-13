@@ -35,15 +35,27 @@ environment through [Appose](https://github.com/apposed/appose), so Fiji never i
   stack trace. All front-ends share `~/.labconstrictor/logs/labconstrictor.log` (rotated at 1 MB with five numbered backups, `.log.1` to `.log.5`, and the level names of the Python tools; a rotation that fails, for instance on Windows because another program holds the file, is reported once on the console and the log keeps growing). Run records under `runs/`: one folder per run, written and named by the host; the host never deletes or prunes any folder under `runs/` (or any other folder of the home): retention is left to the Tools CLI.
 
 ## Install
-1. On the machine, the LabConstrictor apps must be installed and registered (the installer does it; check with
-   `labconstrictor-tools list` / `labconstrictor-tools doctor`). Tools repo: `pip install git+https://github.com/CellMigrationLab/LabConstrictor-Tools`.
-2. Build and copy the jar (Java 8+ bytecode, runs on any Fiji):
+1. Install a LabConstrictor app (its installer registers it; `labconstrictor-tools list` / `labconstrictor-tools doctor` check it).
+2. Download `labconstrictor-fiji-<tag>.jar` from the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-Fiji/releases),
+   put it into `Fiji.app/plugins/` (remove an older `labconstrictor-fiji-*.jar`) and restart Fiji.
+3. Run **Plugins > LabConstrictor > LabConstrictor Tools...**.
 
-        mvn package
-        cp target/labconstrictor-fiji-0.1.0.jar <Fiji.app>/plugins/      # restart Fiji
+The release also carries `LabConstrictor_Tools.groovy`: the no-jar alternative. Put it into `Fiji.app/scripts/Plugins/LabConstrictor/`
+and use **Plugins > LabConstrictor > LabConstrictor Tools**; macro calls (`run("LabConstrictor Tools...", ...)`) need the jar.
+`SHA256SUMS` lists the checksums of both files. Every release jar is installed in Fiji and run on a small GUI case before it is attached.
 
-   (Alternatively copy `src/main/resources/org/cellmigrationlab/labconstrictor/LabConstrictor_Tools.groovy` to
-   `<Fiji.app>/scripts/Plugins/LabConstrictor/` to run the script without the jar.)
+**Support.** Tested on the Fiji build named in the release notes, on Linux. Windows and macOS are not tested.
+
+**If it does not work**
+* No menu entry: the jar is not in `Fiji.app/plugins/` (not in a subfolder), or Fiji was not restarted. With both the jar and the script installed the menu lists the tool twice, so keep one.
+* No application to choose: no LabConstrictor app is registered; run `labconstrictor-tools doctor`.
+* A run fails: the error dialog and `~/.labconstrictor/logs/labconstrictor.log` say why.
+
+**Known limits of the pixel-size field.** There is no "use the image's calibration" button: the field follows the image by itself, until you type a value.
+Typing the value the box already shows cannot be detected in a SciJava dialog, so that field is cleared and the run is blocked with a message; a wrong value is never sent.
+
+Developers: `mvn package` builds `target/labconstrictor-fiji-<version>.jar` (Java 8+ bytecode, needs Java and Maven; the version is the one in `pom.xml`).
+The release workflow (`.github/workflows/release.yml`) builds it as the release tag; "Run workflow" with a tag is a dry run that publishes nothing.
 
 Fiji update-site publication is not set up yet.
 
