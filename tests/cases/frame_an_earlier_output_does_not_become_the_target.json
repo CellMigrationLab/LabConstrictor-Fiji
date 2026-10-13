@@ -1,0 +1,54 @@
+{
+ "app": "frames",
+ "tool": "Image then marks",
+ "register": [
+  {
+   "name": "frames",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/frames_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/blobs.tif",
+   "title": "DECOY.tif",
+   "pixel_width": 0.5,
+   "x_origin": -200.0,
+   "unit": "um"
+  }
+ ],
+ "select": [
+  "DECOY.tif"
+ ],
+ "overrides": {
+  "image": "DECOY.tif",
+  "image_file": "${FIXTURES}/ASYM.tif"
+ },
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "absent_keys": [
+   "display_errors"
+  ],
+  "contains": {
+   "open_windows": [
+    "ASYM.tif",
+    "DECOY.tif",
+    "frames:pic"
+   ]
+  },
+  "at": {
+   "windows.ASYM_tif.roi.points": "$CF:point_drawn",
+   "windows.frames_pic.roi": null,
+   "windows.frames_pic.overlay": [],
+   "windows.DECOY_tif.roi": null,
+   "windows.DECOY_tif.overlay": []
+  }
+ },
+ "conformance": [
+  "CF-08"
+ ]
+}

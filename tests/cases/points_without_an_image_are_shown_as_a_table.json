@@ -24,7 +24,7 @@
    "display_errors"
   ],
   "log_contains": [
-   "shown as a table: no image is open"
+   "not placed on an image: the tool has no image input to place them on: shown as a table. The file is"
   ]
  }
 }

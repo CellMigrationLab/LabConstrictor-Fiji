@@ -1,0 +1,45 @@
+{
+ "app": "frames",
+ "tool": "Marks on the second image",
+ "register": [
+  {
+   "name": "frames",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/frames_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/blobs.tif",
+   "title": "first.tif"
+  },
+  {
+   "path": "${FIXTURES}/ASYM.tif",
+   "title": "second.tif"
+  }
+ ],
+ "select": [
+  "first.tif",
+  "second.tif"
+ ],
+ "overrides": {
+  "first": "first.tif",
+  "second": "second.tif"
+ },
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "windows.second_tif.roi.points": "$CF:point_drawn",
+   "windows.first_tif.roi": null,
+   "windows.first_tif.overlay": [],
+   "points_pts.image": "second.tif"
+  }
+ },
+ "conformance": [
+  "CF-08"
+ ]
+}

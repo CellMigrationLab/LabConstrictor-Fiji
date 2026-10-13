@@ -1,0 +1,48 @@
+{
+ "app": "frames",
+ "tool": "Mark the fixture",
+ "register": [
+  {
+   "name": "frames",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/frames_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/ASYM.tif",
+   "title": "ASYM.tif"
+  }
+ ],
+ "select": [
+  "ASYM.tif"
+ ],
+ "overrides": {
+  "image": "ASYM.tif"
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "absent_keys": [
+   "display_errors"
+  ],
+  "at": {
+   "windows.ASYM_tif.roi.points": "$CF:point_drawn",
+   "windows.ASYM_tif.roi.name": "frames:pts",
+   "placed_pts.plane": {
+    "c": 0,
+    "z": 1,
+    "t": 1
+   }
+  },
+  "at_set": {
+   "windows.ASYM_tif.overlay.0.points": "$CF:rect_drawn"
+  }
+ },
+ "conformance": [
+  "CF-01",
+  "CF-14"
+ ]
+}

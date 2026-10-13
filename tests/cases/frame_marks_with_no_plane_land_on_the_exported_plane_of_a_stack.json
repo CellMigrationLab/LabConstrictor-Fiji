@@ -1,0 +1,71 @@
+{
+ "app": "frames",
+ "tool": "Marks of a stack",
+ "register": [
+  {
+   "name": "frames",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/frames_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/ASYM_z3.tif",
+   "title": "Z3.tif",
+   "slice": 2
+  }
+ ],
+ "select": [
+  "Z3.tif"
+ ],
+ "overrides": {
+  "image": "Z3.tif"
+ },
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "absent_keys": [
+   "display_errors"
+  ],
+  "at": {
+   "placed_pts.plane": {
+    "c": 0,
+    "z": 2,
+    "t": 1
+   },
+   "windows.Z3_tif.roi.position": 2,
+   "windows.Z3_tif.roi.points": [
+    [
+     3.5,
+     1.5
+    ]
+   ],
+   "windows.Z3_tif.overlay.0.position": 2
+  },
+  "at_set": {
+   "windows.Z3_tif.overlay.0.points": [
+    [
+     1.5,
+     1.5
+    ],
+    [
+     4.5,
+     1.5
+    ],
+    [
+     4.5,
+     4.5
+    ]
+   ]
+  },
+  "log_contains": [
+   "placed on the exported plane (channel all, z 2, t 1) of 'Z3.tif'"
+  ]
+ },
+ "conformance": [
+  "CF-10"
+ ]
+}

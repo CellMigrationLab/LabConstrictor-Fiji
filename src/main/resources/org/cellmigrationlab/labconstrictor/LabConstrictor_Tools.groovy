@@ -61,7 +61,11 @@ import java.nio.file.Files
 @Field final int MAX_MANAGER_SHAPES = 1000       // outlines also listed in the ROI Manager (it gets very slow with more)
 
 // numeric conventions
-@Field final double PIXEL_CENTRE = 0.5d          // ImageJ coordinates: the centre of pixel i is i + 0.5; tools send integer pixel centres
+@Field final double PIXEL_CENTRE = 0.5d          // ImageJ coordinates: pixel i spans [i, i+1), so the centre of pixel i is i + 0.5; tools send integer pixel centres
+@Field final double FRAME_DOWNSAMPLE = 1.0d      // exported pixels per full-resolution pixel: Fiji writes the image as it is (SPEC_WRONG_SCIENCE 1.1.2)
+@Field final String SIZE_MISMATCH_TEXT = "'%s' is %d x %d but '%s' was exported as %d x %d; shown at the pixel origin, not aligned"   // conformance.json messages.size_mismatch
+@Field final String REFUSAL_SELECTION_PLANES = "selection_mixed_planes"   // host-internal code of conformance.json host_internal_codes (1.2.5)
+@Field final List<String> PLANE_KEYS = ["t", "z"]   // optional columns / properties of a points or outlines result that name a plane (SPEC_WAVE2 1.5)
 @Field final double FLOAT_STEP = 0.0001d         // step of a float field in the dialog
 @Field final double SINGULAR_TOLERANCE = 1e-9d   // an alignment matrix whose determinant is below this (relative) cannot be inverted
 @Field final double MIN_REFERENCE_SUM = 1e-9d    // keeps relativeDifference finite when the reference warp is empty
@@ -833,6 +837,19 @@ ImagePlus channelOf(ImagePlus imp, int channel, String label) {
     return single
 }
 
+/** The label image of `rois` on a width x height grid, in the pixel grid of the exported image (SPEC_WRONG_SCIENCE 1.2.1): label i + 1 where the centre of a pixel lies
+ *  inside ROI i, 0 elsewhere. ImageJ ROIs are pixel based: the calibration (scale and origin) of the image is never applied to them. */
+ij.process.ShortProcessor regionMask(List rois, int width, int height) {
+    def mask = new ij.process.ShortProcessor(width, height)
+    rois.eachWithIndex { roi, i -> mask.setValue(i + 1); mask.fill(roi) }
+    return mask
+}
+
+/** The planes the ROIs of a selection sit on, as [channel, z, t, stack position]; a ROI with no plane (all zero) belongs to every plane and counts for none. */
+Set selectionPlanes(List rois) {
+    return rois.collect { roi -> [roi.getCPosition(), roi.getZPosition(), roi.getTPosition(), roi.getPosition()] }.findAll { plane -> plane.any { it > 0 } }.toSet()
+}
+
 /** RegionOf: the ROIs selected in the ROI Manager (else the ROI of the image) as a label image the size of the image the region
  *  belongs to: labels 1..N, 0 outside. Whatever makes that impossible is said to the person, never guessed around. */
 File selectionMask(Map p, Map tool, def module, File jobDir) {
@@ -846,8 +863,12 @@ File selectionMask(Map p, Map tool, def module, File jobDir) {
     if (!rois && imp.getRoi() != null) rois = [imp.getRoi()]
     if (!rois) throw new IllegalArgumentException("'" + label + "': nothing is selected: draw a region on '" + imp.getTitle() + "' or select entries in the ROI Manager, or untick the selection")
     if (rois.size() > MAX_REGION_OBJECTS) throw new IllegalArgumentException("'" + label + "': " + rois.size() + " objects are selected; at most " + MAX_REGION_OBJECTS + " are supported")
-    def mask = new ij.process.ShortProcessor(imp.getWidth(), imp.getHeight())
-    rois.eachWithIndex { roi, i -> mask.setValue(i + 1); mask.fill(roi) }
+    if (selectionPlanes(rois).size() > 1) {                   // one selection lies on one plane (1.2.5): the mask is a single plane of the image
+        def refusal = "'" + label + "': the selected regions are on different planes of '" + imp.getTitle() + "'; select regions of one plane, or untick the selection"
+        lcLog("ERROR", REFUSAL_SELECTION_PLANES + ": " + refusal)
+        throw new IllegalArgumentException(refusal)
+    }
+    def mask = regionMask(rois, imp.getWidth(), imp.getHeight())
     if (mask.getStatistics().max == 0) throw new IllegalArgumentException("'" + label + "': the selection lies outside the image")
     def file = new File(jobDir, p.name + ".tif")
     new FileSaver(new ImagePlus(p.name, mask)).saveAsTiff(file.path)
@@ -952,16 +973,20 @@ List exportOpenImage(Map p, def module, File jobDir) {
     return [file.path, chosenImage, p.pick_channel && chosenImage.getNChannels() > 1 ? [channel: (module.getInput(p.name + "_channel") ?: 1) as int] : null]
 }
 
-/** Harvested values -> worker inputs. Images are saved as TIFF (calibration travels as explicit parameters). Returns [inputs, images, modifiers]:
- *  `modifiers` names, per image parameter, what the worker got that a command line cannot repeat (the selection, one channel). */
+/** Harvested values -> worker inputs. Images are saved as TIFF (calibration travels as explicit parameters). Returns [inputs, images, modifiers, frames]:
+ *  `modifiers` names, per image parameter, what the worker got that a command line cannot repeat (the selection, one channel); `frames` is the frame
+ *  recorded at the click for each exported image (SPEC_WRONG_SCIENCE 1.1.2), which every result is placed by. */
 List exportInputs(Map tool, def module, File jobDir) {
-    def inputs = [:], images = [:], modifiers = [:]
+    def inputs = [:], images = [:], modifiers = [:], frames = [:]
     tool.inputs.each { p ->
         def value = module.getInput(p.name)
         switch (p.type) {
             case ["image", "labels"]:
                 def exported = exportImage(p, tool, module, jobDir)
-                if (exported != null) { inputs[p.name] = exported[0]; images[p.name] = exported[1]; if (exported[2]) modifiers[p.name] = exported[2] }
+                if (exported != null) {
+                    inputs[p.name] = exported[0]; images[p.name] = exported[1]; if (exported[2]) modifiers[p.name] = exported[2]
+                    if (!exported[2]?.selection) frames[p.name] = frameOf(p.name, exported[1], exported[2])    // a selection is a mask, not an image: nothing is placed on it
+                }
                 break
             case ["table", "file"]:
                 if (value) inputs[p.name] = workerPath(value as File)
@@ -979,7 +1004,7 @@ List exportInputs(Map tool, def module, File jobDir) {
         }
     }
     inputs[JOB_DIR_KEY] = jobDir.path
-    return [inputs, images, modifiers]
+    return [inputs, images, modifiers, frames]
 }
 
 // ---- running the worker
@@ -1117,36 +1142,193 @@ String writeRunRecord(Map app, Map tool, Map inputs, Map outcome) {
 }
 
 /** Run the tool, then keep the command and the run record and show the outcome. */
-void runAndShow(Map app, Map tool, Map inputs, Map images, Map summary) {
+void runAndShow(Map app, Map tool, Map inputs, Map run, Map summary) {
     def outcome = runTool(app, tool, inputs)
     summary << [request: inputs, status: outcome.status, error: outcome.error, progress_events: outcome.progress,
                 worker_alive_after: outcome.workerAlive, cancel_requested: outcome.cancelRequested]
     summary.timings.worker_run_s = outcome.seconds
-    rememberCommand(app, tool, inputs, images, summary)
+    rememberCommand(app, tool, inputs, run.images, summary)
     summary.run_record = writeRunRecord(app, tool, inputs, outcome)
-    reportOutcome(app, tool, outcome, images, summary)
+    reportOutcome(app, outcome, run, summary)
+}
+
+// ---- the coordinate frame (docs/SPEC_WRONG_SCIENCE.md section 1)
+/** A result coordinate `x` (the centre of pixel i at integer i) as the ImageJ coordinate of the source: c = x0 + (x + 0.5) * downsample (1.1.3). ImageJ's
+ *  pixel i spans [i, i+1), so Fiji draws ROI vertices at c itself; with the offset 0 and the downsample 1 that is the `x + 0.5` of every earlier version. */
+double placed(double x, double offset, double downsample) { return offset + (x + PIXEL_CENTRE) * downsample }
+
+/** `x` of a result in the ImageJ coordinates of the image `frame` describes. */
+double placedX(double x, Map frame) { return placed(x, frame.axes_offset.x as double, frame.downsample as double) }
+
+/** `y` of a result in the ImageJ coordinates of the image `frame` describes. */
+double placedY(double y, Map frame) { return placed(y, frame.axes_offset.y as double, frame.downsample as double) }
+
+/** The size and header calibration of an image file, read from its TIFF header without loading the pixels: [width, height, calibration], or null for a file
+ *  that is not a TIFF (its size is then not compared and no calibration is carried; a missing file is not an error here). The calibration is what ImageJ
+ *  itself would attach to the opened image: the unit and pixel size of the ImageJ description, else of the TIFF resolution tags, and the origin. */
+Map fileHeader(File file) {
+    if (!file.isFile()) return null
+    try {
+        def info = new ij.io.TiffDecoder(file.absoluteFile.parent + File.separator, file.name).getTiffInfo()
+        if (!info) return null
+        def first = info[0], calibration = new ij.measure.Calibration()
+        if (first.pixelWidth > 0) calibration.pixelWidth = first.pixelWidth
+        if (first.pixelHeight > 0) calibration.pixelHeight = first.pixelHeight
+        if (first.pixelDepth > 0) calibration.pixelDepth = first.pixelDepth
+        calibration.setUnit(first.unit ?: "")
+        (first.description ?: "").eachLine { String line ->
+            def pair = line.split("=", 2)
+            if (pair.length == 2 && pair[0] in ["xorigin", "yorigin", "zorigin"] && pair[1].trim() ==~ FLOAT_TEXT) calibration."${pair[0][0]}Origin" = Double.parseDouble(pair[1].trim())
+        }
+        return [width: first.width, height: first.height, calibration: calibration]
+    // groovylint-disable-next-line CatchException
+    } catch (Exception problem) {      // not a TIFF (a PNG, a text file): nothing to read, said in the log
+        lcLog("INFO", "no TIFF header read from " + file.path + " (" + problem + "): its size is not compared and no calibration is carried to results")
+        return null
+    }
+}
+
+/** The frame the run records at the click for one exported image (1.1.2): the source (the ImagePlus object, or the file), the exported width x height,
+ *  `axes_offset` (the origin of the exported area in the full-resolution image: 0, Fiji writes the whole image), the exported `plane` (channel, z, t, one-based as
+ *  ImageJ counts them; channel 0 when every channel was exported, z and t of the window at the click) and `downsample` (1). There is no `transform`: ImageJ
+ *  images have none, so the mapping back is the identity by construction (1.3). `window` is the window a file's results go to, opened when one is needed. */
+Map frameOf(String name, def source, def modifiers) {
+    def frame = [name: name, downsample: FRAME_DOWNSAMPLE, axes_offset: [t: 0, z: 0, y: 0.0d, x: 0.0d], image: null, file: null, window: null]
+    def plane = [c: modifiers?.channel ?: 0, z: 1, t: 1]
+    if (source instanceof ImagePlus) {
+        plane.z = source.getSlice(); plane.t = source.getFrame()
+        return frame + [image: source, label: source.getTitle(), width: source.getWidth(), height: source.getHeight(), plane: plane]
+    }
+    def file = new File(source as String), header = fileHeader(file)
+    return frame + [file: file.path, label: file.name, width: header?.width ?: 0, height: header?.height ?: 0, plane: plane, header: header]
+}
+
+/** What the harness and the log may say about the frames of a run (no windows or calibrations: plain values). */
+Map describeFrames(Map frames) {
+    return frames.collectEntries { name, f -> [(name): [label: f.label, width: f.width, height: f.height, plane: f.plane, axes_offset: f.axes_offset, downsample: f.downsample, file: f.file != null]] }
+}
+
+/** The window a file input's results are drawn on: the file opened in its own window, titled with its name (1.3), once per run. Null when Fiji cannot open it
+ *  (the result is then a table and a file). It is never looked for among the open windows: an open image is another frame. */
+ImagePlus fileWindow(Map frame) {
+    if (frame.window != null) return frame.window as ImagePlus
+    def window = openForChannel(new File(frame.file as String))
+    if (window == null) return null
+    window.show()
+    frame.window = window
+    return window
+}
+
+/** The source a points or outlines result belongs to: the input `apply_to` names, else the first image (or labels) input the tool declares (PROTOCOL.md). */
+String sourceNameOf(Map r, Map run) {
+    if (r.apply_to) return r.apply_to as String
+    return (run.tool?.inputs ?: []).find { it.type in ["image", "labels"] }?.name
+}
+
+/** Where a points or outlines result goes: [frame, image] (the source's own ImagePlus by object, or the window its file was opened in), or [reason] saying why
+ *  there is no image to place it on. Never the current image, never the image an earlier output showed (1.1.5, 1.1.6). */
+Map placementOf(Map r, Map run) {
+    def name = sourceNameOf(r, run)
+    if (name == null) return [reason: "the tool has no image input to place them on"]
+    def frame = run.frames[name]
+    if (frame == null) return [reason: "'" + name + "' was not an image given to the tool"]
+    if (frame.image != null) return [frame: frame, image: frame.image]
+    def window = fileWindow(frame)
+    if (window == null) return [reason: "the image '" + frame.label + "' was given as a file that Fiji cannot open"]
+    return [frame: frame, image: window]
+}
+
+/** Put `roi` on the exported plane of `image` (1.1.9, 1.3): a result with no t / z lands on the plane that was exported, never on plane 0. A single image has no planes. */
+void placeOnPlane(ij.gui.Roi roi, ImagePlus image, Map plane) {
+    if (image.getStackSize() <= 1) return
+    if (image.isHyperStack()) { roi.setPosition(plane.c as int, plane.z as int, plane.t as int); return }
+    int channel = (plane.c as int) > 0 ? plane.c as int : (image.getNChannels() > 1 ? 0 : 1)     // a stack of channels only is not a "hyperstack" to ImageJ: it is placed by stack index
+    if (channel > 0) roi.setPosition(image.getStackIndex(channel, plane.z as int, plane.t as int))     // channel 0: every channel was exported, the ROI belongs to all of them
+}
+
+/** Said once when results without t / z land on the exported plane of a stack. */
+void sayPlane(String name, ImagePlus image, Map plane) {
+    if (image.getStackSize() <= 1) return
+    def sentence = "'" + name + "': placed on the exported plane (channel " + (plane.c ?: "all") + ", z " + plane.z + ", t " + plane.t + ") of '" + image.getTitle() + "'"
+    IJ.log("LabConstrictor: " + sentence)
+    lcLog("INFO", sentence)
+}
+
+/** Why a result that names planes (a `t` or `z` column or property) cannot be placed on `image`, or null. Placing results on the planes of a stack is not done
+ *  yet: such a result is never put on one plane as if it had none (a table or a file is shown instead). */
+String planeProblem(boolean namesPlanes, ImagePlus image) {
+    return namesPlanes && image.getStackSize() > 1 ? "it has t / z planes and this version places results on the exported plane only" : null
+}
+
+/** A results folder of this run under <home>/results, made on first use: results that could not be placed are kept there (1.1.5). Never written to by
+ *  anything else and carrying no owner marker, so the Tools' prune never removes it. */
+File keptFolder(Map run) {
+    if (!run.kept.folder) {
+        def stamp = new java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss", Locale.ROOT).format(new Date())
+        def results = new File(lcHome(), "results")
+        def folder = new File(results, stamp + "_" + Long.toHexString(System.nanoTime()) + "_" + slug(run.app.name as String) + "_" + slug((run.tool?.id ?: "tool") as String))
+        folder.mkdirs()
+        if (folder.canonicalFile.parentFile != results.canonicalFile) throw new IOException("results folder " + folder + " is not inside " + results)
+        run.kept.folder = folder
+    }
+    return run.kept.folder as File
+}
+
+/** Keep a result file the host could not draw: copied (the job folder is removed) into this run's results folder. Returns the new path. */
+String keepResultFile(Map run, String path) {
+    def target = new File(keptFolder(run), new File(path).name)
+    Files.copy(new File(path).toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+    return target.path
+}
+
+/** The sentence for an image or labels result whose size is not the exported size of its source (1.1.7); the one in conformance.json messages.size_mismatch. */
+String sizeMismatchText(String name, List<Integer> size, String source, List<Integer> exported) {
+    return String.format(Locale.ROOT, SIZE_MISMATCH_TEXT, name, size[0], size[1], source, exported[0], exported[1])
+}
+
+/** Carry the spatial calibration of the source (pixel size, units, origin; not its gray-value calibration) onto the result image: the result lies in the same pixel frame. */
+void carryCalibration(ImagePlus result, ij.measure.Calibration from) {
+    def to = result.getCalibration()
+    to.pixelWidth = from.pixelWidth; to.pixelHeight = from.pixelHeight; to.pixelDepth = from.pixelDepth
+    to.xOrigin = from.xOrigin; to.yOrigin = from.yOrigin; to.zOrigin = from.zOrigin
+    to.setXUnit(from.getXUnit()); to.setYUnit(from.getYUnit()); to.setZUnit(from.getZUnit())
+    result.setCalibration(to)
+}
+
+/** The calibration an image or labels result takes: that of the source its output declares with ApplyTo (the open image by object, read now, so a result follows
+ *  its image; a file by its header), when the sizes match. Another size, or no source, leaves the result at the pixel origin with no calibration, and the size mismatch
+ *  is said (1.1.6, 1.1.7). Returns the sentence to show, or null. */
+String placeImage(ImagePlus result, Map r, Map run) {
+    def declared = (run.tool?.outputs ?: []).find { it.name == r.name }?.display?.apply_to
+    def name = r.apply_to ?: declared
+    def frame = name ? run.frames[name] : null
+    if (frame == null) return null
+    def calibration = frame.image != null ? frame.image.getCalibration() : frame.header?.calibration
+    if (frame.width > 0 && (result.getWidth() != frame.width || result.getHeight() != frame.height))
+        return sizeMismatchText(r.name as String, [result.getWidth(), result.getHeight()], frame.label as String, [frame.width as int, frame.height as int])
+    if (calibration != null) carryCalibration(result, calibration as ij.measure.Calibration)
+    return null
 }
 
 // ---- showing results (switch on result type only)
-@Field def lastShownImage = null          // the image window this run showed last (points without an apply_to go on it)
-
-/** Show every result by its type; one that cannot be shown is reported and does not hide the others. Returns the summary entries for the harness. */
-Map showResults(Map app, List results, Map images, Map tool = null) {
+/** Show every result by its type; one that cannot be shown is reported and does not hide the others. `run` is [app, tool, images, frames, kept]: the run the results
+ *  belong to (its frames are what they are placed by). Returns the summary entries for the harness. */
+Map showResults(Map app, List results, Map run) {
     def summary = [:]
-    def replaced = (tool?.outputs ?: []).findAll { it.replace }.collect { it.name } as Set
+    def replaced = (run.tool?.outputs ?: []).findAll { it.replace }.collect { it.name } as Set
     results.each { r ->
         try {
             switch (r.type) {
-                case ["image", "labels"]: showImage(app, r, summary, r.name in replaced); break
+                case ["image", "labels"]: showImage(app, r, run, summary, r.name in replaced); break
                 case "table": showTable(r, summary, r.name in replaced); break
                 case "values": showValues(app, r, summary); break
                 case "message": showMessage(app, r, summary); break
-                case "points": showPoints(app, r, images, summary, r.name in replaced); break
-                case "shapes": showShapes(app, r, images, summary, r.name in replaced); break
+                case "points": showPoints(app, r, run, summary, r.name in replaced); break
+                case "shapes": showShapes(app, r, run, summary, r.name in replaced); break
                 case "file":
                     if (!new File(r.path as String).isFile()) throw new IllegalStateException("the tool reported the file " + r.path + " but it does not exist")
                     IJ.log("Output file: " + r.path); break
-                case "affine": showAffine(r, images, results, summary, r.name in replaced); break
+                case "affine": showAffine(r, run.images, results, summary, r.name in replaced); break
                 default: throw new IllegalStateException("the tool returned a result of the type '" + r.type + "', which this version of Fiji LabConstrictor cannot show")
             }
         // groovylint-disable-next-line CatchException
@@ -1174,8 +1356,10 @@ void showValues(Map app, Map r, Map summary) {
     summary["values_" + r.name] = r.values
 }
 
-/** An image / labels result: opened as a new window `<app>:<name>` (numbered when the title is taken; replace=true closes the previous one first). */
-void showImage(Map app, Map r, Map summary, boolean replace = false) {
+/** An image / labels result: opened as a new window `<app>:<name>` (numbered when the title is taken; replace=true closes the previous one first). An output that
+ *  declares ApplyTo takes the calibration of its source when the sizes match, else it stays at the pixel origin and the size mismatch is said once (1.1.7). The
+ *  place is always recomputed from this result and its source: the window it replaces is gone, so nothing of it is kept (1.1.8). */
+void showImage(Map app, Map r, Map run, Map summary, boolean replace = false) {
     def imp = IJ.openImage(r.path)
     if (imp == null) { IJ.error("LabConstrictor", "Fiji cannot open result image " + r.name); return }
     def title = app.name + ":" + r.name
@@ -1185,9 +1369,16 @@ void showImage(Map app, Map r, Map summary, boolean replace = false) {
     }
     for (int n = 1; WindowManager.getImage(title) != null; n++) title = app.name + ":" + r.name + " [" + n + "]"   // a chain must be able to tell results apart
     imp.setTitle(title)
+    def mismatch = placeImage(imp, r, run)
+    if (mismatch) {
+        IJ.log("LabConstrictor: " + mismatch)
+        lcLog("WARNING", mismatch)
+        summary["size_mismatch_" + r.name] = mismatch
+    }
     imp.show()
-    lastShownImage = imp
     summary["image_" + r.name] = [imp.getWidth(), imp.getHeight(), imp.getNSlices() * imp.getNFrames(), imp.getBitDepth()]
+    summary["calibration_" + r.name] = [width: imp.getCalibration().pixelWidth, height: imp.getCalibration().pixelHeight, unit: imp.getCalibration().getUnit(),
+                                        x_origin: imp.getCalibration().xOrigin, y_origin: imp.getCalibration().yOrigin]
 }
 
 /** A message result: in the log, and in a dialog when a person is running the tool (markdown emphasis removed: a dialog shows plain text). */
@@ -1198,38 +1389,33 @@ void showMessage(Map app, Map r, Map summary) {
     if (hooks.interactive) IJ.showMessage("LabConstrictor: " + app.display_name, text)
 }
 
-/** The image window a points or shapes result is placed on: the image `apply_to` names, else the first image input of the run (PROTOCOL.md).
- *  Only a tool without any image input falls back to the image its run showed last, else the current image. Returns null when the
- *  image is a file that is not open as a window (the result is not put on some other image: that would be another frame). */
-ImagePlus resultTarget(Map r, Map images) {
-    def name = r.apply_to ?: (images ? images.keySet().first() : null)
-    def source = name == null ? null : images[name]
-    if (source instanceof ImagePlus) return source
-    if (source != null) return null
-    return lastShownImage ?: WindowManager.getCurrentImage()
+/** Why a points or outlines result is not drawn: the files are kept (the job folder is removed) and the sentence says where. Returns the kept path. */
+String keepUndrawn(Map run, Map r, String what, String reason) {
+    def kept = keepResultFile(run, r.path as String)
+    def sentence = "'" + r.name + "': " + what + " not placed on an image: " + reason + ". The file is " + kept
+    lcLog("INFO", sentence)
+    IJ.log("LabConstrictor: " + sentence)
+    return kept
 }
 
-/** Why a points or shapes result has no window to be placed on. */
-String noWindowReason(Map images) {
-    return images ? "the image they belong to was given as a file, so there is no open window to place them on" : "no image is open to place them on"
-}
-
-/** Points (columns y, x in pixels of the image named by apply_to, else of the first image input, else the current image):
- *  a multi-point ROI on that image, also kept in the ROI Manager under the output's name, and a table with the properties. */
-void showPoints(Map app, Map r, Map images, Map summary, boolean replace) {
+/** Points (columns y, x in pixels of the image named by apply_to, else of the first image input): a multi-point ROI on that image at c = x0 + (x + 0.5) * downsample,
+ *  on the exported plane of a stack, also kept in the ROI Manager under the output's name, and a table with the properties. With no image to place them on (no
+ *  image input, or a file Fiji cannot open) they are a table and the file is kept: never on another image. */
+void showPoints(Map app, Map r, Map run, Map summary, boolean replace) {
     def table = ResultsTable.open(r.path)
-    def target = resultTarget(r, images)
-    if (target == null) {                                    // nothing to place them on: the table is still the result
+    def placement = placementOf(r, run)
+    def reason = placement.reason ?: planeProblem(PLANE_KEYS.any { table.getColumnIndex(it) != ResultsTable.COLUMN_NOT_FOUND }, placement.image as ImagePlus)
+    if (reason) {                                            // nothing to place them on: the table is still the result
         showTableWindow(table, app.name + ":" + r.name, replace)
-        lcLog("INFO", "points '" + r.name + "' shown as a table: " + noWindowReason(images) + " (" + table.size() + " point(s))")
-        IJ.log("LabConstrictor: '" + r.name + "' has " + table.size() + " point(s) but " + noWindowReason(images) + ": shown as a table (open an image and run again to see them on it)")
+        def kept = keepUndrawn(run, r, table.size() + " point(s)", reason + ": shown as a table")
         summary["points_" + r.name] = [count: table.size(), image: null, columns: table.getHeadings() as List]
+        summary["undrawn_" + r.name] = [reason: reason, kept: kept]
         return
     }
-    def xs = new float[table.size()], ys = new float[table.size()]
-    for (int i = 0; i < table.size(); i++) { xs[i] = (float) (table.getValue("x", i) + PIXEL_CENTRE); ys[i] = (float) (table.getValue("y", i) + PIXEL_CENTRE) }   // pixel centres
-    def roi = new ij.gui.PointRoi(xs, ys, xs.length)
+    def target = placement.image as ImagePlus, frame = placement.frame as Map
+    def roi = pointRoiOf(table, frame)
     roi.setName(app.name + ":" + r.name)
+    placeOnPlane(roi, target, frame.plane as Map)
     def manager = ij.plugin.frame.RoiManager.getRoiManager()
     if (replace) {                                           // Replace(): the previous points of this output make way
         def indexes = (0..<manager.getCount()).findAll { manager.getRoi(it).getName() == roi.getName() } as int[]
@@ -1238,15 +1424,25 @@ void showPoints(Map app, Map r, Map images, Map summary, boolean replace) {
     target.setRoi(roi)
     manager.addRoi(roi)
     showTableWindow(table, app.name + ":" + r.name, replace)
+    sayPlane(r.name as String, target, frame.plane as Map)
     summary["points_" + r.name] = [count: table.size(), image: target.getTitle(), columns: table.getHeadings() as List]
+    summary["placed_" + r.name] = [source: frame.label, file: frame.file != null, plane: frame.plane]
 }
 
-/** One polygon (rings of [x, y], pixel centres at integers; the first ring is the outline, the others holes) as a ShapeRoi. */
-ij.gui.ShapeRoi polygonRoi(List part) {
+/** The multi-point ROI of a points table in the ImageJ coordinates of the image `frame` describes: every point at c (1.1.3). */
+ij.gui.PointRoi pointRoiOf(ResultsTable table, Map frame) {
+    def xs = new float[table.size()], ys = new float[table.size()]
+    for (int i = 0; i < table.size(); i++) { xs[i] = (float) placedX(table.getValue("x", i), frame); ys[i] = (float) placedY(table.getValue("y", i), frame) }
+    return new ij.gui.PointRoi(xs, ys, xs.length)
+}
+
+/** One polygon (rings of [x, y], pixel centres at integers; the first ring is the outline, the others holes) as a ShapeRoi in the ImageJ coordinates of the image
+ *  `frame` describes: every vertex at c = x0 + (x + 0.5) * downsample (1.1.3). */
+ij.gui.ShapeRoi polygonRoi(List part, Map frame) {
     def path = new java.awt.geom.Path2D.Double(java.awt.geom.Path2D.WIND_EVEN_ODD)
     part.each { ring ->
         ring.eachWithIndex { point, i ->
-            double x = (point[0] as double) + PIXEL_CENTRE, y = (point[1] as double) + PIXEL_CENTRE       // pixel centres
+            double x = placedX(point[0] as double, frame), y = placedY(point[1] as double, frame)
             if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
         }
         path.closePath()
@@ -1256,16 +1452,16 @@ ij.gui.ShapeRoi polygonRoi(List part) {
 
 /** The ROIs of a GeoJSON feature collection (every polygon of the first `limit` features, named `prefix label[.n]`), the polygons and features it had
  *  in all and how many polygons have holes. The cap counts features, the author's objects, like the other hosts. */
-Map outlinesOf(def collection, String prefix, int limit) {
+Map outlinesOf(def collection, String prefix, int limit, Map frame) {
     def rois = [], holes = 0, polygons = 0
     collection.features.eachWithIndex { feature, index ->
         def geometry = feature.geometry
         def parts = geometry.type == "Polygon" ? [geometry.coordinates] : geometry.coordinates
         polygons += parts.size()
-        if (index >= limit) return
+        if (index >= limit || frame == null) return       // no frame: only counted (the outlines are not drawn)
         parts.each { part ->
             if (part.size() > 1) holes++
-            def roi = polygonRoi(part)
+            def roi = polygonRoi(part, frame)
             def label = feature.properties?.label
             roi.setName(prefix + " " + (label != null ? label : rois.size() + 1) + (parts.size() > 1 ? "." + (rois.size() + 1) : ""))
             rois << roi
@@ -1281,29 +1477,35 @@ void removeEarlierOutlines(def overlay, def manager, String prefix) {
     if (indexes) manager.setSelectedIndexes(indexes).with { manager.runCommand("Delete") }
 }
 
-/** Outlines (GeoJSON Polygon / MultiPolygon, [x, y] with pixel centres at integers) in the frame of the image named by apply_to
- *  (else the first image input, else the current image): an overlay on that image with holes kept (composite ROIs), and the
- *  first MAX_MANAGER_SHAPES also in the ROI Manager. Replace() swaps this output's previous outlines. */
-void showShapes(Map app, Map r, Map images, Map summary, boolean replace) {
+/** Outlines (GeoJSON Polygon / MultiPolygon, [x, y] with pixel centres at integers) in the frame of the image named by apply_to (else of the first image input): an
+ *  overlay on that image, every vertex at c = x0 + (x + 0.5) * downsample, with holes kept (composite ROIs) and on the exported plane of a stack, and the first
+ *  MAX_MANAGER_SHAPES also in the ROI Manager. Replace() swaps this output's previous outlines. With no image to place them on (no image input, a file Fiji
+ *  cannot open) the file is kept and said; they are never put on another image. */
+void showShapes(Map app, Map r, Map run, Map summary, boolean replace) {
     def collection = new JsonSlurper().parse(new File(r.path as String), "UTF-8")
-    def target = resultTarget(r, images)
+    def placement = placementOf(r, run)
     def prefix = app.name + ":" + r.name
     def limit = hooks.maxShapes() ?: MAX_SHAPES
-    def outlines = outlinesOf(collection, prefix, limit)
+    def planes = collection.features.any { feature -> PLANE_KEYS.any { feature.properties?.containsKey(it) } }
+    def reason = placement.reason ?: planeProblem(planes, placement.image as ImagePlus)
+    def outlines = outlinesOf(collection, prefix, limit, reason ? null : placement.frame as Map)
     def rois = outlines.rois, holes = outlines.holes, total = outlines.total
-    if (target == null) {
-        IJ.log("LabConstrictor: '" + r.name + "' has " + total + " outline(s) but " + noWindowReason(images) + " (open an image and run again)")
+    if (reason) {
+        def kept = keepUndrawn(run, r, total + " outline(s)", reason + ": listed as a file")
         summary["shapes_" + r.name] = [count: total, shown: 0, image: null]
+        summary["undrawn_" + r.name] = [reason: reason, kept: kept]
         return
     }
+    def target = placement.image as ImagePlus, frame = placement.frame as Map
     def overlay = target.getOverlay() ?: new ij.gui.Overlay()
     def manager = ij.plugin.frame.RoiManager.getRoiManager()
     if (replace) removeEarlierOutlines(overlay, manager, prefix)
-    rois.each { overlay.add(it) }
+    rois.each { placeOnPlane(it, target, frame.plane as Map); overlay.add(it) }
     target.setOverlay(overlay)
     overlay.setStrokeColor(java.awt.Color.YELLOW)
     target.updateAndDraw()
     rois.take(MAX_MANAGER_SHAPES).each { manager.addRoi(it.clone() as ij.gui.Roi) }
+    sayPlane(r.name as String, target, frame.plane as Map)
     if (outlines.features > limit) {
         def sentence = "'" + r.name + "': showing the first " + limit + " of " + outlines.features + " outlines"
         IJ.log("LabConstrictor: " + sentence)
@@ -1313,6 +1515,7 @@ void showShapes(Map app, Map r, Map images, Map summary, boolean replace) {
     if (holes) IJ.log("LabConstrictor: '" + r.name + "': " + holes + " outline(s) have holes (kept in the overlay and the ROI Manager)")
     summary["shapes_" + r.name] = [count: total, shown: rois.size(), holes: holes, image: target.getTitle(), overlay_size: overlay.size(), manager_count: manager.getCount(),
                                    features: outlines.features]
+    summary["placed_" + r.name] = [source: frame.label, file: frame.file != null, plane: frame.plane]
 }
 
 /** Show `table` in a results window called `title`. ImageJ would overwrite an open window of that name, so a table that does not replace its
@@ -1425,10 +1628,10 @@ double relativeDifference(FloatProcessor a, FloatProcessor b) {
 }
 
 /** Say what became of a run: show the results of a complete one, a plain message for "nothing found", an error for a failure, a status line for the rest. */
-void reportOutcome(Map app, Map tool, Map outcome, Map images, Map summary) {
+void reportOutcome(Map app, Map outcome, Map run, Map summary) {
     if (outcome.complete) {
         summary.interpreter = outcome.outputs.diagnostics
-        summary << showResults(app, outcome.outputs.results, images, tool)
+        summary << showResults(app, outcome.outputs.results, run)
         if (summary.display_errors && hooks.interactive)
             IJ.error("LabConstrictor: " + app.display_name, "The tool finished, but not everything could be shown:\n" + summary.display_errors.join("\n"))
     } else if (outcome.status == "FAILED" && !outcome.cancelRequested && (outcome.error ?: "") =~ /^\[(no_match|no_result)\] /) {
@@ -1787,9 +1990,10 @@ def runRequest(Map app, Map tool, def module, Map summary) {
             if (hooks.interactive) IJ.error("LabConstrictor", problem.message)
             return hooks.finish(summary + [error: problem.message])
         }
-        def (inputs, images, modifiers) = exported
+        def (inputs, images, modifiers, frames) = exported
         summary.modifiers = modifiers
-        runAndShow(app, tool, inputs, images, summary)
+        summary.frames = describeFrames(frames)
+        runAndShow(app, tool, inputs, [app: app, tool: tool, images: images, frames: frames, kept: [:]], summary)
         if (summary.status == "COMPLETE") rememberDepends(app, tool, inputs)
     } finally {
         removeFolder(jobDir, "job folder of the run")

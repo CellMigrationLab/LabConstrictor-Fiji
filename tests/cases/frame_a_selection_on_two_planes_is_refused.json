@@ -1,0 +1,61 @@
+{
+ "app": "frames",
+ "tool": "Mask seen",
+ "register": [
+  {
+   "name": "frames",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/frames_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/ASYM_z3.tif",
+   "title": "Z3.tif",
+   "manager_rois": [
+    [
+     0,
+     0,
+     4,
+     4
+    ],
+    [
+     1,
+     1,
+     4,
+     4
+    ]
+   ],
+   "manager_selected": [
+    0,
+    1
+   ],
+   "manager_positions": [
+    1,
+    2
+   ]
+  }
+ ],
+ "select": [
+  "Z3.tif"
+ ],
+ "overrides": {
+  "image": "Z3.tif",
+  "selection_region": true
+ },
+ "script_mode_only": true,
+ "expect": {
+  "match": {
+   "error": "the selected regions are on different planes of 'Z3.tif'"
+  },
+  "log_contains": [
+   "selection_mixed_planes: "
+  ]
+ },
+ "conformance": [
+  "CF-10"
+ ]
+}

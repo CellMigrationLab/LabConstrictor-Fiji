@@ -9,7 +9,8 @@ def text = new File(cfg.script as String).text.replaceFirst(/(?m)^#@/, "//#@").r
 def lc = new GroovyShell(this.class.classLoader).parse(text)
 lc.run()                                   // the top-level definitions only: hooks, constants, helper classes
 
-def failures = [], checked = 0
+def failures = [], checked = 0, unsupported = []     // `unsupported`: conformance cases this host cannot run end to end (said, never counted as passed)
+def conformance = { new JsonSlurper().parseText(new File(System.getenv("LC_CONFORMANCE")).getText("UTF-8")) }    // the shared rules as data (run_cases.py sets LC_CONFORMANCE)
 def check = { String name, boolean ok, String detail = "" ->
     checked++
     if (!ok) failures << (name + (detail ? ": " + detail : ""))
@@ -133,11 +134,113 @@ def groups = [
               limited.getType().toString() + " " + limited.getDescription() + " " + limited.getMaximumValue())
         check("a wide default is kept", itemOf(wideInteger([default: 4_000_000_000L])).getDefaultValue() == 4_000_000_000L)
     },
+    conformance_frame: {
+        // docs/SPEC_WRONG_SCIENCE.md section 1, conformance.json wrong_science.coordinate (CF-01..CF-14), at the level of the functions that place results
+        def C = conformance(), WS = C.wrong_science.coordinate
+        def cases = WS.cases.collectEntries { [(it.id): it] }
+        (1..14).each { n -> check(String.format("CF-%02d is in conformance.json", n), cases.containsKey(String.format("CF-%02d", n))) }
+        def rows = WS.image.shape[0] as int, columns = WS.image.shape[1] as int
+        check("the fixture image is ASYM = 100*y + x", WS.image.id == "ASYM" && WS.image.value == "100*y + x" && WS.image.dtype == "uint16")
+        def asym = new ij.process.ShortProcessor(columns, rows)
+        for (int y = 0; y < rows; y++) for (int x = 0; x < columns; x++) asym.set(x, y, 100 * y + x)
+        def fixture = ij.IJ.openImage(cfg.asym as String)
+        check("tests/fixtures/ASYM.tif is the fixture image", fixture != null && fixture.getWidth() == columns && fixture.getHeight() == rows &&
+              (0..<rows).every { y -> (0..<columns).every { x -> fixture.getProcessor().get(x, y) == asym.get(x, y) } })
+        def source = new ij.ImagePlus("ASYM", asym)
+        // messages and codes
+        def template = C.messages.size_mismatch.template as String
+        def expected = template.replace("{name}", "lab").replace("{w}", "6").replace("{h}", "4").replace("{source}", "ASYM.tif").replace("{w2}", "12").replace("{h2}", "8")
+        check("the size mismatch sentence is the conformance text", lc.sizeMismatchText("lab", [6, 4], "ASYM.tif", [12, 8]) == expected, lc.sizeMismatchText("lab", [6, 4], "ASYM.tif", [12, 8]))
+        check("the size mismatch template constant is the conformance template", lc.SIZE_MISMATCH_TEXT == template.replaceAll(/\{(name|source)\}/, "%s").replaceAll(/\{(w|h|w2|h2)\}/, "%d"), lc.SIZE_MISMATCH_TEXT)
+        check("selection_mixed_planes is a host-internal code", lc.REFUSAL_SELECTION_PLANES in C.host_internal_codes)
+        // the frame: no transform (ImageJ images have none), exported area = the whole image at downsample 1, plane of the window at the click
+        def frame = lc.frameOf("image", source, null)
+        check("frame: identity by construction, no transform", !frame.containsKey("transform") && frame.downsample == 1.0d && frame.axes_offset == [t: 0, z: 0, y: 0.0d, x: 0.0d], frame.toString())
+        check("frame: the exported size and the source object", frame.width == columns && frame.height == rows && frame.image.is(source) && frame.label == "ASYM")
+        // CF-01..05 point: the point lands at target_px + 0.5 whatever the source's transform (Fiji has none; its calibration is never applied to a ROI)
+        def roiOf = { double y, double x, Map f ->
+            def table = new ij.measure.ResultsTable()
+            table.addRow(); table.addValue("y", y); table.addValue("x", x)
+            def polygon = lc.pointRoiOf(table, f).getFloatPolygon()
+            [polygon.xpoints[0] as double, polygon.ypoints[0] as double]
+        }
+        cases.values().findAll { it.point && it.expect?.target_px }.each { c ->
+            def tx = c.expect.target_px[1] as double, ty = c.expect.target_px[0] as double
+            check(c.id + " point " + c.point + " is drawn at target_px + 0.5 = " + [tx + 0.5, ty + 0.5], roiOf(c.point[0] as double, c.point[1] as double, frame) == [tx + 0.5, ty + 0.5], roiOf(c.point[0] as double, c.point[1] as double, frame).toString())
+        }
+        // a calibration (CF-03 scale and translate, as Fiji has them) is not applied to ROIs
+        def calibrated = new ij.ImagePlus("calibrated", asym.duplicate())
+        calibrated.getCalibration().pixelWidth = 0.25d; calibrated.getCalibration().pixelHeight = 0.5d; calibrated.getCalibration().xOrigin = -80d; calibrated.getCalibration().yOrigin = -20d
+        calibrated.getCalibration().setUnit("um")
+        def calibratedFrame = lc.frameOf("image", calibrated, null)
+        check("CF-03 a calibrated image places the point exactly like an uncalibrated one", roiOf(2d, 3d, calibratedFrame) == [3.5d, 2.5d], roiOf(2d, 3d, calibratedFrame).toString())
+        // CF-01 outline: every vertex of the rectangle (given [y, x] in the fixture, [x, y] in the protocol) at vertex + 0.5
+        def ring = WS.rect.collect { [it[1], it[0]] }; ring << ring[0]
+        def outline = lc.polygonRoi([ring], frame).getFloatPolygon()
+        def drawn = (0..<outline.npoints).collect { [outline.xpoints[it] as double, outline.ypoints[it] as double] } as Set
+        check("CF-01 the outline is drawn at the rectangle's vertices + 0.5", drawn == WS.rect.collect { [(it[1] + 0.5) as double, (it[0] + 0.5) as double] } as Set, drawn.toString())
+        // CF-09 and CF-14: c = x0 + (x + 0.5) * downsample, in ImageJ coordinates (target_px + 0.5 is c)
+        def framed = { double y0, double x0, double d -> frame + [axes_offset: [t: 0, z: 0, y: y0, x: x0], downsample: d] }
+        def crop = cases["CF-09"]
+        check("CF-09 a crop offset moves the result by it", roiOf(crop.point[0] as double, crop.point[1] as double, framed(crop.expect.export_offset_yx[0] as double, crop.expect.export_offset_yx[1] as double, 1d)) ==
+              [crop.result_expect.target_px[1] + 0.5d, crop.result_expect.target_px[0] + 0.5d], roiOf(crop.point[0] as double, crop.point[1] as double, framed(2d, 4d, 1d)).toString())
+        cases["CF-14"].variants.each { v ->
+            def at = roiOf(v.point[0] as double, v.point[1] as double, framed((v.offset_yx[0] as double), (v.offset_yx[1] as double), (v.downsample as double)))
+            check("CF-14 downsample " + v.downsample + " offset " + v.offset_yx + ": c_yx " + v.expect.c_yx, at == [v.expect.c_yx[1] as double, v.expect.c_yx[0] as double], at.toString())
+            if (v.downsample != 1) unsupported << ("CF-14 downsample " + v.downsample + ": only the arithmetic is checked; Fiji exports at downsample 1")
+        }
+        // RegionOf (1.2): the mask has the exported size and holds the pixels whose centre is inside the polygon, ROIs being pixel based
+        def polygon = { List rect, double shift ->
+            new ij.gui.PolygonRoi(rect.collect { (it[1] + shift) as float } as float[], rect.collect { (it[0] + shift) as float } as float[], rect.size(), ij.gui.Roi.POLYGON)
+        }
+        def pixelsOf = { ij.process.ShortProcessor mask -> (0..<rows).collectMany { y -> (0..<columns).findAll { x -> mask.get(x, y) > 0 }.collect { x -> [y, x] } } as Set }
+        def mask = lc.regionMask([polygon(WS.rect, 0.5d)], columns, rows)
+        check("the mask has the exported size", mask.getWidth() == columns && mask.getHeight() == rows)
+        check("the mask holds exactly rect_mask_pixels", pixelsOf(mask) == WS.rect_mask_pixels as Set, pixelsOf(mask).toString())
+        check("the pixels under the mask are rect_mask_values", WS.rect_mask_pixels.collect { asym.get(it[1] as int, it[0] as int) } == WS.rect_mask_values, WS.rect_mask_pixels.collect { asym.get(it[1] as int, it[0] as int) }.toString())
+        // 1.2.5: one selection lies on one plane
+        def onPlane = { Map position -> def r = new ij.gui.Roi(0, 0, 4, 4); r.setPosition(position.c ?: 0, position.z ?: 0, position.t ?: 0); r }
+        check("rois with no plane count for none", lc.selectionPlanes([new ij.gui.Roi(0, 0, 4, 4), new ij.gui.Roi(1, 1, 2, 2)]).isEmpty())
+        check("two rois on one plane are one plane", lc.selectionPlanes([onPlane([z: 2]), onPlane([z: 2])]).size() == 1)
+        check("rois on two z planes are two planes", lc.selectionPlanes([onPlane([z: 1]), onPlane([z: 2])]).size() == 2)
+        check("rois on two time points are two planes", lc.selectionPlanes([onPlane([z: 1, t: 1]), onPlane([z: 1, t: 2])]).size() == 2)
+        def stack = new ij.ImagePlus("stack", new ij.ImageStack(columns, rows).with { s -> 3.times { s.addSlice(new ij.process.ShortProcessor(columns, rows)) }; s })
+        stack.setDimensions(1, 3, 1)
+        stack.setPosition(1, 2, 1)
+        check("the exported plane is the window's plane at the click", lc.frameOf("image", stack, null).plane == [c: 0, z: 2, t: 1], lc.frameOf("image", stack, [channel: 2]).plane.toString())
+        check("a picked channel is part of the plane", lc.frameOf("image", stack, [channel: 2]).plane.c == 2)
+        check("results that name planes are not put on one plane of a stack", lc.planeProblem(true, stack) != null && lc.planeProblem(false, stack) == null && lc.planeProblem(true, source) == null)
+        // what Fiji cannot be asked: images have no transform (1.3), no multiscale levels, no mixed QuPath planes
+        unsupported << "CF-04 rotation, CF-05 shear, CF-13 non-invertible: a Fiji image has no transform (identity by construction, 1.3)"
+        unsupported << "CF-06 multiscale: no levels in an ImagePlus"
+        unsupported << "CF-09 crop export, CF-10 QuPath planes: QuPath only (the offset arithmetic of CF-09 is checked above)"
+    },
+    conformance_coverage: {
+        // no silent skip (docs/CONFORMANCE.md): every case of the coordinate-frame fixtures is run by a case file ("conformance": [ids]), checked at the level of the functions
+        // (conformance_frame), or named here as not applicable to Fiji with its reason
+        def C = conformance(), WS = C.wrong_science.coordinate
+        def known = WS.cases*.id as Set
+        def named = [] as Set
+        new File(cfg.cases_dir as String).listFiles({ File f -> f.name.endsWith(".json") } as FileFilter).sort().each { File f ->
+            def ids = new JsonSlurper().parseText(f.getText("UTF-8")).conformance
+            (ids ?: []).each { String id -> named << id; check(f.name + " names " + id + ", which is in conformance.json", id in known) }
+        }
+        def atFunctionLevel = ["CF-01", "CF-02", "CF-03", "CF-09", "CF-14"] as Set       // the arithmetic of placement, the mask pixels and the offsets (conformance_frame)
+        def notApplicable = [
+            "CF-04": "rotation: a Fiji image has no transform (identity by construction, 1.3)", "CF-05": "shear: no transform", "CF-06": "multiscale: no levels in an ImagePlus",
+            "CF-13": "non-invertible transform: no transform",
+        ]
+        known.each { String id ->
+            check(id + " is run by a case, checked at function level, or not applicable", id in named || id in atFunctionLevel || notApplicable.containsKey(id))
+            if (notApplicable.containsKey(id)) unsupported << (id + " " + notApplicable[id])
+        }
+        check("the not-applicable cases are not also claimed as run", notApplicable.keySet().every { !(it in named) && !(it in atFunctionLevel) })
+    },
 ]
 
 cfg.unit_checks.each { String group ->
     if (!groups.containsKey(group)) failures << ("unknown group " + group)
     else try { groups[group]() } catch (Exception problem) { failures << (group + " raised " + problem) }   // the report is written whatever happens
 }
-new File(cfg.report as String).text = JsonOutput.prettyPrint(JsonOutput.toJson([failures: failures, checked: checked, groups: cfg.unit_checks]))
+new File(cfg.report as String).text = JsonOutput.prettyPrint(JsonOutput.toJson([failures: failures, checked: checked, groups: cfg.unit_checks, unsupported: unsupported]))
 System.exit(0)
