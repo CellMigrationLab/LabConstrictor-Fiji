@@ -1,0 +1,3 @@
+{"app": "LabConstrictorPlayground", "tool": "Feature tour",
+ "preload": [{"path": "${REAL_FIXTURES}/playground/demo_blobs.tif", "title": "demo_blobs.tif", "pixel_size": 0.5}],
+ "select": ["demo_blobs.tif"], "overrides": {"image": "demo_blobs.tif"}, "expect": {"status": "COMPLETE"}}
