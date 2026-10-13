@@ -1,0 +1,40 @@
+{
+ "app": "parity",
+ "tool": "Typed choices",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "prune": "recorder",
+ "fixtures": [
+  "HRET-02",
+  "HRET-01"
+ ],
+ "retention_prefill": {
+  "owned_results": 60,
+  "owned_runs": 120,
+  "unfinished_runs": 3,
+  "unfinished_results": 3,
+  "legacy_runs": 3,
+  "legacy_results": 3,
+  "foreign": true
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "retention.runs.count": 128,
+   "retention.runs.sentinels_intact": 126,
+   "retention.runs.foreign_intact": true,
+   "retention.results.count": 67,
+   "retention.results.sentinels_intact": 66,
+   "retention.results.foreign_intact": true,
+   "prune_calls.0.mode": "recorder"
+  }
+ }
+}

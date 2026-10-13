@@ -21,6 +21,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+import check_extras
+import process_support
+import retention_support
+
 HERE = Path(__file__).resolve().parent
 V3 = HERE.parent  # repository root
 FIXTURES = HERE / "fixtures"
@@ -154,9 +158,15 @@ def same(found, wanted):
     return found == wanted
 
 
+KNOWN_EXPECT = {  # every kind of expectation `check` reads; anything else in a case would be silently ignored, so it is a failure of the case
+    "at_set", "at", "status", "status_in", "min_progress_events", "approx", "equals", "log_contains", "match", "file_text_contains", "absent", "max", "min", "min_length",
+    "contains", "not_contains", "absent_keys", "worker_alive_after",
+}
+
+
 def check(expect, report):
     """Return a list of failed expectations (empty = pass)."""
-    failed = []
+    failed = ["unknown expectation %r: it would be ignored (a path under `equals` or `at` is what was meant?)" % key for key in expect if key not in KNOWN_EXPECT | check_extras.KINDS]
     for dotted, wanted in expect.get("at_set", {}).items():  # a list of coordinate pairs (the vertices of a polygon) as a set: where a ring starts does not matter
         found = walk(report, dotted)
         if found is MISSING or {tuple(round(v, 9) for v in p) for p in found} != {tuple(round(v, 9) for v in p) for p in wanted}:
@@ -166,6 +176,9 @@ def check(expect, report):
         if wanted == "$absent":
             if found is not MISSING:
                 failed.append("%s must be absent, is %r" % (dotted, found))
+        elif wanted == "$present":  # there, and not empty
+            if found is MISSING or found in (None, "", [], {}):
+                failed.append("%s must be present and not empty, is %r" % (dotted, None if found is MISSING else found))
         elif found is MISSING or not same(found, wanted):
             failed.append("%s = %r, expected %r" % (dotted, None if found is MISSING else found, wanted))
     if "status" in expect and report.get("status") != expect["status"]:
@@ -191,9 +204,7 @@ def check(expect, report):
         if text not in report.get("log_text", ""):
             failed.append("log lacks %r" % text)
     for dotted, text in expect.get("match", {}).items():
-        found = report
-        for part in dotted.split("."):
-            found = found.get(part) if isinstance(found, dict) else None
+        found = walk(report, dotted)  # (a part that is a whole number indexes a list)
         if not isinstance(found, str) or text not in found:
             failed.append("%s = %r does not contain %r" % (dotted, found, text))
     for dotted, text in expect.get("file_text_contains", {}).items():  # a file the report names (a kept result): it exists and holds the text
@@ -235,7 +246,7 @@ def check(expect, report):
             failed.append("%s must not be present" % dotted)
     if "worker_alive_after" in expect and report.get("worker_alive_after") != expect["worker_alive_after"]:
         failed.append("worker_alive_after = %r" % report.get("worker_alive_after"))
-    return failed
+    return failed + check_extras.check(expect, report)
 
 
 PLUGIN = V3
@@ -259,7 +270,9 @@ def install_into_fiji(case=None):
     if os.environ.get("LC_FIJI_MODE", "script") == "jar":
         global JAR_INSTALLED
         if not JAR_INSTALLED:  # one build and one copy per run of this script, not per case
-            subprocess.run(["mvn", "-q", "-B", "package"], cwd=PLUGIN, check=True, capture_output=True)
+            built = subprocess.run(["mvn", "-q", "-B", "package"], cwd=PLUGIN, capture_output=True, text=True)
+            if built.returncode:  # the reason must be in the log of the run, not only in the exit code
+                raise SystemExit("mvn package failed (exit code %d):\n%s\n%s" % (built.returncode, built.stdout[-4000:], built.stderr[-4000:]))
             shutil.copyfile(next((PLUGIN / "target").glob("labconstrictor-fiji-*.jar")), JAR_IN_FIJI)
             JAR_INSTALLED = True
         shutil.rmtree(SCRIPT_DIR, ignore_errors=True)  # never both: the menu would list the tool twice
@@ -270,6 +283,8 @@ def install_into_fiji(case=None):
     JAR_IN_FIJI.unlink(missing_ok=True)
     SCRIPT_DIR.mkdir(parents=True, exist_ok=True)
     (SCRIPT_DIR / "LabConstrictor_Tools.groovy").write_text(GROOVY.read_text())
+    shutil.rmtree(SCRIPT_DIR / "lib", ignore_errors=True)
+    shutil.copytree(GROOVY.parent / "lib", SCRIPT_DIR / "lib")  # a loose script finds its helpers in the lib folder next to it (the jar has them inside)
     return ["--run", str(SCRIPT_DIR / "LabConstrictor_Tools.groovy")]
 
 
@@ -289,6 +304,8 @@ def run_case(path):
     name = path.stem
     if case.get("macro") is not None and os.environ.get("LC_FIJI_MODE", "script") != "jar" and os.environ.get("LC_FIJI_MACRO_PROPERTY") == "1":
         case["script_macro"] = case.pop("macro")  # LC_FIJI_MACRO_PROPERTY=1: macro calls through the property the menu command sets, in script mode (no mvn build per case)
+    probe = {}
+    process_support.prepare(case, probe)  # a case that watches its worker process: the file the tool writes its pid to
     if case.get("make_files") == "calibration":
         case["files_dir"] = tempfile.mkdtemp(prefix="lccal_fiji_")
         make_calibration_files(case["files_dir"])
@@ -305,7 +322,11 @@ def run_case(path):
         return name, [], {}  # macro calls need the menu command of the jar (LC_FIJI_MODE=jar): not applicable to the loose script
     if case.get("script_mode_only") and os.environ.get("LC_FIJI_MODE", "script") == "jar":
         return name, [], {}  # the harness reads the dialog through hooks that the jar's script engine does not report back (checked by eye: the dialog is right)
-    env = dict(os.environ, LC_FIJI_HARNESS=str(HERE / "test_harness.groovy"), LC_FIJI_CASE=str(case_file), LC_CONFORMANCE=CONFORMANCE)
+    env = dict(os.environ, LC_FIJI_HARNESS=str(HERE / "test_harness.groovy"), LC_FIJI_CASE=str(case_file), LC_CONFORMANCE=CONFORMANCE,
+               LC_PYTHON=sys.executable, LC_PRUNE_RECORDER=str(HERE / "prune_recorder.py"), **probe)
+    if case.get("unit_checks"):
+        env["LC_UNIT_GROUPS"] = str(HERE)  # the groups kept in tests/unit_groups_*.groovy
+        env["LC_FIJI_LIB"] = str(GROOVY.parent / "lib")  # the unit checks run from a script of their own: the helpers come from the repository's folder
     if "LC_HOME" not in env or not REAL_APPS:  # portable runs get a private registry holding only the example app
         env["LC_HOME"] = PRIVATE_HOME
     if case.get(
@@ -331,6 +352,8 @@ def run_case(path):
             (runs / ("20200101T000000%03d_old_tool" % n) / "keep.txt").write_text("keep")
         (runs / "my_own_notes").mkdir()
         (runs / "my_own_notes" / "keep.txt").write_text("keep")
+    if case.get("retention_prefill"):  # owned, unfinished, older-version and a person's own folders under results/ and runs/ (tests/retention_support.py)
+        retention_support.prefill(case["retention_prefill"], Path(env["LC_HOME"]))
     if case.get("last_command"):  # a previous run's command text, as the script leaves it for the "Copy last run as command" entry
         state = Path(env["LC_HOME"]) / "state"
         state.mkdir(parents=True, exist_ok=True)
@@ -365,20 +388,25 @@ def run_case(path):
     except OSError as problem:
         return name, ["could not start Fiji: %s" % problem], {}
     report_path = case_dir / "report.json"
-    if not report_path.exists():
+    if not report_path.exists() and not case.get("no_report"):  # "no_report": Fiji is made to end in the middle of the run, so there is none
         return name, ["no report written (script crashed or blocked)" + _tail(finished)], {}
-    report = json.loads(report_path.read_text())
+    report = json.loads(report_path.read_text()) if report_path.exists() else {}
+    process_support.settle(case, report)
     log_file = Path(env["LC_HOME"]) / "logs" / "labconstrictor.log"
     report["log_text"] = log_file.read_text(encoding="utf-8") if log_file.exists() else ""
     runs = Path(env["LC_HOME"]) / "runs"
     report["run_folders"] = sorted(p.name for p in runs.iterdir()) if runs.is_dir() else []
     report["run_record_count"] = sum(1 for name in report["run_folders"] if name != "my_own_notes")
     report["run_sentinels_intact"] = sum(1 for p in report["run_folders"] if (runs / p / "keep.txt").is_file() and (runs / p / "keep.txt").read_text() == "keep")
+    job_dir = (report.get("request") or {}).get("_job_dir")
+    report["job_dir_exists"] = Path(job_dir).exists() if job_dir else None  # the host's own temporary folder: removed whatever happened (RET-11)
+    report["retention"] = retention_support.inspect(Path(env["LC_HOME"]))
+    report["prune_calls"] = retention_support.prune_calls(case_dir)
     report["log_backups"] = {  # first line of each rotated copy of the log
         p.name: (p.read_text(encoding="utf-8", errors="replace").splitlines() or [""])[0]
         for p in sorted(log_file.parent.glob("labconstrictor.log.*"))
     } if log_file.parent.is_dir() else {}
-    return name, check(case.get("expect", {}), report), report
+    return name, check(retention_support.substitute(case.get("expect", {}), {"$LC_HOME": env["LC_HOME"]}), report), report
 
 
 def tamper(apps, op):

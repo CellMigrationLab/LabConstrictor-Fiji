@@ -1,0 +1,16 @@
+{
+ "unit_checks": [
+  "conformance_numbers",
+  "conformance_numbers_coverage"
+ ],
+ "cases_dir": "${V3}/tests/cases",
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 40
+  }
+ }
+}

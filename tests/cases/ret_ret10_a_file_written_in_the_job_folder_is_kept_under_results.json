@@ -1,0 +1,44 @@
+{
+ "app": "retention",
+ "tool": "Writes a report",
+ "register": [
+  {
+   "name": "retention",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/retention_app"
+   ]
+  }
+ ],
+ "fixtures": [
+  "RET-10"
+ ],
+ "expect": {
+  "status": "COMPLETE",
+  "equals": {
+   "job_dir_exists": false
+  },
+  "match": {
+   "file_report": "/results/"
+  },
+  "file_text_contains": {
+   "file_report": "data"
+  },
+  "at": {
+   "retention.results.count": 1,
+   "retention.results.fiji.0.files": [
+    ".lc-done.json",
+    ".lc-owner.json",
+    "report.txt"
+   ],
+   "retention.results.fiji.0.status": "ok",
+   "retention.results.fiji.0.owner_valid": true,
+   "retention.results.fiji.0.name_ok": true,
+   "retention.runs.fiji.0.run_json.reported_paths.report": "$present"
+  },
+  "log_contains": [
+   "output file report: "
+  ]
+ }
+}

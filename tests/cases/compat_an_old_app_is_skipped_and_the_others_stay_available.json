@@ -1,0 +1,36 @@
+{
+ "app": "lookups",
+ "tool": "Pick from two",
+ "register": [
+  {
+   "name": "lookups",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/lookups_app"
+   ]
+  },
+  {
+   "name": "victim",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "script_mode_only": true,
+ "tamper": [
+  {
+   "app": "victim",
+   "schema_replace": [
+    "\"tools_version\": \"0.3.0a1\"",
+    "\"tools_version\": \"0.1.0\""
+   ]
+  }
+ ],
+ "expect": {
+  "status": "COMPLETE",
+  "log_contains": [
+   "app skipped: victim: ignored: this app's labconstrictor-tools 0.1.0 is older than the 0.3.0a1 this host needs: update it"
+  ]
+ }
+}

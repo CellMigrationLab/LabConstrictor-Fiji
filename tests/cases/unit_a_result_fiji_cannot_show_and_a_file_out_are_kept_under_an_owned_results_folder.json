@@ -1,0 +1,28 @@
+{
+ "unit_checks": [
+  "retention_unshown_result"
+ ],
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "fixtures": [
+  "RET-10",
+  "RET-14"
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 7
+  }
+ }
+}

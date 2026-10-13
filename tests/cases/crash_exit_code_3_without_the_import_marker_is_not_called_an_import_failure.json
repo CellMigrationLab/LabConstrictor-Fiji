@@ -1,0 +1,28 @@
+{
+ "app": "crashy",
+ "tool": "Exits with code 3",
+ "register": [
+  {
+   "name": "crashy",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/crashy_app"
+   ]
+  }
+ ],
+ "expect": {
+  "status": "CRASHED",
+  "match": {
+   "failure_message": "The worker process stopped unexpectedly."
+  },
+  "absent": {
+   "failure_message": [
+    "failed to import"
+   ]
+  },
+  "log_contains": [
+   "fiji: task CRASHED tool=exits_with_code_3"
+  ]
+ }
+}

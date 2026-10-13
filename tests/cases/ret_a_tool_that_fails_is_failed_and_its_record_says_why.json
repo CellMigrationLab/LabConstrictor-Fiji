@@ -1,0 +1,25 @@
+{
+ "app": "crashy",
+ "tool": "Raises with a traceback",
+ "register": [
+  {
+   "name": "crashy",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/crashy_app"
+   ]
+  }
+ ],
+ "expect": {
+  "status": "FAILED",
+  "match": {
+   "retention.runs.fiji.0.run_json.error": "ZeroDivisionError"
+  },
+  "at": {
+   "done_status": "failed",
+   "retention.runs.fiji.0.status": "failed",
+   "retention.runs.fiji.0.run_json.status": "FAILED"
+  }
+ }
+}

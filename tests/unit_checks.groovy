@@ -29,7 +29,10 @@ def groups = [
             check("segfault code " + code, hint("worker exited, exit code " + code).contains("crashed natively"), hint("exit code " + code))
         }
         [-9L, 137L].each { code -> check("killed code " + code, hint("exit code " + code).contains("killed")) }
-        check("import failed code 3", hint("exit code 3").contains("failed to import"))
+        // code 3 is an import failure only with the worker's own last words (labconstrictor_tools.log.IMPORT_FAILED_MARKER); alone it is what the Windows C runtime gives abort()
+        check("import failed: code 3 with the marker", hint("exit code 3", ["LabConstrictor worker: cannot import tool module 'tools' (details above)"]).contains("failed to import"))
+        check("code 3 without the marker is not an import failure", !hint("exit code 3").contains("failed to import") && hint("exit code 3").contains("stopped unexpectedly"), hint("exit code 3"))
+        check("the marker without code 3 is not an import failure either", !hint("exit code 1", ["cannot import tool module 'tools'"]).contains("failed to import"), hint("exit code 1", ["cannot import tool module 'tools'"]))
         check("missing package wins over the exit code", hint("exit code 137", ["ModuleNotFoundError: No module named 'x'"]).contains("package is missing"))
         check("unknown code", hint("exit code 42").contains("stopped unexpectedly"))
     },
@@ -62,8 +65,9 @@ def groups = [
         ["nan", "NaN", "inf", "-inf", "Infinity", "-Infinity", "1e999"].each { String t ->
             check("float refuses '" + t + "' as not finite", (refusal(decimal, t) ?: "").contains("must be a finite number, got '" + t + "'"), refusal(decimal, t))
         }
-        check("integer beyond 32 bits", refusal(integer, "2147483648") == "'L' must be <= 2147483647, got 2147483648", refusal(integer, "2147483648"))
-        check("integer below 32 bits", refusal(integer, "-2147483649") == "'L' must be >= -2147483648, got -2147483649", refusal(integer, "-2147483649"))
+        check("integer beyond 32 bits is accepted (the limit is 2**53 - 1, section 6)", refusal(integer, "2147483648") == null && lc.macroNumber(integer, "2147483648") == 2147483648L, refusal(integer, "2147483648"))
+        check("integer beyond 2**53 - 1", refusal(integer, "9007199254740992") == "'L' must be <= 9007199254740991, got 9007199254740992", refusal(integer, "9007199254740992"))
+        check("integer below -(2**53 - 1)", refusal(integer, "-9007199254740992") == "'L' must be >= -9007199254740991, got -9007199254740992", refusal(integer, "-9007199254740992"))
         check("minimum template", refusal([type: "integer", label: "L", minimum: 3], "2") == "'L' must be >= 3, got 2")
         check("exponent value", lc.macroNumber(decimal, "1E-2") == 0.01d)
         check("integer is an int", lc.macroNumber(integer, "+7") instanceof Integer)
@@ -113,7 +117,7 @@ def groups = [
         def limit = 9007199254740991L                                  // 2**53 - 1
         def wideInteger = { Map extra -> [type: "integer", name: "big", label: "Big", required: true] + extra }
         def refusal = { Map p, String given -> refuses { lc.macroNumber(p, given) } }
-        check("the limit", lc.MAX_FORM_INTEGER == limit)
+        check("the limit", lc.lib("LCNumbers").FORM_INTEGER_MAX == limit)
         check("bounds within the limit are kept", lc.integerLimits(wideInteger([minimum: -5, maximum: 5_000_000_000L])) == [minimum: -5L, maximum: 5_000_000_000L, limited: false])
         def beyond = lc.integerLimits(wideInteger([minimum: -(10G ** 20), maximum: 10G ** 20]))
         check("bounds beyond the limit are narrowed and said", beyond == [minimum: -limit, maximum: limit, limited: true], beyond.toString())
@@ -127,12 +131,12 @@ def groups = [
         check("below the limit is refused", refusal(huge, "-9007199254740992") == "'Big' must be >= -9007199254740991, got -9007199254740992", refusal(huge, "-9007199254740992"))
         check("32 bits", lc.fitsInt(2147483647) && !lc.fitsInt(2147483648L) && lc.fitsInt(-2147483648) && !lc.fitsInt(-2147483649L))
         def itemOf = { Map p -> lc.buildToolDialog([label: "T", inputs: [p], outputs: []], [])[0].getInput("big") }
-        check("small bounds: a 32-bit field", itemOf(wideInteger([minimum: 1, maximum: 9])).getType() == Integer)
-        check("wide bound: a 64-bit field", itemOf(wideInteger([maximum: 5_000_000_000L])).getType() == Long)
+        // a number field is text (section 6): the person's text reaches the check unchanged, and the description says what is taken
+        check("small bounds: a text field", itemOf(wideInteger([minimum: 1, maximum: 9])).getType() == String)
+        check("wide bound: a text field too (nothing is cut to 32 bits)", itemOf(wideInteger([maximum: 5_000_000_000L])).getType() == String)
         def limited = itemOf(wideInteger([minimum: 0, maximum: 10G ** 20]))
-        check("limit beyond: a 64-bit field with the limit in its description", limited.getType() == Long && limited.getDescription() == "Whole numbers up to +-9007199254740991." && limited.getMaximumValue() == limit,
-              limited.getType().toString() + " " + limited.getDescription() + " " + limited.getMaximumValue())
-        check("a wide default is kept", itemOf(wideInteger([default: 4_000_000_000L])).getDefaultValue() == 4_000_000_000L)
+        check("limit beyond: a text field that says the limit", limited.getType() == String && limited.getDescription().contains("Whole numbers up to +-9007199254740991.") && limited.getDescription().contains("refused, never changed"), limited.getType().toString() + " " + limited.getDescription())
+        check("a wide default is kept as typed", itemOf(wideInteger([default: 4_000_000_000L])).getDefaultValue() == "4000000000")
     },
     conformance_frame: {
         // docs/SPEC_WRONG_SCIENCE.md section 1, conformance.json wrong_science.coordinate (CF-01..CF-14), at the level of the functions that place results
@@ -419,6 +423,12 @@ def groups = [
         check("CAL-T9, which this dialog cannot report, has a case that pins what happens instead", "CAL-T9" in gaps)
     },
 ]
+
+// groups kept in files of their own (tests/unit_groups_*.groovy, each a closure that takes the toolbox and returns its groups by name)
+def toolbox = [lc: lc, check: check, refuses: refuses, conformance: conformance, cfg: cfg, failures: failures, unsupported: unsupported]
+new File(System.getenv("LC_UNIT_GROUPS")).listFiles({ File f -> f.name.startsWith("unit_groups_") && f.name.endsWith(".groovy") } as FileFilter).sort().each { File file ->
+    groups += (new GroovyShell(this.class.classLoader).evaluate(file) as Closure).call(toolbox) as Map
+}
 
 cfg.unit_checks.each { String group ->
     if (!groups.containsKey(group)) failures << ("unknown group " + group)

@@ -1,0 +1,29 @@
+{
+ "app": "crashy",
+ "tool": "Killed by the OS",
+ "register": [
+  {
+   "name": "crashy",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/crashy_app"
+   ]
+  }
+ ],
+ "fixtures": [
+  "HRET-06"
+ ],
+ "expect": {
+  "status": "CRASHED",
+  "match": {
+   "failure_message": "killed"
+  },
+  "at": {
+   "cancel_requested": false,
+   "done_status": "failed",
+   "retention.runs.fiji.0.status": "failed",
+   "retention.runs.fiji.0.run_json.status": "CRASHED"
+  }
+ }
+}

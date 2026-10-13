@@ -1,0 +1,36 @@
+{
+ "app": "numbers",
+ "tool": "Echo numbers",
+ "register": [
+  {
+   "name": "numbers",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/numbers_app"
+   ]
+  }
+ ],
+ "fixtures": [],
+ "dialog_steps": [
+  {
+   "text": "",
+   "field": 0
+  }
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "absent_keys": [
+   "status",
+   "request",
+   "worker_alive_after",
+   "run_record"
+  ],
+  "at": {
+   "retention.runs.count": 0
+  },
+  "equals": {
+   "error": "'N' is required: type a number"
+  }
+ }
+}

@@ -1,0 +1,27 @@
+{
+ "app": "lookups",
+ "tool": "Blocks",
+ "register": [
+  {
+   "name": "lookups",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/lookups_app"
+   ]
+  }
+ ],
+ "fixtures": [
+  "ASY-07"
+ ],
+ "script_mode_only": true,
+ "worker_pidfile": true,
+ "exit_when_worker_started": true,
+ "no_report": true,
+ "worker_gone_within_s": 4,
+ "expect": {
+  "equals": {
+   "worker_gone": true
+  }
+ }
+}

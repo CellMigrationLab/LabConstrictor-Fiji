@@ -1,0 +1,25 @@
+{
+ "unit_checks": [
+  "retention_no_host_deletes"
+ ],
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "cases_dir": "${V3}/tests/cases",
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 6
+  }
+ }
+}

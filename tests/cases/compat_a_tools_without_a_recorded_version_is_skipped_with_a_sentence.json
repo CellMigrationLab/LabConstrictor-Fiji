@@ -1,0 +1,29 @@
+{
+ "app": "victim",
+ "tool": "Scalar echo",
+ "register": [
+  {
+   "name": "victim",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "tamper": [
+  {
+   "app": "victim",
+   "schema_replace": [
+    "\"tools_version\": \"0.3.0a1\"",
+    "\"tools_versio\": \"0.3.0a1\""
+   ]
+  }
+ ],
+ "expect": {
+  "equals": {
+   "error": "no apps registered"
+  },
+  "log_contains": [
+   "too old (no version recorded, this host needs 0.3.0a1 or newer): update it"
+  ]
+ }
+}

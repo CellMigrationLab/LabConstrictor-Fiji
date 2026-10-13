@@ -1,0 +1,16 @@
+{
+ "unit_checks": [
+  "conformance_async_coverage",
+  "conformance_limits_and_messages"
+ ],
+ "cases_dir": "${V3}/tests/cases",
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 30
+  }
+ }
+}

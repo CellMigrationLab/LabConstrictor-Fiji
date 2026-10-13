@@ -1,0 +1,34 @@
+{
+ "app": "parity",
+ "tool": "Typed choices",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "prune": "failing",
+ "fixtures": [
+  "HRET-04"
+ ],
+ "expect": {
+  "status": "COMPLETE",
+  "absent_keys": [
+   "failure_message",
+   "run_record_error"
+  ],
+  "log_contains": [
+   "prune failed (exit code 3)",
+   "deliberate failure of the test command"
+  ],
+  "at": {
+   "prune_calls.0.mode": "failing",
+   "retention.runs.fiji.0.status": "ok",
+   "done_status": "ok"
+  }
+ }
+}

@@ -68,6 +68,7 @@ def typeIntoSpinners = { Window dialog ->
 // A sequence of things a person does in the dialog, one after the other, with the number fields as they stand after each (report.steps): cfg.dialog_steps =
 //   {select: "b.tif"}   pick that open image in the chooser that lists it       {type: 0.3, field: 0}  type a value in number field 0 (top to bottom)
 //   {file: "/path"}     put that path in the "(or file)" text field (""  clears it)     {use: true}  tick or untick the first check box named "Use ..."
+//   {text: "9007199254740991", field: 0}  type that text into text field number `field` (top to bottom; a number field is a text field)
 def runSteps = { Window dialog ->
     report.steps = []
     cfg.dialog_steps.each { step ->
@@ -80,9 +81,9 @@ def runSteps = { Window dialog ->
             def spinner = components(dialog, JSpinner).sort { it.getLocationOnScreen().y }[(step.field ?: 0) as int]
             SwingUtilities.invokeAndWait { spinner.setValue(step.type as double) }
         }
-        if (step.file != null) {
+        if (step.file != null || step.text != null) {          // `text`: what a person types into text field number `field` (top to bottom): a number field is text too
             def field = components(dialog, javax.swing.JTextField).sort { it.getLocationOnScreen().y }[(step.field ?: 0) as int]
-            SwingUtilities.invokeAndWait { field.setText(step.file as String) }
+            SwingUtilities.invokeAndWait { field.setText((step.file != null ? step.file : step.text) as String) }
         }
         if (step.use != null) {
             def box = components(dialog, javax.swing.JCheckBox).find { it.text?.startsWith("Use ") }
@@ -229,5 +230,17 @@ return [
     cancelAfterMs: { cfg.cancel_after_s ? (long) (cfg.cancel_after_s * 1000) : null },
     maxShapes     : { cfg.max_shapes ? (int) cfg.max_shapes : null },
     maxExportBytes: { cfg.max_export_bytes ? (long) cfg.max_export_bytes : null },       // a small limit instead of a 4 GB image
+    // the prune the host starts after a run: the real one (cfg.prune absent), a recorder ("recorder") or a command that fails ("failing"); tests/prune_recorder.py
+    pruneCommand : { List<String> command ->
+        cfg.prune ? [System.getenv("LC_PYTHON"), System.getenv("LC_PRUNE_RECORDER"), cfg.prune as String, new File(cfg.shots as String, "prune_calls.json").path] + command : command
+    },
+    lookupTimeoutMs: { cfg.lookup_timeout_s ? (long) (cfg.lookup_timeout_s * 1000) : null },    // a short time limit for a ChoicesFrom lookup instead of 60 s
+    // "exit_when_worker_started": Fiji is ended from inside the run (System.exit, which runs the shutdown hooks) as soon as the tool has written its pid (the condition, not a time)
+    whileWaiting : { long elapsedMs ->
+        if (cfg.exit_when_worker_started && cfg.pidfile && new File(cfg.pidfile as String).text.trim()) System.exit(0)
+    },
+    // "cancel_when_worker_started": Cancel is pressed as soon as the tool has written its pid, i.e. when it is certainly inside its blocking call (the condition, not a time after the start)
+    cancelWhen   : { long elapsedMs -> cfg.cancel_when_worker_started && cfg.pidfile && new File(cfg.pidfile as String).text.trim() },
+    awaitPrune   : { true },                                 // the report is read after the run: the prune it started has ended by then
     finish       : finish,
 ]

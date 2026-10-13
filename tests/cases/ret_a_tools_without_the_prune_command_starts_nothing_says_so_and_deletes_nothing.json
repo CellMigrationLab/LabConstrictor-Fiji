@@ -1,0 +1,45 @@
+{
+ "app": "parity",
+ "tool": "Typed choices",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "fixtures": [
+  "HRET-04"
+ ],
+ "tamper": [
+  {
+   "app": "parity",
+   "schema_replace": [
+    "\"retention_prune\"",
+    "\"retention_other\""
+   ]
+  }
+ ],
+ "retention_prefill": {
+  "owned_runs": 60,
+  "foreign": true
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "prune.started": false,
+   "retention.runs.count": 62,
+   "retention.runs.sentinels_intact": 60,
+   "retention.runs.fiji.0.done": true
+  },
+  "match": {
+   "prune.reason": "no 'prune' command"
+  },
+  "log_contains": [
+   "have no 'prune' command"
+  ]
+ }
+}
