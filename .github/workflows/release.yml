@@ -201,7 +201,7 @@ jobs:
           curl -fsSL --retry 5 --retry-delay 10 -o fiji.zip "https://downloads.imagej.net/fiji/latest/fiji-latest-${{ matrix.platform }}-jdk.zip"
           shasum -a 256 fiji.zip 2>/dev/null || sha256sum fiji.zip
           mkdir fiji-dist
-          if [ "$RUNNER_OS" = Windows ]; then tar -xf fiji.zip -C fiji-dist; else unzip -q fiji.zip -d fiji-dist; fi
+          if [ "$RUNNER_OS" = Windows ]; then "$SYSTEMROOT/System32/tar.exe" -xf fiji.zip -C fiji-dist; else unzip -q fiji.zip -d fiji-dist; fi
           rm fiji.zip
       - name: Save Fiji to the cache
         if: steps.fiji-cache.outputs.cache-hit != 'true'
