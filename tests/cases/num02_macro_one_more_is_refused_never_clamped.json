@@ -11,7 +11,7 @@
    ]
   }
  ],
- "conformance": [
+ "fixtures": [
   "NUM-02"
  ],
  "script_macro": "app=numbers tool=[Echo numbers] n=9007199254740992 x=0 m=1",

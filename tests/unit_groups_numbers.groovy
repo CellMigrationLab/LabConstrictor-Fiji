@@ -57,11 +57,11 @@ import groovy.json.JsonSlurper
             check("zero in any spelling is zero", numbers.fromField([type: "float", label: "L", name: "l"], "0e5") == 0.0d && numbers.fromField([type: "float", label: "L", name: "l"], "-0.0") == -0.0d)
         },
         conformance_numbers_coverage: {
-            // no silent skip: every NUM id of the conformance file is run through the dialog and through a macro by a case file ("conformance": [ids] with dialog_steps or script_macro)
+            // no silent skip: every NUM id of the conformance file is run through the dialog and through a macro by a case file ("fixtures": [ids] with dialog_steps or script_macro)
             def N = t.conformance().wrong_science.number_limits, dialog = [] as Set, macro = [] as Set
             new File(t.cfg.cases_dir as String).listFiles({ File f -> f.name.endsWith(".json") } as FileFilter).sort().each { File f ->
                 def parsed = new JsonSlurper().parseText(f.getText("UTF-8"))
-                (parsed.conformance ?: []).findAll { it.startsWith("NUM-") }.each { String id -> if (parsed.dialog_steps) dialog << id; if (parsed.script_macro) macro << id }
+                (parsed.fixtures ?: []).findAll { it.startsWith("NUM-") }.each { String id -> if (parsed.dialog_steps) dialog << id; if (parsed.script_macro) macro << id }
             }
             N.cases*.id.each { String id ->
                 check(id + " is typed into the dialog by a case file", id in dialog)

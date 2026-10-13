@@ -11,7 +11,7 @@
    ]
   }
  ],
- "conformance": [],
+ "fixtures": [],
  "script_macro": "app=numbers tool=[Echo numbers] n=3000000000 x=0 m=1",
  "script_mode_only": true,
  "expect": {
