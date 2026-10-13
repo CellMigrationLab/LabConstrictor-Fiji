@@ -38,16 +38,28 @@ environment through [Appose](https://github.com/apposed/appose), so Fiji never i
 * **Retention** (docs/SPEC_WRONG_SCIENCE.md section 3): **Fiji never deletes anything under `<LC_HOME>/results` or `<LC_HOME>/runs`.** Before this version it wrote its run record folders without the marker files the Tools `prune` needs, so nothing under `runs/` or `results/` could ever be cleaned up by anyone. Now, for every run that starts a worker, Fiji makes `runs/<millisecond time>_<app>_<tool>/` and writes `.lc-owner.json` first (`lc_marker` 1, `kind` `run`, `name`, `host` `fiji`, `pid`, `created`, `token`); when the run is over it writes `run.json` and then, last and atomically, `.lc-done.json` (`ok`, `failed` or `cancelled`: COMPLETE is ok, CANCELED cancelled, FAILED failed, and CRASHED cancelled when the person had pressed Esc and failed otherwise). A results folder `results/<YYYYMMDDTHHMMSS>_<6 hex>_<app>_<tool>/` is made only when a file has to be kept (a file the tool wrote inside Fiji's temporary job folder, a result Fiji cannot show or place) and gets the same two markers; the Log says where the file is, and the run record lists it under `reported_paths`. Then Fiji starts `<the app's Python> -m labconstrictor_tools prune` in a subprocess (it does not wait, ignores the exit code and writes a failure to the shared log; the newest 20 results and 50 run records are kept, counted over finished folders that carry the markers, and a folder of yours or one from an older version without markers is never touched). The status of a finished run, and the content of `run.json`, are produced by the Tools of the app (`labconstrictor_tools.runs.done_status`, `build_record`, `record_json`), not by a copy of their rules here, so **Tools 0.3.0a1 or newer (tag `v0.3.0-alpha.1`) is required**: with an older one the run is refused with a sentence that says so, before anything starts. A Tools without the `retention_prune` feature gets no prune started (the Log says so) and Fiji does not delete the folders itself instead: they stay until Tools is updated. A run whose folders are left without a done marker (Fiji or the machine stopped during the run) is never removed.
 
 ## Install
-1. On the machine, the LabConstrictor apps must be installed and registered (the installer does it; check with
-   `labconstrictor-tools list` / `labconstrictor-tools doctor`). Their `labconstrictor-tools` must be **0.3.0a1 or newer** (tag `v0.3.0-alpha.1`): `pip install git+https://github.com/CellMigrationLab/LabConstrictor-Tools`.
-2. Build and copy the jar (Java 8+ bytecode, runs on any Fiji):
+1. Install a LabConstrictor app (its installer registers it; `labconstrictor-tools list` / `labconstrictor-tools doctor` check it). The plugin needs **labconstrictor-tools 0.3.0a1 or newer** in the app (tag `v0.3.0-alpha.1`); an app with an older one is left out of the list with a sentence in the Log.
+2. Download `labconstrictor-fiji-<tag>.jar` from the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-Fiji/releases),
+   put it into `Fiji.app/plugins/` (remove an older `labconstrictor-fiji-*.jar`) and restart Fiji.
+3. Run **Plugins > LabConstrictor > LabConstrictor Tools...**.
 
-        mvn package
-        cp target/labconstrictor-fiji-0.1.0.jar <Fiji.app>/plugins/      # restart Fiji
+The release also carries `labconstrictor-fiji-script-<tag>.zip`: the no-jar alternative. It holds the script `LabConstrictor_Tools.groovy` **and the `lib` folder it needs**
+(the script alone stops with a message saying where it looked for its helpers). Unzip it so that both sit in `Fiji.app/scripts/Plugins/LabConstrictor/` and use **Plugins > LabConstrictor > LabConstrictor Tools**
+(Fiji also lists the helper files of `lib` in the menu, which is harmless); macro calls (`run("LabConstrictor Tools...", ...)`) need the jar.
+`SHA256SUMS` lists the checksums of both files. Every release jar is installed in Fiji and run on a small GUI case before it is attached.
 
-   (Alternatively copy `src/main/resources/org/cellmigrationlab/labconstrictor/LabConstrictor_Tools.groovy` **and the `lib` folder next to it** to
-   `<Fiji.app>/scripts/Plugins/LabConstrictor/` to run the script without the jar; Fiji lists the helper files of `lib` in the menu too, which is harmless. A script that
-   cannot find a helper stops with a message that says where it looked. The jar has the helpers inside.)
+**Support.** The release gate is Linux: the exact jar is installed in the Fiji build named in the release notes and run on GUI cases. Windows and macOS (arm64) get a best-effort check in the same release run (the menu entry exists and the dialog lists a registered app); its result is shown in that run's summary, it can fail without blocking a release, and nobody has used the plugin on those systems by hand yet, so treat them as untested.
+
+**If it does not work**
+* No menu entry: the jar is not in `Fiji.app/plugins/` (not in a subfolder), or Fiji was not restarted. With both the jar and the script installed the menu lists the tool twice, so keep one.
+* No application to choose: no LabConstrictor app is registered; run `labconstrictor-tools doctor`.
+* A run fails: the error dialog and `~/.labconstrictor/logs/labconstrictor.log` say why.
+
+**Known limits of the pixel-size field.** There is no "use the image's calibration" button: the field follows the image by itself, until you type a value.
+Typing the value the box already shows cannot be detected in a SciJava dialog, so that field is cleared and the run is blocked with a message; a wrong value is never sent.
+
+Developers: `mvn package` builds `target/labconstrictor-fiji-<version>.jar` (Java 8+ bytecode, needs Java and Maven; the version is the one in `pom.xml`).
+The release workflow (`.github/workflows/release.yml`) builds it as the release tag; "Run workflow" with a tag is a dry run that publishes nothing.
 
 Fiji update-site publication is not set up yet.
 
