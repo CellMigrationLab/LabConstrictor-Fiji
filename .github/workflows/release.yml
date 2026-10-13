@@ -1,7 +1,7 @@
 name: release
 # Builds the plugin jar for a release tag, smoke-tests THAT jar in Fiji, and (only for a published release) attaches
 #   labconstrictor-fiji-<tag>.jar, LabConstrictor_Tools.groovy and SHA256SUMS to the release.
-# Dry run: Actions > release > Run workflow, with a tag (e.g. v0.2.0-dry). It builds, smokes and uploads the same files as
+# Dry run: Actions > release > Run workflow, with a tag (e.g. v0.2.0-dry), or a pull request that changes this file or pom.xml. It builds, smokes and uploads the same files as
 # workflow artifacts; it never creates a tag or a release.
 #
 # Version: the committed pom.xml is not changed. The workflow sets the version in its own checkout with
@@ -9,6 +9,8 @@ name: release
 on:
   release:
     types: [published]
+  pull_request:  # a change to this workflow or to the build is dry-run like a manual run (tag v0.0.0-pr); nothing is published
+    paths: [".github/workflows/release.yml", "pom.xml"]
   workflow_dispatch:
     inputs:
       tag:
@@ -37,7 +39,7 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          if [ "$EVENT" = release ]; then tag="$RELEASE_TAG"; else tag="$INPUT_TAG"; fi
+          case "$EVENT" in release) tag="$RELEASE_TAG" ;; workflow_dispatch) tag="$INPUT_TAG" ;; *) tag="v0.0.0-pr" ;; esac
           if ! printf '%s' "$tag" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
             echo "::error::tag '$tag' is not like v1.2.3 or 1.2.3-rc1"; exit 1
           fi
