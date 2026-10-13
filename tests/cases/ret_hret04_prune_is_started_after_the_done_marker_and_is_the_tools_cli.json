@@ -1,0 +1,31 @@
+{
+ "app": "parity",
+ "tool": "Typed choices",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "prune": "recorder",
+ "conformance": [
+  "HRET-04"
+ ],
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "prune_calls.0.mode": "recorder",
+   "prune_calls.0.command.-1": "prune",
+   "prune_calls.0.command.-2": "labconstrictor_tools",
+   "prune_calls.0.command.-3": "-m",
+   "prune_calls.0.unfinished": [],
+   "prune_calls.0.owned": 1,
+   "prune.started": true,
+   "retention.runs.fiji.0.done": true
+  }
+ }
+}

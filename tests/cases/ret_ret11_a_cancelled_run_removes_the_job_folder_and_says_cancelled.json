@@ -1,0 +1,29 @@
+{
+ "app": "synthetic",
+ "tool": "Slow with progress",
+ "register": [
+  {
+   "name": "synthetic",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "overrides": {
+  "seconds": 30.0,
+  "steps": 60
+ },
+ "cancel_after_s": 2.0,
+ "conformance": [
+  "RET-11"
+ ],
+ "expect": {
+  "status": "CANCELED",
+  "job_dir_exists": false,
+  "at": {
+   "retention.runs.fiji.0.status": "cancelled",
+   "retention.runs.fiji.0.done": true,
+   "cancel_requested": true
+  }
+ }
+}

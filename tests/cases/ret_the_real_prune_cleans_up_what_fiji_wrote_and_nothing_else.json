@@ -1,0 +1,41 @@
+{
+ "app": "frames",
+ "tool": "Marks without an image",
+ "register": [
+  {
+   "name": "frames",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/frames_app"
+   ]
+  }
+ ],
+ "retention_prefill": {
+  "owned_results": 22,
+  "owned_runs": 55,
+  "unfinished_runs": 2,
+  "unfinished_results": 2,
+  "legacy_runs": 3,
+  "legacy_results": 3,
+  "foreign": true
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "retention.runs.fiji.0.done": true,
+   "retention.results.fiji.0.done": true,
+   "retention.results.fiji.0.status": "ok",
+   "retention.results.fiji.0.owner_valid": true,
+   "retention.results.fiji.0.name_ok": true,
+   "retention.results.fiji.0.host": "fiji",
+   "retention.runs.count": 56,
+   "retention.runs.sentinels_intact": 54,
+   "retention.runs.foreign_intact": true,
+   "retention.results.count": 26,
+   "retention.results.sentinels_intact": 24,
+   "retention.results.foreign_intact": true,
+   "prune.started": true
+  }
+ }
+}

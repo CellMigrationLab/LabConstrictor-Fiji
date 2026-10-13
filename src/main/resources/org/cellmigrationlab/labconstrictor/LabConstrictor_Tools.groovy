@@ -39,6 +39,9 @@ import java.nio.file.Files
 @Field final int EXIT_POLL_MS = 100              // while a closed worker exits: how often it is looked at
 @Field final int CATALOG_TIMEOUT_S = 30          // how long the app's interpreter gets to name its unit catalog (it only imports the standard library)
 @Field final int MAX_LINKED_FIELDS = 8           // pixel-size fields of one tool that report the person's edits (one callback each: LCModule.edited0 ... edited7)
+@Field final String LIB_PACKAGE = "org/cellmigrationlab/labconstrictor/lib/"   // where the helper sources are inside the jar (src/main/resources/.../lib)
+@Field final String LIB_ENV = "LC_FIJI_LIB"      // a folder that holds the helper sources instead (tests, development)
+@Field final String LIB_FOLDER = "lib"           // the helper sources next to a loose script: <folder of the script>/lib
 @Field final String CALIBRATION_KEY = "_calibration"   // reserved input: the per-axis pixel size with its provenance (tools never see it)
 
 // limits on what is kept, shown or sent
@@ -366,6 +369,8 @@ hooks = [
     cancelAfterMs: { null },                  // ms after the start at which Cancel is sent on its own (null: never)
     maxShapes     : { null },                 // a smaller outline cap (null: MAX_SHAPES), so that a test needs no 50 000 outlines
     maxExportBytes: { null },                 // a smaller export limit (null: MAX_EXPORT_BYTES), so that a test needs no huge image
+    pruneCommand : { List<String> command -> command },   // the command started after a run to prune (a test puts a recorder, or a failing command, in its place)
+    awaitPrune   : { false },                 // true: the run waits for the prune it started (a test reads the folders afterwards); never in normal use
     finish       : { Map summary -> },        // called with the run's summary on every way out; its value is the script's result
 ]
 
@@ -417,9 +422,48 @@ void lcLog(String level, String message, Throwable problem = null) {
     }
 }
 
-/** Delete a temporary folder; a folder that cannot be removed is logged once (it stays on disk), never ignored. */
+@Field GroovyClassLoader libLoader = null                    // compiles the helper sources; one loader, so that a helper can use another
+@Field final Map<String, Class> libraries = [:]              // helper name -> its class (compiled on first use)
+@Field final Map<String, List<String>> LIB_USES = [LCRunRecord: ["LCRetention"]]   // a helper that names another helper's class needs it compiled first (same loader)
+
+/** The source text of the helper `name`: from $LC_FIJI_LIB when that is set, else from the jar, else from the `lib` folder next to the loose script. A helper that
+ *  is nowhere is an error that says where it looked: the plugin never runs without a part of itself. */
+String libSource(String name) {
+    String file = name + ".groovy", looked = ""
+    String folder = System.getenv(LIB_ENV)
+    if (folder) {
+        looked = new File(folder, file).path
+        if (new File(folder, file).isFile()) return new File(folder, file).getText("UTF-8")
+    } else {
+        InputStream stream = this.class.classLoader.getResourceAsStream(LIB_PACKAGE + file)
+        if (stream != null) return stream.withCloseable { InputStream s -> s.getText("UTF-8") }
+        looked = "the jar (" + LIB_PACKAGE + file + ")"
+        String scriptPath = binding.hasVariable("javax.script.filename") ? binding.getVariable("javax.script.filename") as String : null
+        File beside = scriptPath ? new File(new File(scriptPath).absoluteFile.parentFile, LIB_FOLDER + File.separator + file) : null
+        if (beside?.isFile()) return beside.getText("UTF-8")
+        if (beside != null) looked += " and " + beside.path
+    }
+    throw new IllegalStateException("LabConstrictor could not find its helper file " + file + " (looked in " + looked + "). Install the plugin jar, or copy the lib folder next to the script.")
+}
+
+/** The class of the helper `name` (a file of src/main/resources/.../lib): compiled once. Its methods are called on the class, e.g. `lib("LCRetention").writeDone(folder, "ok")`. */
+Class lib(String name) {
+    if (!libraries.containsKey(name)) {
+        (LIB_USES[name] ?: []).each { String used -> lib(used) }
+        if (libLoader == null) libLoader = new GroovyClassLoader(this.class.classLoader)
+        libraries[name] = libLoader.parseClass(libSource(name), name + ".groovy")
+    }
+    return libraries[name]
+}
+
+/** Delete a temporary folder of the host's own (a job folder outside <home>); a folder that cannot be removed is logged once (it stays on disk), never ignored.
+ *  Nothing under <home>/results or <home>/runs is ever deleted by the host (3.1): such a folder is refused here, in one place. */
 void removeFolder(File folder, String what) {
     try {
+        if (lib("LCRetention").touchesRetentionRoots(new File(lcHome()), folder)) {
+            lcLog("ERROR", "refusing to remove the " + what + " " + folder + ": hosts never delete anything under results/ or runs/ (only the Tools prune does)")
+            return
+        }
         if (folder.exists() && !folder.deleteDir()) lcLog("WARNING", "could not remove the " + what + " " + folder)
     } catch (SecurityException problem) {
         lcLog("WARNING", "could not remove the " + what + " " + folder + ": " + problem, problem)
@@ -1371,45 +1415,103 @@ String crashHint(Map outcome) {
     return "The worker process stopped unexpectedly."
 }
 
+/** The worker's own last lines without the protocol chatter ("[SERVICE-n] {...}", raw JSON lines, which the log has): what a person or a run record should read. */
+List<String> workerLines(Map outcome) {
+    return (outcome.workerOutput ?: []).findAll { !(it =~ /^\[SERVICE-\d+\]/) && !it.trim().startsWith("{") } as List<String>
+}
+
 /** Text of the error dialog for a failed or crashed run: what happened, the worker's own output, where the details are. */
 String failureMessage(Map outcome, Map summary) {
     // protocol chatter ("[SERVICE-n] {...}", raw JSON lines) is in the log, not for people; a long line would make the dialog wider than the screen
-    def worker = (outcome.workerOutput ?: []).findAll { !(it =~ /^\[SERVICE-\d+\]/) && !it.trim().startsWith("{") }
+    def worker = workerLines(outcome)
             .collect { it.length() > DIALOG_LINE_CHARS ? it.substring(0, DIALOG_LINE_CHARS) + " …" : it }
     return (outcome.status == "CRASHED" ? crashHint(outcome) + "\n\n" : "") + (outcome.error ?: "failed") +
            (worker ? "\n\nWorker output (last lines):\n" + worker.takeRight(DIALOG_WORKER_LINES).join("\n") : "") +
            "\n\nRun record: " + (summary.run_record ?: "(none)") + "\nLog file: " + new File(lcHome(), "logs/labconstrictor.log").path
 }
 
-/** One folder per run under <home>/runs (never deleted by the host: retention belongs to the Tools CLI): what was run, by which interpreter, what came back. */
-String writeRunRecord(Map app, Map tool, Map inputs, Map outcome) {
+/** The state of a run's owned folders: the run record folder (made when the worker starts, owner marker first) and, only when a file has to be kept, the results folder. */
+Map newRetentionState(Map app, Map tool, Map summary) {
+    Map state = [record: null, kept: [:], identity: [run_id: UUID.randomUUID().toString(), started_utc: lib("LCRetention").nowUtc()]]
     try {
-        def runs = new File(lcHome(), "runs")
-        def stamp = new java.text.SimpleDateFormat("yyyyMMdd'T'HHmmssSSS", Locale.ROOT).format(new Date())
-        def folder = new File(runs, stamp + "_" + slug(app.name as String) + "_" + slug(tool.id as String))
-        if (folder.canonicalFile.parentFile != runs.canonicalFile) throw new IOException("run folder " + folder + " is not inside " + runs)
-        folder.mkdirs()
-        new File(folder, "run.json").text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
-            app: app.name, app_version: app.version, tool: tool.id, host: "fiji", status: outcome.status, error: outcome.error,
-            seconds: outcome.seconds, inputs: inputs, worker_output_tail: outcome.workerOutput, log_file: new File(lcHome(), "logs/labconstrictor.log").path, progress_events: outcome.progress, interpreter: outcome.outputs?.diagnostics,
-            results: (outcome.outputs?.results ?: []).collect { it.findAll { k, v -> k != "matrix_yx" } }]))
-        return folder.path
+        state.record = lib("LCRetention").makeRunFolder(new File(lcHome()), app.name as String, tool.id as String)
+        summary.run_record = (state.record as File).path
     // groovylint-disable-next-line CatchException
-    } catch (Exception problem) {                       // a record must never break a run, but its absence must be visible
-        lcLog("WARNING", "could not write the run record: " + problem, problem)
-        return null
+    } catch (Exception problem) {                     // a record must never break a run, but its absence must be visible
+        lcLog("WARNING", "could not make the run record folder: " + problem, problem)
+        IJ.log("LabConstrictor: the run record folder could not be made (" + problem.message + "); this run will have no record")
+        summary.run_record_error = problem.toString()
+    }
+    return state
+}
+
+/** The outcome of a run that the host itself could not carry out (an exception before or after the worker): recorded as failed, with the exception as the error. */
+Map hostFailureOutcome(Throwable problem) {
+    return [status: "FAILED", complete: false, error: "LabConstrictor (Fiji) failed: " + problem, workerOutput: [], outputs: [:], progress: [], cancelRequested: false, seconds: 0.0d]
+}
+
+/** Complete the owned folders of a finished run: run.json (content and status from the Tools helpers), `.lc-done.json` in the run record folder and in the results
+ *  folder if there is one (last, 3.2), then the prune subprocess (3.1.3). Never throws: a problem is said in the Log and the folders then stay unfinished, which
+ *  means they are never removed (a half-written folder is never eligible). Returns the path of the run record folder, or null. */
+String finishRetention(Map inputs, Map outcome, Map run, Map summary) {
+    Map app = run.app, tool = run.tool
+    File record = run.kept.record as File, results = run.kept.folder as File
+    if (record == null && results == null) return null
+    try {
+        Map<String, Object> reported = (run.kept.paths ?: [:]) as Map<String, Object>
+        Map<String, Object> request = [app: app.name, tool: tool.id, inputs: inputs, seconds: outcome.seconds, stderr: workerLines(outcome).join("\n"),
+                                       run_id: run.kept.identity.run_id, started_utc: run.kept.identity.started_utc, finished_utc: lib("LCRetention").nowUtc(),
+                                       task: [status: outcome.status, error: outcome.error, code: null, traceback: null, outputs: outcome.outputs ?: [:], cancel_requested: outcome.cancelRequested],
+                                       extra: [host: "fiji", log_file: new File(lcHome(), "logs/labconstrictor.log").path, reported_paths: reported]]
+        Map<String, Object> made = lib("LCRunRecord").compose(app, request, lcHome(), SCRUBBED_ENV)
+        if (record != null) new File(record, "run.json").setText(made.record as String, "UTF-8")
+        [record, results].findAll { it != null }.each { File folder -> lib("LCRetention").writeDone(folder, made.status as String) }
+        summary.done_status = made.status
+        startPrune(app, summary)
+        return record?.path
+    // groovylint-disable-next-line CatchException
+    } catch (Exception problem) {                       // the folders stay as they are (no done marker): nothing is removed, and the person is told
+        lcLog("ERROR", "could not complete the run record: " + problem, problem)
+        IJ.log("LabConstrictor: the run record could not be completed (" + problem.message + "); the folder stays unfinished and is not cleaned up: " + (record ?: results))
+        summary.run_record_error = problem.toString()
+        return record?.path
     }
 }
 
-/** Run the tool, then keep the command and the run record and show the outcome. */
+/** After the done markers: start the Tools prune in a subprocess and go on (3.1.3). It is not waited for, its exit code is ignored and a failure goes to the log;
+ *  a Tools without the command starts nothing, says so, and nothing is deleted by the host instead (compatibility rule 6). */
+void startPrune(Map app, Map summary) {
+    String unavailable = lib("LCRetention").pruneUnavailable(app.schema as Map)
+    if (unavailable != null) {
+        lcLog("WARNING", unavailable)
+        IJ.log("LabConstrictor: " + unavailable)
+        summary.prune = [started: false, reason: unavailable]
+        return
+    }
+    List<String> command = hooks.pruneCommand(lib("LCRetention").pruneCommand(app)) as List<String>
+    Map<String, String> environment = [PYTHONPATH: app.runtime_path, PYTHONNOUSERSITE: "1", PYTHONSAFEPATH: "1", PYTHONIOENCODING: "utf-8", LC_HOME: lcHome()]
+    Thread watcher = lib("LCRetention").startPrune(command, environment, new File(System.getProperty("user.dir")), { String level, String message, Throwable problem -> lcLog(level, message, problem) })
+    summary.prune = [started: watcher != null, command: command]
+    if (watcher != null && hooks.awaitPrune()) watcher.join()
+}
+
+/** Run the tool, then keep the command and show the outcome; the run's owned folders are completed whatever happens (see finishRetention). */
 void runAndShow(Map app, Map tool, Map inputs, Map run, Map summary) {
-    def outcome = runTool(app, tool, inputs)
-    summary << [request: inputs, status: outcome.status, error: outcome.error, progress_events: outcome.progress,
-                worker_alive_after: outcome.workerAlive, cancel_requested: outcome.cancelRequested]
-    summary.timings.worker_run_s = outcome.seconds
-    rememberCommand(app, tool, inputs, run.images, summary)
-    summary.run_record = writeRunRecord(app, tool, inputs, outcome)
-    reportOutcome(app, outcome, run, summary)
+    Map outcome = null
+    try {
+        outcome = runTool(app, tool, inputs)
+        summary << [request: inputs, status: outcome.status, error: outcome.error, progress_events: outcome.progress,
+                    worker_alive_after: outcome.workerAlive, cancel_requested: outcome.cancelRequested]
+        summary.timings.worker_run_s = outcome.seconds
+        rememberCommand(app, tool, inputs, run.images, summary)
+        reportOutcome(app, outcome, run, summary)
+    // groovylint-disable-next-line CatchThrowable
+    } catch (Throwable problem) {                         // whatever stops the run: the record says so, then the problem goes on to the entry point
+        outcome = outcome ?: hostFailureOutcome(problem)
+        throw problem
+    } finally {
+        finishRetention(inputs, outcome ?: hostFailureOutcome(new IllegalStateException("the run did not report an outcome")), run, summary)
+    }
 }
 
 // ---- the coordinate frame (docs/SPEC_WRONG_SCIENCE.md section 1)
@@ -1495,25 +1597,28 @@ String planeProblem(boolean namesPlanes, ImagePlus image) {
     return namesPlanes && image.getStackSize() > 1 ? "it has t / z planes and this version places results on the exported plane only" : null
 }
 
-/** A results folder of this run under <home>/results, made on first use: results that could not be placed are kept there (1.1.5). Never written to by
- *  anything else and carrying no owner marker, so the Tools' prune never removes it. */
+/** The results folder of this run under <home>/results, made on first use and owned (owner marker first, done marker when the run ends): a result file the host could
+ *  not draw, or a FileOut written inside the job folder (which is removed), is moved here and this path is what the person is told (3.4). Older ones are cleaned
+ *  up by the Tools prune like every owned folder past the quota; the host never deletes them. */
 File keptFolder(Map run) {
-    if (!run.kept.folder) {
-        def stamp = new java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss", Locale.ROOT).format(new Date())
-        def results = new File(lcHome(), "results")
-        def folder = new File(results, stamp + "_" + Long.toHexString(System.nanoTime()) + "_" + slug(run.app.name as String) + "_" + slug((run.tool?.id ?: "tool") as String))
-        folder.mkdirs()
-        if (folder.canonicalFile.parentFile != results.canonicalFile) throw new IOException("results folder " + folder + " is not inside " + results)
-        run.kept.folder = folder
-    }
+    if (!run.kept.folder) run.kept.folder = lib("LCRetention").makeResultFolder(new File(lcHome()), run.app.name as String, (run.tool?.id ?: "tool") as String)
     return run.kept.folder as File
 }
 
-/** Keep a result file the host could not draw: copied (the job folder is removed) into this run's results folder. Returns the new path. */
-String keepResultFile(Map run, String path) {
-    def target = new File(keptFolder(run), new File(path).name)
-    Files.copy(new File(path).toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+/** Keep a result file the host could not draw: copied (the job folder is removed) into this run's results folder, never over a file already there. Returns the new
+ *  path, which the run record also lists under `reported_paths`. */
+String keepResultFile(Map run, String path, String resultName = null) {
+    File source = new File(path), folder = keptFolder(run)
+    File target = new File(folder, source.name)
+    for (int n = 1; target.exists(); n++) target = new File(folder, n + "_" + source.name)
+    Files.copy(source.toPath(), target.toPath())
+    if (resultName != null) run.kept.paths = (run.kept.paths ?: [:]) + [(resultName): target.path]
     return target.path
+}
+
+/** Whether `path` is inside the job folder of the run (the folder that is removed when the run ends). */
+boolean insideJobFolder(Map run, String path) {
+    return run.jobDir != null && new File(path).canonicalFile.toPath().startsWith((run.jobDir as File).canonicalFile.toPath())
 }
 
 /** The sentence for an image or labels result whose size is not the exported size of its source (1.1.7); the one in conformance.json messages.size_mismatch. */
@@ -1560,21 +1665,44 @@ Map showResults(Map app, List results, Map run) {
                 case "message": showMessage(app, r, summary); break
                 case "points": showPoints(app, r, run, summary, r.name in replaced); break
                 case "shapes": showShapes(app, r, run, summary, r.name in replaced); break
-                case "file":
-                    if (!new File(r.path as String).isFile()) throw new IllegalStateException("the tool reported the file " + r.path + " but it does not exist")
-                    IJ.log("Output file: " + r.path); break
+                case "file": showFile(r, run, summary); break
                 case "affine": showAffine(r, run.images, results, summary, r.name in replaced); break
                 default: throw new IllegalStateException("the tool returned a result of the type '" + r.type + "', which this version of Fiji LabConstrictor cannot show")
             }
         // groovylint-disable-next-line CatchException
         } catch (Exception problem) {          // broad on purpose: one result that cannot be shown must not hide the others
-            def text = "could not show the result '" + r.name + "': " + problem.message
+            def text = "could not show the result '" + r.name + "': " + problem.message + keepUnshown(run, r, summary)
             lcLog("ERROR", text, problem)
             IJ.log("LabConstrictor: " + text)
             summary.display_errors = (summary.display_errors ?: []) + [text]
         }
     }
     return summary
+}
+
+/** A result that could not be shown still has its file in the job folder, which is removed when the run ends: it is moved to the owned results folder and the sentence says
+ *  where it is (RET-14). Returns the text to add to the message ("" when there is no file or it is outside the job folder). A move that fails is said, never hidden. */
+String keepUnshown(Map run, Map r, Map summary) {
+    if (!(r.path instanceof String) || !new File(r.path as String).isFile() || !insideJobFolder(run, r.path as String)) return ""
+    try {
+        String kept = keepResultFile(run, r.path as String, r.name as String)
+        summary["kept_" + r.name] = kept
+        return "; the file is kept at " + kept
+    // groovylint-disable-next-line CatchException
+    } catch (Exception problem) {
+        lcLog("ERROR", "could not keep the file of the result '" + r.name + "': " + problem, problem)
+        return "; the file could NOT be kept (" + problem.message + ") and goes with the temporary folder"
+    }
+}
+
+/** A file result: a file the tool wrote inside the job folder is moved to the owned results folder and that path is reported, never the path of a folder about to be
+ *  removed (RET-10); a file anywhere else is reported where it is and never moved or changed. */
+void showFile(Map r, Map run, Map summary) {
+    if (!new File(r.path as String).isFile()) throw new IllegalStateException("the tool reported the file " + r.path + " but it does not exist")
+    String shown = insideJobFolder(run, r.path as String) ? keepResultFile(run, r.path as String, r.name as String) : r.path as String
+    IJ.log("Output file: " + shown)
+    lcLog("INFO", "output file " + r.name + ": " + shown)
+    summary["file_" + r.name] = shown
 }
 
 /** One value of a `values` result as text. JSON cannot hold NaN or Infinity, so the worker sends them as null: the protocol says a host reads that as "not a finite number". */
@@ -1595,8 +1723,8 @@ void showValues(Map app, Map r, Map summary) {
  *  declares ApplyTo takes the calibration of its source when the sizes match, else it stays at the pixel origin and the size mismatch is said once (1.1.7). The
  *  place is always recomputed from this result and its source: the window it replaces is gone, so nothing of it is kept (1.1.8). */
 void showImage(Map app, Map r, Map run, Map summary, boolean replace = false) {
-    def imp = IJ.openImage(r.path)
-    if (imp == null) { IJ.error("LabConstrictor", "Fiji cannot open result image " + r.name); return }
+    def imp = openForChannel(new File(r.path as String))   // ImageJ's own "cannot open" dialog goes to the Log (a modal dialog would block the run)
+    if (imp == null) throw new IllegalStateException("Fiji cannot open the result image (the reason is in the Log window)")
     def title = app.name + ":" + r.name
     if (replace) {                                           // Replace(): the previous result of this output makes way (no "name [1]" pile)
         def previous = WindowManager.getImage(title)
@@ -1626,7 +1754,7 @@ void showMessage(Map app, Map r, Map summary) {
 
 /** Why a points or outlines result is not drawn: the files are kept (the job folder is removed) and the sentence says where. Returns the kept path. */
 String keepUndrawn(Map run, Map r, String what, String reason) {
-    def kept = keepResultFile(run, r.path as String)
+    def kept = keepResultFile(run, r.path as String, r.name as String)
     def sentence = "'" + r.name + "': " + what + " not placed on an image: " + reason + ". The file is " + kept
     lcLog("INFO", sentence)
     IJ.log("LabConstrictor: " + sentence)
@@ -2225,9 +2353,28 @@ void rememberCommand(Map app, Map tool, Map inputs, Map images, Map summary) {
     }
 }
 
+/** Null when the Tools of `app` can write run records (labconstrictor-tools 0.3.0a1 or newer, with the three `runs` helpers); else the sentence that refuses the run.
+ *  A helper that cannot be run at all refuses as well, with its own sentence: nothing is started without a record. */
+String runRecordProblem(Map app) {
+    try {
+        return lib("LCRunRecord").problem(app, lcHome(), SCRUBBED_ENV) as String
+    // groovylint-disable-next-line CatchException
+    } catch (Exception problem) {
+        lcLog("ERROR", "the Tools of " + app.name + " could not be asked: " + problem, problem)
+        return "The Tools of '" + app.name + "' could not be asked whether they can write run records (" + problem.message + "). Nothing was started."
+    }
+}
+
 // ---- entry point
 /** Export the inputs into a job folder (removed whatever happens), run the tool and show what came back. */
 def runRequest(Map app, Map tool, def module, Map summary) {
+    String toolsProblem = runRecordProblem(app)
+    if (toolsProblem != null) {                                   // the record is part of a run: no run with a Tools that cannot write it
+        lcLog("ERROR", "refused: " + toolsProblem)
+        if (hooks.interactive) IJ.error("LabConstrictor", toolsProblem)
+        IJ.log("LabConstrictor: " + toolsProblem)
+        return hooks.finish(summary + [error: toolsProblem])
+    }
     def jobDir = Files.createTempDirectory("lcjob_fiji_").toFile()
     try {                                                        // the folder goes whatever happens from here on
         List exported
@@ -2241,7 +2388,7 @@ def runRequest(Map app, Map tool, def module, Map summary) {
         def (inputs, images, modifiers, frames) = exported
         summary.modifiers = modifiers
         summary.frames = describeFrames(frames)
-        runAndShow(app, tool, inputs, [app: app, tool: tool, images: images, frames: frames, kept: [:]], summary)
+        runAndShow(app, tool, inputs, [app: app, tool: tool, images: images, frames: frames, kept: newRetentionState(app, tool, summary), jobDir: jobDir], summary)
         if (summary.status == "COMPLETE") rememberDepends(app, tool, inputs)
     } finally {
         removeFolder(jobDir, "job folder of the run")

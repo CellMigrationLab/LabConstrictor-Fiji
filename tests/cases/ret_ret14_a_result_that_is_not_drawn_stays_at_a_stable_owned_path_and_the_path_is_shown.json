@@ -1,0 +1,44 @@
+{
+ "app": "frames",
+ "tool": "Marks without an image",
+ "register": [
+  {
+   "name": "frames",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/frames_app"
+   ]
+  }
+ ],
+ "conformance": [
+  "RET-14"
+ ],
+ "expect": {
+  "status": "COMPLETE",
+  "job_dir_exists": false,
+  "match": {
+   "undrawn_pts.kept": "/results/",
+   "undrawn_shp.kept": "/results/"
+  },
+  "file_text_contains": {
+   "undrawn_pts.kept": "y,x",
+   "undrawn_shp.kept": "Polygon"
+  },
+  "at": {
+   "retention.results.count": 1,
+   "retention.results.fiji.0.status": "ok",
+   "retention.results.fiji.0.owner_valid": true,
+   "retention.results.fiji.0.files": [
+    ".lc-done.json",
+    ".lc-owner.json",
+    "pts.csv",
+    "shp.geojson"
+   ]
+  },
+  "log_contains": [
+   "not placed on an image: the tool has no image input to place them on",
+   ". The file is "
+  ]
+ }
+}

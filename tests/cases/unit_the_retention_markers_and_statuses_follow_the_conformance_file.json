@@ -1,0 +1,28 @@
+{
+ "unit_checks": [
+  "conformance_retention",
+  "conformance_done_status",
+  "conformance_retention_coverage",
+  "retention_lib_loading"
+ ],
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "cases_dir": "${V3}/tests/cases",
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 40
+  }
+ }
+}

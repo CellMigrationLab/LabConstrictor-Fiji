@@ -1,0 +1,26 @@
+{
+ "app": "retention",
+ "tool": "Writes a report and fails",
+ "register": [
+  {
+   "name": "retention",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/retention_app"
+   ]
+  }
+ ],
+ "conformance": [
+  "RET-11"
+ ],
+ "expect": {
+  "status": "FAILED",
+  "job_dir_exists": false,
+  "at": {
+   "retention.runs.fiji.0.status": "failed",
+   "retention.runs.fiji.0.done": true,
+   "retention.results.count": 0
+  }
+ }
+}

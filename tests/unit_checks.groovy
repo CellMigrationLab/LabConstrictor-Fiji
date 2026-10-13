@@ -420,6 +420,12 @@ def groups = [
     },
 ]
 
+// groups kept in files of their own (tests/unit_groups_*.groovy, each a closure that takes the toolbox and returns its groups by name)
+def toolbox = [lc: lc, check: check, refuses: refuses, conformance: conformance, cfg: cfg, failures: failures, unsupported: unsupported]
+new File(System.getenv("LC_UNIT_GROUPS")).listFiles({ File f -> f.name.startsWith("unit_groups_") && f.name.endsWith(".groovy") } as FileFilter).sort().each { File file ->
+    groups += (new GroovyShell(this.class.classLoader).evaluate(file) as Closure).call(toolbox) as Map
+}
+
 cfg.unit_checks.each { String group ->
     if (!groups.containsKey(group)) failures << ("unknown group " + group)
     else try { groups[group]() } catch (Exception problem) { failures << (group + " raised " + problem) }   // the report is written whatever happens

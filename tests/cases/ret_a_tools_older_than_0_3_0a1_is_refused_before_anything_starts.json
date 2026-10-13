@@ -1,0 +1,37 @@
+{
+ "app": "parity",
+ "tool": "Typed choices",
+ "register": [
+  {
+   "name": "parity",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/parity_app"
+   ]
+  }
+ ],
+ "tamper": [
+  {
+   "app": "parity",
+   "entry": {
+    "runtime_path": "${V3}/tests/fake_tools/rc2"
+   }
+  }
+ ],
+ "expect": {
+  "match": {
+   "error": "needs labconstrictor-tools 0.3.0a1 or newer (v0.3.0-alpha.1)"
+  },
+  "absent_keys": [
+   "status",
+   "run_record"
+  ],
+  "at": {
+   "retention.runs.count": 0
+  },
+  "log_contains": [
+   "refused: The Tools of 'parity' (labconstrictor-tools 0.2.0rc1)"
+  ]
+ }
+}
