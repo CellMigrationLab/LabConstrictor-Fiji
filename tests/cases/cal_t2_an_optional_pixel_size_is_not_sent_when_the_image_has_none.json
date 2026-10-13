@@ -1,0 +1,58 @@
+{
+ "app": "calibration",
+ "tool": "Pixel size optional",
+ "register": [
+  {
+   "name": "calibration",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/calibration_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "a.tif",
+   "pixel_size": 0.25
+  },
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "u.tif"
+  }
+ ],
+ "select": [
+  "a.tif"
+ ],
+ "overrides": {
+  "image": "a.tif"
+ },
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "steps": [
+    [
+     0.0
+    ]
+   ],
+   "values_values.has_pixel_size": 0.0,
+   "request.pixel_size": "$absent",
+   "request._calibration": "$absent"
+  },
+  "not_contains": {
+   "dialog_inputs": [
+    "set_pixel_size"
+   ]
+  }
+ },
+ "dialog_steps": [
+  {
+   "select": "u.tif"
+  }
+ ],
+ "conformance": [
+  "CAL-T2"
+ ]
+}

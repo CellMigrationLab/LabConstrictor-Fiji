@@ -1,0 +1,40 @@
+{
+ "app": "calibration",
+ "tool": "Pixel size required",
+ "register": [
+  {
+   "name": "calibration",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/calibration_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "d.tif",
+   "pixel_width": 0.5,
+   "unit": "\ufffdm"
+  }
+ ],
+ "select": [
+  "d.tif"
+ ],
+ "overrides": {
+  "image": "d.tif"
+ },
+ "script_mode_only": true,
+ "expect": {
+  "at": {
+   "error": "'pixel_size' needs a value: 'image' has no pixel size. Enter it in um."
+  },
+  "log_contains": [
+   "unit text '\ufffdm' is damaged; enter the pixel size"
+  ]
+ },
+ "conformance": [
+  "CAL-16"
+ ]
+}

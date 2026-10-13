@@ -1,0 +1,30 @@
+{
+ "app": "calibration",
+ "tool": "Pixel size required",
+ "register": [
+  {
+   "name": "calibration",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/calibration_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "u.tif"
+  }
+ ],
+ "expect": {
+  "at": {
+   "error": "'pixel_size' needs a value: 'image' has no pixel size. Enter it in um.",
+   "request": "$absent"
+  }
+ },
+ "conformance": [
+  "CAL-T8"
+ ],
+ "macro": "app=calibration tool=[Pixel size required] image=u.tif"
+}

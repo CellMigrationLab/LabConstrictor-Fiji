@@ -1,0 +1,87 @@
+{
+ "app": "calibration",
+ "tool": "Pixel size required",
+ "register": [
+  {
+   "name": "calibration",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/calibration_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "a.tif",
+   "pixel_size": 0.25
+  },
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "b.tif",
+   "pixel_size": 0.5
+  }
+ ],
+ "select": [
+  "a.tif"
+ ],
+ "overrides": {
+  "image": "a.tif"
+ },
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "calibration_states_initial.pixel_size": {
+    "state": "auto",
+    "value": 0.25,
+    "source": "image"
+   },
+   "steps": [
+    [
+     0.5
+    ]
+   ],
+   "request.pixel_size": 0.5,
+   "request._calibration.pixel_size": {
+    "of": "image",
+    "source": "image",
+    "axes": {
+     "x": {
+      "value": 0.5,
+      "unit": "um",
+      "source": "image",
+      "raw": {
+       "scale": 0.5,
+       "unit": "\u00b5m"
+      }
+     },
+     "y": {
+      "value": 0.5,
+      "unit": "um",
+      "source": "image",
+      "raw": {
+       "scale": 0.5,
+       "unit": "\u00b5m"
+      }
+     }
+    }
+   },
+   "calibration_states.pixel_size": {
+    "state": "auto",
+    "value": 0.5,
+    "source": "image"
+   },
+   "values_values.pixel_size": 0.5
+  }
+ },
+ "dialog_steps": [
+  {
+   "select": "b.tif"
+  }
+ ],
+ "conformance": [
+  "CAL-T1"
+ ]
+}

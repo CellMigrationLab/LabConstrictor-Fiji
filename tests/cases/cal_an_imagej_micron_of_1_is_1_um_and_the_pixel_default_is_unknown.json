@@ -1,0 +1,63 @@
+{
+ "app": "calibration",
+ "tool": "Pixel size required",
+ "register": [
+  {
+   "name": "calibration",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/calibration_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "m.tif",
+   "pixel_width": 1.0,
+   "unit": "micron"
+  }
+ ],
+ "select": [
+  "m.tif"
+ ],
+ "overrides": {
+  "image": "m.tif"
+ },
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "request.pixel_size": 1.0,
+   "request._calibration.pixel_size": {
+    "of": "image",
+    "source": "image",
+    "axes": {
+     "x": {
+      "value": 1.0,
+      "unit": "um",
+      "source": "image",
+      "raw": {
+       "scale": 1.0,
+       "unit": "micron"
+      }
+     },
+     "y": {
+      "value": 1.0,
+      "unit": "um",
+      "source": "image",
+      "raw": {
+       "scale": 1.0,
+       "unit": "micron"
+      }
+     }
+    }
+   }
+  }
+ },
+ "conformance": [
+  "CAL-08",
+  "CAL-01"
+ ]
+}

@@ -223,7 +223,7 @@ def groups = [
         def named = [] as Set
         new File(cfg.cases_dir as String).listFiles({ File f -> f.name.endsWith(".json") } as FileFilter).sort().each { File f ->
             def ids = new JsonSlurper().parseText(f.getText("UTF-8")).conformance
-            (ids ?: []).each { String id -> named << id; check(f.name + " names " + id + ", which is in conformance.json", id in known) }
+            (ids ?: []).each { String id -> named << id; check(f.name + " names " + id + ", which is in conformance.json", id in known || id.startsWith("CAL-")) }       // the CAL ids are checked by conformance_calibration_coverage
         }
         def atFunctionLevel = ["CF-01", "CF-02", "CF-03", "CF-09", "CF-14"] as Set       // the arithmetic of placement, the mask pixels and the offsets (conformance_frame)
         def notApplicable = [
@@ -235,6 +235,188 @@ def groups = [
             if (notApplicable.containsKey(id)) unsupported << (id + " " + notApplicable[id])
         }
         check("the not-applicable cases are not also claimed as run", notApplicable.keySet().every { !(it in named) && !(it in atFunctionLevel) })
+    },
+    conformance_calibration: {
+        // docs/SPEC_WRONG_SCIENCE.md section 2, conformance.json wrong_science.calibration: CAL-01..CAL-20 at the level of the unit conversion, with an open image's Calibration
+        // (what Fiji reads) and with TIFF files (tests/run_cases.py writes them from the same cases); the request the host would send is checked in conformance_calibration_request
+        def C = conformance(), CAL = C.wrong_science.calibration
+        def LC = lc.getClass().getClassLoader().loadClass("LCCalibration")
+        LC.catalog = LC.catalogFrom(C)                           // the catalog from the conformance file itself, never from a copy
+        def cases = CAL.cases.collectEntries { [(it.id): it] }
+        (1..20).each { n -> check(String.format("CAL-%02d is in conformance.json", n), cases.containsKey(String.format("CAL-%02d", n))) }
+        def near = { def found, def wanted -> found != null && Math.abs((found as double) - (wanted as double)) <= 1e-9 * Math.max(1.0d, Math.abs(wanted as double)) }
+        def imageWith = { double width, double height, String unit ->
+            def imp = new ij.ImagePlus("c", new ij.process.ByteProcessor(2, 2))
+            imp.getCalibration().pixelWidth = width; imp.getCalibration().pixelHeight = height; imp.getCalibration().setUnit(unit)
+            imp
+        }
+        def check1 = { String name, Map found, def expected, String warning = null ->
+            if (expected == "unknown") check(name + " is unknown", !found.known && found.value == null, found.toString())
+            else check(name + " is " + expected, found.known && near(found.value, expected), found.value.toString())
+            if (warning != null) check(name + " warns '" + warning + "'", found.warning == warning, String.valueOf(found.warning))
+        }
+        // the sentences are the conformance ones
+        check("pixels are not square is the conformance text", LC.message("pixels_not_square_warning") == C.messages.pixels_not_square_warning.template)
+        check("unit 's' is not a length", LC.message("unit_not_length_warning", [unit: "s"]) == C.messages.unit_not_length_warning.template.replace("{unit}", "s"))
+        // CAL-01..04: a layer's scale and units in Napari are an ImageJ image's pixelWidth, pixelHeight and unit here (a bare scale with the default unit is unknown)
+        [["CAL-01", [1d, 1d], "micrometer", 1.0], ["CAL-02", [1d, 1d], "pixel", "unknown"], ["CAL-03", [1d, 1d], "millimeter", 1000.0]].each { id, scale, unit, wanted ->
+            check1(id, LC.ofImage(imageWith(scale[1], scale[0], unit)), wanted)
+        }
+        cases["CAL-04"].input.units.each { units -> check1("CAL-04 scale 0.25 units " + units, LC.ofImage(imageWith(0.25d, 0.25d, units[0] as String)), "unknown") }
+        cases["CAL-05"].input.variants.each { v -> check1("CAL-05 " + v.scale + " " + v.unit, LC.ofImage(imageWith(v.scale as double, v.scale as double, v.unit as String)), cases["CAL-05"].expect.um_per_px) }
+        check1("CAL-06", LC.ofImage(imageWith(0.25d, 0.5d, "um")), "unknown", "pixels are not square")                  // scale (y 0.5, x 0.25)
+        check1("CAL-07", LC.ofImage(imageWith(1d, 1d, "second")), "unknown", "unit 'second' is not a length")
+        cases["CAL-08"].input.variants.eachWithIndex { v, i -> check1("CAL-08 (ImageJ) unit '" + v.unit + "' width " + v.pixelWidth, LC.ofImage(imageWith(v.pixelWidth as double, v.pixelWidth as double, v.unit as String)), cases["CAL-08"].expect.um_per_px_each[i]) }
+        unsupported << "CAL-09 QuPath PixelCalibration: QuPath only"
+        cases["CAL-15"].input.variants.each { v -> check1("CAL-15 '" + v.unit + "'", LC.ofImage(imageWith(v.scale as double, v.scale as double, v.unit as String)), 0.5) }
+        check1("CAL-16", LC.ofImage(imageWith(0.5d, 0.5d, cases["CAL-16"].input.unit as String)), "unknown", cases["CAL-16"].expect.warning as String)
+        cases["CAL-17"].input.variants.each { v -> check1("CAL-17 '" + v.unit + "'", LC.ofImage(imageWith(1d, 1d, v.unit as String)), 0.0001) }
+        cases["CAL-18"].input.variants.eachWithIndex { v, i ->
+            check1("CAL-18 scale " + v.scale, LC.ofImage(imageWith(v.scale[1] as double, v.scale[0] as double, v.unit as String)), cases["CAL-18"].expect.um_per_px_each[i], i == 1 ? "pixels are not square" : null)
+        }
+        CAL.unit_match_refused.each { name -> check1("CAL-19 unit '" + name + "'", LC.ofImage(imageWith(1d, 1d, name as String)), "unknown") }
+        check("CAL-19 names " + CAL.unit_match_refused.size() + " units", CAL.unit_match_refused.size() == cases["CAL-19"].expect.um_per_px_each.size())
+        cases["CAL-20"].input.variants.eachWithIndex { v, i -> check1("CAL-20 '" + v.unit + "'", LC.ofImage(imageWith(1d, 1d, v.unit as String)), cases["CAL-20"].expect.um_per_px_each[i]) }
+        // the catalog itself: every name of it converts, symbols exactly, words in any case with spaces around, never a symbol in another case
+        CAL.length_units.each { name, unit ->
+            unit.symbols.each { check1("catalog symbol '" + it + "'", LC.ofImage(imageWith(1d, 1d, it as String)), unit.um_per_unit) }
+            unit.words.each { word ->
+                check1("catalog word '" + word + "'", LC.ofImage(imageWith(1d, 1d, " " + (word as String).toUpperCase() + " ")), unit.um_per_unit)
+                check1("catalog word '" + word + "' with a space inside", LC.ofImage(imageWith(1d, 1d, (word as String).substring(0, 3) + " " + (word as String).substring(3))), "unknown")
+            }
+        }
+        // ImageJ's own spellings: the blank default unit of an uncalibrated image, "pixel", "micron" and "microns", the micro sign it writes for "um"
+        check("ImageJ's blank default unit is unknown and says nothing", !LC.ofImage(imageWith(0.5d, 0.5d, " ")).known && LC.ofImage(imageWith(0.5d, 0.5d, " ")).warning == null && LC.ofImage(new ij.ImagePlus("u", new ij.process.ByteProcessor(2, 2))).warning == null)
+        check1("ImageJ's microns", LC.ofImage(imageWith(0.5d, 0.5d, "microns")), 0.5d)
+        check("ImageJ keeps 'um' typed into a Calibration as the micro sign, which is a symbol of the catalog", imageWith(0.5d, 0.5d, "um").getCalibration().getUnit() == "\u00b5m" && LC.ofImage(imageWith(0.5d, 0.5d, "um")).value == 0.5d)
+        // the unit of X and of Y are read apart (ImageJ keeps one per axis)
+        def mixed = imageWith(0.5d, 0.5d, "um"); mixed.getCalibration().setYUnit("mm")
+        check("X in um and Y in mm are not one pixel size", !LC.ofImage(mixed).known)
+        check("a size of 0 or below is unknown", !LC.ofImage(imageWith(0d, 0d, "um")).known && !LC.ofImage(imageWith(-1d, -1d, "um")).known)
+        // TIFF files (CAL-10..CAL-14 and a few more of the same kind), written by run_cases.py with tifffile from the same cases
+        def file = { String name -> new File(cfg.files_dir as String, name + ".tif") }
+        def ofFile = { String name -> LC.ofFile(file(name)) }
+        cases["CAL-10"].expect.um_per_px_each.eachWithIndex { wanted, i -> check1("CAL-10 file " + i, ofFile("CAL-10_" + i), wanted) }
+        check("CAL-10 ImageJ unit names the file as the source", ofFile("CAL-10_0").source == "file" && ofFile("CAL-10_0").x.raw == [scale: 1.0d, unit: "micron"], ofFile("CAL-10_0").toString())
+        check1("CAL-11 72 dpi", ofFile("CAL-11"), "unknown")
+        check1("CAL-12 96 dpi", ofFile("CAL-12"), "unknown")
+        cases["CAL-13"].input.variants.eachWithIndex { v, i -> check1("CAL-13 " + v.resolution, ofFile("CAL-13_" + i), "unknown") }
+        check1("CAL-14 25400 dpi", ofFile("CAL-14"), cases["CAL-14"].expect.um_per_px)
+        check("CAL-14 the source is the file", ofFile("CAL-14").source == cases["CAL-14"].expect.source)
+        check1("72.3 dpi is within 0.5 % of 72", ofFile("INCH_72.3"), "unknown")
+        check1("73 dpi is not", ofFile("INCH_73"), 25400.0d / 73.0d)
+        check1("one axis that looks like a default makes the file unknown", ofFile("INCH_72_96"), "unknown")
+        check1("37.7 per cm is within 0.5 % of 37.8", ofFile("CM_37.7"), "unknown")
+        check1("40000 per cm is 0.25 um per pixel", ofFile("CM_40000"), 0.25d)
+        check1("OME 325 nm", ofFile("OME_nm"), 0.325d)
+        check("OME wins over the tags", ofFile("OME_nm").x.raw.unit == "nm", ofFile("OME_nm").toString())
+        check1("OME with different X and Y sizes", ofFile("OME_not_square"), "unknown", "pixels are not square")
+        check1("an OME size with no unit is not a calibration", ofFile("OME_no_unit"), "unknown")
+        check1("an ImageJ unit of nm", ofFile("IMAGEJ_nm"), 0.0005d)
+        check1("the ImageJ unit text 'inch' is not in the catalog", ofFile("IMAGEJ_inch_text"), "unknown")
+        check1("a file that is not there", LC.ofFile(new File(cfg.files_dir as String, "missing.tif")), "unknown")
+        // the built-in copy of the catalog (used when the app's Tools has none) is the conformance data
+        def builtIn = LC.catalogFrom(lc.UNIT_CATALOG_FALLBACK)
+        def fromFile = LC.catalogFrom(C)
+        check("the built-in catalog is the conformance catalog", builtIn == fromFile, "built-in " + builtIn.keySet() + " differs from the file")
+        check("the built-in length units are the conformance length units", lc.UNIT_CATALOG_FALLBACK.wrong_science.calibration.length_units == CAL.length_units.collectEntries { k, v -> [(k): [um_per_unit: v.um_per_unit, symbols: v.symbols, words: v.words]] })
+        // a catalog that is not one is refused, never half used
+        ["{}", '{"wrong_science": {"calibration": {"length_units": {"um": {"um_per_unit": -1, "symbols": [], "words": []}}}}}'].each { json ->
+            def refused = false
+            try { LC.catalogFrom(new JsonSlurper().parseText(json) as Map) } catch (IllegalArgumentException problem) { refused = true }
+            check("a catalog that is not usable is refused: " + json.take(30), refused)
+        }
+        // the app's own catalog: found through the app's interpreter, else the built-in copy is used and said
+        def app = [python: cfg.python, runtime_path: "", name: "catalog-test"]
+        LC.catalog = null
+        check("the app's interpreter names the catalog", lc.useUnitCatalog(app) == "app" && LC.catalog == fromFile, "")
+        LC.catalog = null
+        check("an interpreter that cannot be run falls back to the built-in catalog", lc.useUnitCatalog([python: "/nonexistent/python", runtime_path: "", name: "catalog-test"]) == "built-in" && LC.catalog == builtIn, "")
+        LC.catalog = fromFile
+    },
+    conformance_calibration_request: {
+        // what the host would SEND (inputs of the worker, and `_calibration`) for the sources of the CAL cases and the situations of CAL-T1..CAL-T9 that need no dialog event
+        def C = conformance(), CAL = C.wrong_science.calibration
+        def LC = lc.getClass().getClassLoader().loadClass("LCCalibration")
+        LC.catalog = LC.catalogFrom(C)
+        def Macro = lc.getClass().getClassLoader().loadClass("MacroModule")
+        def sourceOf = { double width, double height, String unit -> def imp = new ij.ImagePlus("a.tif", new ij.process.ByteProcessor(4, 4)); imp.getCalibration().pixelWidth = width; imp.getCalibration().pixelHeight = height; imp.getCalibration().setUnit(unit); imp }
+        def toolWith = { boolean optional ->
+            [id: "t", label: "T", outputs: [], inputs: [
+                [name: "image", label: "Image", type: "image", required: true],
+                [name: "pixel_size", label: "Pixel size", type: "float", required: !optional, nullable: optional, default: optional ? null : 1.0d, minimum: 0, pixel_size_of: "image"]]]
+        }
+        def run = { Map tool, Map values, Map states = [:] ->
+            def module = Macro.newInstance(); module.values.putAll(values); module.states.putAll(states)
+            def jobDir = java.nio.file.Files.createTempDirectory("lccal_unit_").toFile()
+            try { return lc.exportInputs(tool, module, jobDir) }
+            finally { jobDir.deleteDir() }
+        }
+        def refusal = { Closure call -> try { call(); return null } catch (IllegalArgumentException problem) { return problem.message } }
+        def required = C.messages.calibration_required.template.replace("{param}", "pixel_size").replace("{of}", "image")
+        check("the refusal names the parameter and the image", required == "'pixel_size' needs a value: 'image' has no pixel size. Enter it in um.", required)
+        // CAL-01: a calibrated open image: the value, and the per-axis entry with its provenance
+        def sent = run(toolWith(false), [image: sourceOf(1d, 1d, "micrometer")])[0]
+        check("CAL-01 the request carries 1.0", sent.pixel_size == 1.0d, sent.toString())
+        check("CAL-01 and the per-axis entry of the image, with the raw scale and unit",
+              sent._calibration == [pixel_size: [of: "image", source: "image", axes: [x: [value: 1.0d, unit: "um", source: "image", raw: [scale: 1.0d, unit: "micrometer"]], y: [value: 1.0d, unit: "um", source: "image", raw: [scale: 1.0d, unit: "micrometer"]]]]], sent._calibration.toString())
+        check("CAL-03 a millimetre is 1000 um", run(toolWith(false), [image: sourceOf(1d, 1d, "millimeter")])[0].pixel_size == 1000.0d)
+        check("CAL-05 325 nm", Math.abs(run(toolWith(false), [image: sourceOf(325d, 325d, "nm")])[0].pixel_size - 0.325d) < 1e-12)
+        def mean = run(toolWith(false), [image: sourceOf(0.5d, 0.5004d, "um")])[0]
+        check("CAL-18 within the tolerance the field is the mean and each axis keeps its own value", Math.abs(mean.pixel_size - 0.5002d) < 1e-12 && mean._calibration.pixel_size.axes.x.value == 0.5d && mean._calibration.pixel_size.axes.y.value == 0.5004d, mean._calibration.toString())
+        // CAL-02, 04, 06, 07, 16: unknown: a required field is refused with the shared sentence, whatever the declared default (CAL-T8); an Optional one is null and has no entry (CAL-T2)
+        [[1d, 1d, "pixel"], [0.25d, 0.25d, "pixel"], [0.5d, 0.25d, "um"], [1d, 1d, "second"], [0.5d, 0.5d, "�m"]].each { w, h, unit ->
+            def image = sourceOf(w, h, unit)
+            check("unknown (" + w + ", " + h + ", '" + unit + "'): the run is refused with the shared sentence, the default 1.0 is not sent", refusal { run(toolWith(false), [image: image]) } == required)
+            def optional = run(toolWith(true), [image: image])[0]
+            check("unknown (" + w + ", " + h + ", '" + unit + "'): an Optional field is not sent, and has no _calibration entry", !optional.containsKey("pixel_size") && !optional.containsKey("_calibration"), optional.toString())
+        }
+        // CAL-T1, CAL-T2: the request follows the image it is made for, and never carries another one's value
+        check("CAL-T1 B (0.5) after A (0.25): 0.5, source image", run(toolWith(false), [image: sourceOf(0.5d, 0.5d, "um")])[0].pixel_size == 0.5d)
+        check("CAL-T2 uncalibrated B after A (0.25): refused", refusal { run(toolWith(false), [image: sourceOf(1d, 1d, "pixel")]) } == required)
+        // CAL-T3, CAL-T9: a value the person entered is theirs, whatever the image says, and says so
+        def entered = run(toolWith(false), [image: sourceOf(0.5d, 0.5d, "um"), pixel_size: 0.3d], [pixel_size: [state: "user", value: 0.3d]])[0]
+        check("CAL-T3 user 0.3 with B (0.5): 0.3, source user, per axis", entered.pixel_size == 0.3d && entered._calibration.pixel_size.source == "user" && entered._calibration.pixel_size.axes.x == [value: 0.3d, unit: "um", source: "user"], entered._calibration.toString())
+        check("CAL-T9 (request) user 0.25 with an uncalibrated image: 0.25, source user", run(toolWith(false), [image: sourceOf(1d, 1d, "pixel"), pixel_size: 0.25d], [pixel_size: [state: "user", value: 0.25d]])[0].pixel_size == 0.25d)
+        check("an entered value that is not above 0 is refused", refusal { run(toolWith(false), [image: sourceOf(0.5d, 0.5d, "um"), pixel_size: -1d], [pixel_size: [state: "user", value: -1d]]) } != null)
+        check("an entered value that is not finite is refused", refusal { run(toolWith(false), [image: sourceOf(0.5d, 0.5d, "um"), pixel_size: Double.NaN], [pixel_size: [state: "user", value: Double.NaN]]) } != null)
+        // CAL-T5, CAL-T6: the file is the exported source and wins over the open image; an uncalibrated file is unknown, never the open image's value
+        def calibratedFile = new File(cfg.files_dir as String, "CM_40000.tif"), plainFile = new File(cfg.files_dir as String, "CAL-10_1.tif")
+        def open = sourceOf(0.25d, 0.25d, "um")
+        check("CAL-T5 open image A (0.25) and an uncalibrated file B: refused, A's value is not used", refusal { run(toolWith(false), [image: open, image_file: plainFile]) } == required)
+        check("CAL-T5 (Optional) the request holds neither", !run(toolWith(true), [image: open, image_file: plainFile])[0].containsKey("pixel_size"))
+        check("CAL-T6 the file cleared: A's 0.25 again", run(toolWith(false), [image: open])[0].pixel_size == 0.25d)
+        def fromFile = run(toolWith(false), [image: open, image_file: calibratedFile])
+        check("a calibrated file wins over a calibrated image: its value, source file, raw in cm", fromFile[0].pixel_size == 0.25d && fromFile[0]._calibration.pixel_size.source == "file" && fromFile[0]._calibration.pixel_size.axes.x.raw.unit == "cm", fromFile[0]._calibration.toString())
+        // CAL-T8: a required linked field with the default 1.0 and no calibration: blocked, the default is not sent (above); here the tool's own default is 1.0
+        check("CAL-T8 the declared default is not a stand-in", toolWith(false).inputs[1].default == 1.0d && refusal { run(toolWith(false), [image: sourceOf(1d, 1d, "")]) } == required)
+        // the CAL and CAL-T ids are all accounted for
+        (1..9).each { n -> check(String.format("CAL-T%d is in conformance.json", n), CAL.transitions.any { it.id == "CAL-T" + n }) }
+        unsupported << "CAL-T7 QuPath project image: QuPath only"
+    },
+    conformance_calibration_coverage: {
+        // no silent skip: every CAL and CAL-T id is checked at the level of the conversion (conformance_calibration), of the request (conformance_calibration_request), run through the
+        // dialog by a case file ("conformance": [ids]), or named here with the reason it does not apply to Fiji
+        def C = conformance(), CAL = C.wrong_science.calibration
+        def known = (CAL.cases*.id + CAL.transitions*.id) as Set
+        def named = [] as Set, gaps = [] as Set
+        new File(cfg.cases_dir as String).listFiles({ File f -> f.name.endsWith(".json") } as FileFilter).sort().each { File f ->
+            def parsed = new JsonSlurper().parseText(f.getText("UTF-8"))
+            (parsed.conformance ?: []).each { String id -> named << id; check(f.name + " names " + id + ", which is in conformance.json", id in known || id.startsWith("CF-")) }
+            (parsed.conformance_gaps ?: []).each { String id -> gaps << id; check(f.name + " documents the gap " + id + ", which is in conformance.json", id in known) }
+        }
+        def atFunctionLevel = (1..20).collect { String.format("CAL-%02d", it) }.findAll { it != "CAL-09" } as Set
+        atFunctionLevel += ["CAL-T1", "CAL-T2", "CAL-T3", "CAL-T5", "CAL-T6", "CAL-T8"]       // their request (conformance_calibration_request) and, with the dialog events, a case file
+        def notApplicable = [
+            "CAL-09": "QuPath PixelCalibration", "CAL-T7": "QuPath project image",
+            "CAL-T9": "a SciJava dialog reports a number field only when its value changes: typing the value the box already shows is not an event, so the flag cannot be set (the field is then cleared, never kept wrongly)",
+        ]
+        known.each { String id ->
+            check(id + " is run by a case, checked at function level, or not applicable", id in named || id in atFunctionLevel || notApplicable.containsKey(id))
+            if (notApplicable.containsKey(id)) unsupported << (id + " " + notApplicable[id])
+        }
+        ["CAL-T1", "CAL-T2", "CAL-T3", "CAL-T4", "CAL-T5", "CAL-T6"].each { id -> check(id + " is run through the dialog by a case file", id in named) }
+        check("CAL-T9, which this dialog cannot report, has a case that pins what happens instead", "CAL-T9" in gaps)
     },
 ]
 

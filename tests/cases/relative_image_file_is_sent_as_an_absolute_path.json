@@ -13,7 +13,8 @@
  ],
  "cwd": "${FIXTURES}",
  "overrides": {
-  "image_file": "sample.tif"
+  "image_file": "sample.tif",
+  "scale": 0.5
  },
  "expect": {
   "status": "COMPLETE",

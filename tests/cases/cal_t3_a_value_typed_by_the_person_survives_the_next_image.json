@@ -1,0 +1,83 @@
+{
+ "app": "calibration",
+ "tool": "Pixel size required",
+ "register": [
+  {
+   "name": "calibration",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/calibration_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "a.tif",
+   "pixel_size": 0.25
+  },
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "b.tif",
+   "pixel_size": 0.5
+  }
+ ],
+ "select": [
+  "a.tif"
+ ],
+ "overrides": {
+  "image": "a.tif"
+ },
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "steps": [
+    [
+     0.3
+    ],
+    [
+     0.3
+    ]
+   ],
+   "request.pixel_size": 0.3,
+   "request._calibration.pixel_size": {
+    "of": "image",
+    "source": "user",
+    "axes": {
+     "x": {
+      "value": 0.3,
+      "unit": "um",
+      "source": "user"
+     },
+     "y": {
+      "value": 0.3,
+      "unit": "um",
+      "source": "user"
+     }
+    }
+   },
+   "calibration_states.pixel_size": {
+    "state": "user",
+    "value": 0.3,
+    "source": "user"
+   }
+  },
+  "log_contains": [
+   "keeps the value you entered (0.3 um)"
+  ]
+ },
+ "dialog_steps": [
+  {
+   "type": 0.3,
+   "field": 0
+  },
+  {
+   "select": "b.tif"
+  }
+ ],
+ "conformance": [
+  "CAL-T3"
+ ]
+}

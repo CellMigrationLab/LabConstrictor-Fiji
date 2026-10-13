@@ -1,0 +1,72 @@
+{
+ "app": "calibration",
+ "tool": "Pixel size required",
+ "register": [
+  {
+   "name": "calibration",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/calibration_app"
+   ]
+  }
+ ],
+ "preload": [
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "a.tif",
+   "pixel_size": 0.25
+  },
+  {
+   "path": "${FIXTURES}/sample.tif",
+   "title": "b.tif",
+   "pixel_size": 0.5
+  }
+ ],
+ "select": [
+  "a.tif"
+ ],
+ "overrides": {
+  "image": "a.tif"
+ },
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "steps": [
+    [
+     0.3
+    ],
+    [
+     0.3
+    ],
+    [
+     0.5
+    ]
+   ],
+   "request.pixel_size": 0.5,
+   "calibration_states.pixel_size": {
+    "state": "auto",
+    "value": 0.5,
+    "source": "image"
+   },
+   "request._calibration.pixel_size.source": "image"
+  }
+ },
+ "dialog_steps": [
+  {
+   "type": 0.3,
+   "field": 0
+  },
+  {
+   "select": "b.tif"
+  },
+  {
+   "type": 0.0,
+   "field": 0
+  }
+ ],
+ "conformance": [
+  "CAL-T4"
+ ]
+}
