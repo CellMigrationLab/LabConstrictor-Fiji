@@ -873,9 +873,15 @@ String numberHint(Map p, boolean whole) {
 void addNumberItem(MutableModuleInfo info, Map p, Map base, boolean whole, def start) {
     String description = [p.description, numberHint(p, whole)].findAll { it }.join(" ")
     if (p.widget == "slider" && !p.nullable && p.minimum != null && p.maximum != null) {
-        def wide = !whole ? false : [start, p.minimum, p.maximum].any { it != null && !fitsInt(it) }
-        def item = whole ? addItem(info, p.name, wide ? Long : Integer, base + [default: wide ? start as long : start as Integer, step: 1, min: wide ? integerLimits(p).minimum : integerLimits(p).minimum as Integer, max: wide ? integerLimits(p).maximum : integerLimits(p).maximum as Integer])
-                         : addItem(info, p.name, Double, base + [default: start as Double, min: p.minimum as Double, max: p.maximum as Double, step: FLOAT_STEP])
+        def limits = integerLimits(p)
+        def wide = whole && [start, p.minimum, p.maximum].any { it != null && !fitsInt(it) }
+        def item
+        if (whole) {
+            item = addItem(info, p.name, wide ? Long : Integer, base + [default: wide ? start as long : start as Integer, step: 1,
+                                                                        min: wide ? limits.minimum : limits.minimum as Integer, max: wide ? limits.maximum : limits.maximum as Integer])
+        } else {
+            item = addItem(info, p.name, Double, base + [default: start as Double, min: p.minimum as Double, max: p.maximum as Double, step: FLOAT_STEP])
+        }
         item.setWidgetStyle("slider")
         return
     }
@@ -1436,7 +1442,8 @@ String crashHint(Map outcome) {
         return "A Python package is missing or broken in the app's environment (see the traceback below)."
     if (exit in EXIT_KILLED) return "The worker was killed (out of memory? the OS OOM killer ends big image jobs this way)."
     if (exit in EXIT_SEGFAULT) return "The worker crashed natively (segmentation fault in a compiled library)."
-    if (exit == EXIT_IMPORT_FAILED && text.contains(IMPORT_FAILED_MARKER)) return "The app's tool module failed to import (see the traceback below)."   // code 3 alone is not proof: the Windows C runtime ends a process with 3 for abort() too
+    // code 3 alone is not proof of an import failure: the Windows C runtime ends a process with 3 for abort() too, so the worker's own words are required
+    if (exit == EXIT_IMPORT_FAILED && text.contains(IMPORT_FAILED_MARKER)) return "The app's tool module failed to import (see the traceback below)."
     return "The worker process stopped unexpectedly."
 }
 
