@@ -25,6 +25,7 @@
    "prune_calls.0.unfinished": [],
    "prune_calls.0.owned": 1,
    "prune.started": true,
+   "prune.environment.LC_HOME": "$LC_HOME",
    "retention.runs.fiji.0.done": true
   }
  }
