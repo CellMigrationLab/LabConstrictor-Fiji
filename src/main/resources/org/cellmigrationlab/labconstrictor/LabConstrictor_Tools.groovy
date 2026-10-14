@@ -656,6 +656,9 @@ Map discoverApps() {
                 if (malformed) { problems << (file.name + ": " + malformed); skip << name; return }
                 name = entry.name
                 if (apps.containsKey(name) || skip.contains(name)) return          // the file name differs from the app name it claims: priority stays with the earlier directory
+                def hosting = lib("LCHosts").listedInFiji(entry as Map)                       // docs/PROTOCOL.md "App hosts": does the app declare that Fiji may list it?
+                if (!hosting.listed) { problems << hosting.sentence; skip << name; return }       // left out like the other skipped apps: Fiji Log and Tools log, the exact sentence
+                if (hosting.sentence) { lcLog("WARNING", hosting.sentence); IJ.log("LabConstrictor: " + hosting.sentence) }   // no declaration: listed, and said every time
                 if (!new File(entry.python).exists()) { problems << (name + ": not available on this machine (interpreter " + entry.python + " is missing)"); skip << name; return }
                 def reason = untrustedReason(file, entry, index == 0)
                 if (reason) { problems << (name + ": ignored: " + reason); skip << name; return }

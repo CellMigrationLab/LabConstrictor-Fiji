@@ -1,0 +1,30 @@
+{
+ "app": "victim",
+ "tool": "Scalar echo",
+ "register": [
+  {
+   "name": "victim",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "tamper": [
+  {
+   "app": "victim",
+   "entry": {
+    "hosts": [
+     "Fiji"
+    ]
+   }
+  }
+ ],
+ "expect": {
+  "equals": {
+   "error": "no apps registered"
+  },
+  "log_contains": [
+   "'victim' is not listed in fiji: its hosts declaration is not valid (unknown host name 'Fiji' (known: notebook, napari, fiji, qupath)); register the app again with a valid one"
+  ]
+ }
+}

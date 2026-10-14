@@ -75,7 +75,7 @@ class FakeWorker {
             // what this host needs
             def host = { Map schema -> compat.checkForHost(schema, [1]) }
             check("the host minimum is the one the run record needs", compat.MINIMUM_TOOLS == lc.lib("LCRunRecord").MINIMUM_TOOLS, compat.MINIMUM_TOOLS)
-            check("Tools 0.3.0a1 with the features is ok", host([protocol: 1, tools_version: "0.3.0a1", features: ["reserved_inputs_v1"]]).status == "ok")
+            check("Tools 0.3.0a1 with the features is ok", host([protocol: 1, tools_version: "0.3.0a1", features: ["reserved_inputs_v1", "app_hosts_v1"]]).status == "ok")
             check("Tools 0.2.0rc1 is refused", host([protocol: 1, tools_version: "0.2.0rc1", features: ["reserved_inputs_v1"]]).status == "refuse")
             def known = new ProcessBuilder([python, "-c", "from labconstrictor_tools import features; print(','.join(features.FEATURES))"]).start().inputStream.getText("UTF-8").trim().split(",") as Set
             check("the features this host requires exist in Tools", compat.REQUIRED_FEATURES.every { it in known }, known.toString())

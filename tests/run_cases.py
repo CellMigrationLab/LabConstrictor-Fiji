@@ -336,7 +336,8 @@ def run_case(path):
         for app in case["register"]:
             subprocess.run(
                 [sys.executable, "-m", "labconstrictor_tools", "register", "--name", app["name"], "--prefix", app["prefix"],
-                 "--module", app["module"], *[a for p in app["pythonpath"] for a in ("--pythonpath", p)]],
+                 "--module", app["module"], *[a for p in app["pythonpath"] for a in ("--pythonpath", p)],
+                 *(["--hosts", ",".join(app["hosts"])] if "hosts" in app else [])],  # "hosts": the declaration (absent: the entry has none)
                 check=True, capture_output=True, env=dict(env, PYTHONPATH=str(V3)),
             )  # fmt: skip
     if case.get("log_prefill"):  # a shared log already past the rotation size, with five old backups (needs "register": a private home)

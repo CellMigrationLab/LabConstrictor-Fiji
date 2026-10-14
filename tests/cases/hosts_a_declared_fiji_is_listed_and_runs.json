@@ -1,0 +1,24 @@
+{
+ "app": "victim",
+ "tool": "Scalar echo",
+ "register": [
+  {
+   "name": "victim",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": [],
+   "hosts": [
+    "notebook",
+    "fiji"
+   ]
+  }
+ ],
+ "expect": {
+  "status": "COMPLETE",
+  "not_contains": {
+   "log_text": [
+    "victim' is not listed"
+   ]
+  }
+ }
+}

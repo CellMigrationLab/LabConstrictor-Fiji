@@ -23,7 +23,7 @@
    "error": "no apps registered"
   },
   "log_contains": [
-   "too old (it lists no features, this host needs reserved_inputs_v1): update it"
+   "too old (it lists no features, this host needs app_hosts_v1, reserved_inputs_v1): update it"
   ]
  }
 }

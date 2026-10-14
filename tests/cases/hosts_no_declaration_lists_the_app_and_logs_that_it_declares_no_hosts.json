@@ -1,0 +1,18 @@
+{
+ "app": "victim",
+ "tool": "Scalar echo",
+ "register": [
+  {
+   "name": "victim",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "expect": {
+  "status": "COMPLETE",
+  "log_contains": [
+   "'victim' declares no hosts, so it is listed in every host; register it with --app-manifest (or --hosts) to choose"
+  ]
+ }
+}
