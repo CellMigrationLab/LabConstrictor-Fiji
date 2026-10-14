@@ -105,11 +105,13 @@ These are deliberate: the host does something simpler instead of failing, writes
 
     pip install git+https://github.com/CellMigrationLab/LabConstrictor-Tools numpy pandas tifffile scipy scikit-image
     export LC_FIJI_HOME=/path/to/Fiji.app
-    python tests/run_cases.py                      # 21 portable cases (example app and small test apps), loose script
-    LC_FIJI_MODE=jar python tests/run_cases.py     # the same 21 through the built jar (needs mvn); about 5 minutes each
+    python tests/run_cases.py                      # the portable cases (example app and small test apps), loose script
+    LC_FIJI_MODE=jar python tests/run_cases.py     # the same cases through the built jar (needs mvn); each case prints its duration
     python tests/run_cases.py --real-apps          # developer cases for NucleiSky, CellTracksColab, VLab4Mic (CellTracksColab is a test fixture only: no host lists it): need them installed/registered
                                                    # (LC_HOME) and LC_REAL_FIXTURES=<folder with nucleisky/ celltracks/ vlab4mic/ data>
                                                    # (4 cases; the blur and VLab4Mic cases fail or time out when those apps are not installed)
+
+CI (`fiji-gui` workflow) runs the loose-script and the jar cases as two parallel jobs on separate runners (`fiji-gui (script)`, `fiji-gui (jar)`); the `fiji-gui` check is green only when both are. Each case line carries its duration.
 
 Lint: `tests/lint_groovy.sh` runs `npm-groovy-lint` (pinned) on the script with `.groovylintrc.json` (needs node and Java); CI runs it as the `lint` job.
 
