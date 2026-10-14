@@ -43,6 +43,8 @@ environment through [Appose](https://github.com/apposed/appose), so Fiji never i
    put it into `Fiji.app/plugins/` (remove an older `labconstrictor-fiji-*.jar`) and restart Fiji.
 3. Run **Plugins > LabConstrictor > LabConstrictor Tools...**.
 
+The install page for the apps and all three hosts is [Tools `docs/INSTALL.md`](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/INSTALL.md). Which apps Fiji lists: apps declare the hosts that list them (`hosts:` in `labconstrictor-app.yaml`); the rule is a binding rule in Tools 0.3.0a1 (feature `app_hosts_v1`; PROTOCOL.md section App hosts); Napari honours it (PR #61 merged); Fiji and QuPath honour it once their PRs (#47, #35) merge; installers pass the hosts from template 0.1.18 (template PR #33, not merged). Intended for Fiji: Playground, NucleiSky, Guess the Condition and VLab4Mic; CellTracksColab is not listed in any host.
+
 The release also carries `labconstrictor-fiji-script-<tag>.zip`: the no-jar alternative. It holds the script `LabConstrictor_Tools.groovy` **and the `lib` folder it needs**
 (the script alone stops with a message saying where it looked for its helpers). Unzip it so that both sit in `Fiji.app/scripts/Plugins/LabConstrictor/` and use **Plugins > LabConstrictor > LabConstrictor Tools**
 (Fiji also lists the helper files of `lib` in the menu, which is harmless); macro calls (`run("LabConstrictor Tools...", ...)`) need the jar.
@@ -105,7 +107,7 @@ These are deliberate: the host does something simpler instead of failing, writes
     export LC_FIJI_HOME=/path/to/Fiji.app
     python tests/run_cases.py                      # 21 portable cases (example app and small test apps), loose script
     LC_FIJI_MODE=jar python tests/run_cases.py     # the same 21 through the built jar (needs mvn); about 5 minutes each
-    python tests/run_cases.py --real-apps          # cases for NucleiSky, CellTracksColab, VLab4Mic: need them installed/registered
+    python tests/run_cases.py --real-apps          # developer cases for NucleiSky, CellTracksColab, VLab4Mic (CellTracksColab is a test fixture only: no host lists it): need them installed/registered
                                                    # (LC_HOME) and LC_REAL_FIXTURES=<folder with nucleisky/ celltracks/ vlab4mic/ data>
                                                    # (4 cases; the blur and VLab4Mic cases fail or time out when those apps are not installed)
 
@@ -123,5 +125,5 @@ for each source, and the `cal_*` cases do CAL-T1..CAL-T6 through the real dialog
 The retention cases (SPEC_WRONG_SCIENCE section 3, `conformance.json` `wrong_science.retention`) are `tests/cases/ret_*.json` and `unit_*retention*`/`unit_sixty_runs*`/`unit_the_host_never*` (groups of `tests/unit_groups_retention.groovy`): the real host with the `prune` subprocess replaced by a recorder (`tests/prune_recorder.py`: HRET-04, started after every done marker exists; a failing command does not fail the run), by the real Tools `prune` (what Fiji wrote is cleaned up, a person's own folders, folders without markers and unfinished ones are not), and by nothing (an old Tools: refused before anything starts; a Tools with no `prune`: nothing started, nothing deleted). `tests/retention_support.py` builds the folders before a run and judges them afterwards by the rules of SPEC 3.8 written out, not through the code that wrote them; `tests/fake_tools/` are two stand-ins for an old Tools. Every `fixtures_hosts` id of the conformance file is run by a case that names it (`"conformance": [...]`) or by a unit group, or the coverage check fails.
 
 Status: **testing phase**. Tested on Linux only (Fiji with Java 21, Xvfb); to help on Windows or macOS (and on a real desktop) follow the
-[human test protocol](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md). Windows and macOS are untested; SciJava Command generation
+[human test protocol](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md) and fill in its [record sheet](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md#0-record-sheet-the-test-set-fill-in-before-you-start). Windows and macOS are untested; SciJava Command generation
 (a menu command per tool, headless use) is not implemented. License: MIT.
