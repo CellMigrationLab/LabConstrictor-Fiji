@@ -175,7 +175,7 @@ def private_script() -> list[str]:
 
 def launch_arguments(options: Optional[str], menu_entry: Optional[str], jar: bool) -> list[str]:
     """The arguments that start the plugin: the loose script (`--run`), or, with LC_FIJI_MODE=jar and LC_FIJI_JAR=<the jar>, the jar's menu command through a macro.
-    `options`: a macro call with these options; `menu_entry`: in jar mode, run that other menu entry instead (the "Copy last run as command" entry)."""
+    `menu_entry`: in jar mode, run the "Copy last run as command" command instead (its options travel in the property lc.macro.options, set by the harness)."""
     fiji = Path(os.environ["LC_FIJI_HOME"])
     if not jar:
         return install_script(fiji) if options is not None else private_script()    # the menu check (the copy entry) needs the script where Fiji builds its menu from
@@ -183,10 +183,11 @@ def launch_arguments(options: Optional[str], menu_entry: Optional[str], jar: boo
         raise SystemExit("ui_audit.py: LC_FIJI_MODE=jar needs LC_FIJI_JAR=<the plugin jar>")
     shutil.rmtree(fiji / "scripts" / "Plugins" / "LabConstrictor", ignore_errors=True)   # never both: the menu would list the tool twice
     replace_if_changed(Path(os.environ["LC_FIJI_JAR"]), jar_in_fiji(fiji))
-    macro = Path(tempfile.mkdtemp(prefix="lcaudit_macro_")) / "start.ijm"
-    entry = menu_entry or "LabConstrictor Tools..."
-    macro.write_text('run("%s"%s);\n' % (entry, ', "%s"' % options if options else ""))
-    return ["-macro", str(macro)]
+    # run the jar's command the way the menu does (interactive: no macro options; a macro call `run("...")` would be a non-interactive one that skips every dialog)
+    command = "LabConstrictorCopyCommand" if menu_entry is not None else "LabConstrictorCommand"
+    starter = Path(tempfile.mkdtemp(prefix="lcaudit_jar_")) / "start_jar_command.groovy"
+    starter.write_text('#@ CommandService commands\ncommands.run("org.cellmigrationlab.labconstrictor.%s", true).get()\n' % command)
+    return ["--run", str(starter)]
 
 
 def discover_apps(home: str, fiji: Path) -> Any:

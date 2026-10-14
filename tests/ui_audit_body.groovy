@@ -34,6 +34,7 @@ import javax.swing.text.JTextComponent
 @Field final int AFTER_RUN_SETTLE_MS = 2000     // after the run: result windows get this long to paint before the screen is taken
 @Field final int CLOSE_WAIT_MS = 5000           // a real click on OK or Cancel must close its dialog within this
 @Field final int POLL_MS = 100
+@Field final int SHOT_MIN_PX = 256             // a result image narrower than this is zoomed before the after-run picture
 @Field final int CANCEL_WAIT_MS = 6000          // after a Cancel the plugin gets this long to end (its finish hook ends Fiji); then what it does instead is reported and Fiji is ended here
 @Field final int MAX_TEXT = 20000               // of the Log kept in the finish line
 @Field final List<String> DROPPED = ["interpreter", "frames", "unit_catalog", "calibration_states_initial", "calibration_states", "modifiers"]   // summary keys that are not needed here
@@ -230,10 +231,22 @@ def handleForm = { Dialog dialog, Map state ->
     press(ok, dialog, "form_ok")
 }
 
+// A tool with exactly one input that is a file gets SciJava's native file prompt instead of a form (one parameter, one prompt). The audit reports it (obs single_input_prompt); in a run
+// the case's file is put into it and it is closed as a person's OK would, and the driver goes on; otherwise the prompt is closed and this start ends (no click: see cancelAndLeave).
 def handleFileChooser = { FileDialog chooser ->
-    emit([kind: "obs", what: "dialog_problem", dialog: "single_input_file_prompt", detail: "SciJava showed its native single-input file chooser instead of the form: " +
-                                                                                                                    "a tool with exactly one input and no open image cannot be audited (give the case an image to open)"])
+    emit([kind: "obs", what: "single_input_prompt", title: chooser.title, open: chooser.mode == FileDialog.LOAD])
+    if (plan.mode == "run" && plan.fills && plan.fills[0].value) {
+        File target = new File(plan.fills[0].value as String)
+        Thread.sleep(SETTLE_MS)
+        screenshot("form", new java.awt.Rectangle(screenSize()))
+        tree.onEdt { chooser.setDirectory(target.parent); chooser.setFile(target.name) }
+        SwingUtilities.invokeLater { chooser.setVisible(false) }
+        return true
+    }
     SwingUtilities.invokeLater { chooser.dispose() }
+    Thread.sleep(POLL_MS * 3)
+    // groovylint-disable-next-line SystemExit
+    System.exit(0)
 }
 
 def drive = {
@@ -246,7 +259,8 @@ def drive = {
         Dialog dialog = windows.find { it instanceof Dialog && !(it instanceof FileDialog) && !handled.contains(it) && it.title }
         if (file) {
             handled << file
-            return handleFileChooser(file)
+            if (handleFileChooser(file)) continue
+            return null
         }
         if (dialog == null) {
             Thread.sleep(POLL_MS)
@@ -299,6 +313,18 @@ def finish = { Map summary ->
     Thread.sleep(plan.mode == "run" ? AFTER_RUN_SETTLE_MS : POLL_MS)
     def out = [kind: "finish", mode: plan.mode, summary: plain(summary.findAll { !(it.key in DROPPED) }, 0)]
     if (plan.mode == "run") {
+        // the picture is evidence for a person: bring every result image to the front, side by side, and zoom the small ones (without a window manager they would sit under other windows)
+        WindowManager.getImageTitles().findAll { !preloaded.contains(it) }.eachWithIndex { String title, int n ->
+            def imp = WindowManager.getImage(title)
+            tree.onEdt {
+                def canvas = imp.getCanvas()
+                while (canvas != null && imp.getWidth() * canvas.getMagnification() < SHOT_MIN_PX && canvas.getMagnification() < 16) canvas.zoomIn(0, 0)
+                imp.getWindow().pack()
+                imp.getWindow().setLocation(40 + n * 40, 120 + n * 40)
+                imp.getWindow().toFront()
+            }
+        }
+        Thread.sleep(POLL_MS * 5)
         screenshot("after_run", new java.awt.Rectangle(screenSize()))
         out.windows = WindowManager.getImageTitles() as List
         out.tables = WindowManager.getNonImageTitles() as List

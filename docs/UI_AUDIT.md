@@ -42,6 +42,12 @@ opened as an ImagePlus (Fiji reads the calibration from the file) and chosen in 
 listed or hidden app, and fails if any of them does not turn the audit red. `python tests/ui_audit_logic_check.py` checks the Python judges on fake reports (no Fiji);
 `tests/ui_audit_tree_check.groovy` checks the Swing side on a fake dialog. `sh tests/lint_groovy.sh` lints the harness.
 
+## Notes on what Fiji does
+* A tool with exactly one file input gets SciJava's native file prompt, not a form: `opens` passes as one parameter / one prompt, and the run puts the case's file into it.
+* Case inputs the form cannot express (Guess the Condition's guess by number or in another case: the combo box lists the canonical names only) are replayed for their effect on an ordered app through
+  `labconstrictor-tools run` and listed as `HUMAN` rows `ui_fiji_prerequisite_*`.
+* Jar mode removes `scripts/Plugins/LabConstrictor` from the Fiji it uses and the jar afterwards: give it a Fiji of its own (script mode shares one Fiji safely).
+
 ## Known effects of the environment
 * Xvfb has no window manager: after a native file dialog closes the form is not raised and gets no mouse events; the audit raises it (`toFront`) as a person's click would.
 * SciJava's check boxes are wider than the panel they sit in; real clicks go to the visible part.

@@ -68,6 +68,7 @@ class Audit:
         self.last_run: Optional[tuple[dict[str, Any], dict[str, Any]]] = None
         self.logged = False
         self.replays = 0
+        self.prompts = 0
 
     # ---------------------------------------------------------------- one Fiji start
     def start(self, mode: str, tool: Optional[dict[str, Any]] = None, emit_panel: bool = False, fills: Optional[list[dict[str, Any]]] = None,
@@ -79,7 +80,7 @@ class Audit:
         chosen = tool or first
         plan = {"mode": mode, "app": self.app, "tool_choice": names[self.schema["tools"].index(chosen)], "tool_label": chosen["label"], "tool_id": chosen["id"],
                 "tool_key": sanitize(chosen["id"]), "shots": str(self.shots_dir), "emit_panel": emit_panel, "fills": fills or [], "preload": preload or [],
-                "script_macro": option if mode == "copy" and not self.s.jar else None, "inject": self.s.inject if mode in ("controls", "run") else None}
+                "script_macro": option if mode == "copy" else None, "inject": self.s.inject if mode in ("controls", "run") else None}
         work = Path(tempfile.mkdtemp(prefix="lcaudit_plan_"))
         (work / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
         env = dict(os.environ, LC_HOME=self.s.home, LC_FIJI_HARNESS=os.environ.get("LC_BODY_OVERRIDE", str(HERE / "ui_audit_body.groovy")), LC_UI_PLAN=str(work / "plan.json"),
@@ -281,6 +282,15 @@ class Audit:
     def judge_form(self, tool: dict[str, Any], launch: Launch, rows: list[dict[str, Any]], preload: list[dict[str, str]], emit_panel: bool, before: set[str]) -> None:
         key = sanitize(tool["id"])
         record = next((r for r in launch.records if r.get("kind") == "components" and r["scope"] == "form_" + key), None)
+        prompt = next(iter(self.obs(launch, "single_input_prompt")), None)
+        if record is None and prompt is not None:
+            self.prompts += 1
+            fine = len(tool["inputs"]) == 1 and prompt["open"] and tool["inputs"][0]["type"] in ("file", "table", "image", "labels", "folder")
+            detail = "one declared parameter, shown as SciJava's native file prompt '%s' (Fiji's way for a tool with one file input; there is no form to read)" % prompt["title"]
+            self.m.add("ui_fiji_form_%s_opens" % key, "PASS" if fine else "FAIL", detail if fine else "a native file prompt '%s' appeared for a tool with %d input(s)" % (prompt["title"], len(tool["inputs"])), tool=tool["id"], seconds=launch.seconds)
+            self.m.add("ui_fiji_form_%s_controls" % key, "HUMAN", "the only control is SciJava's native file prompt; the run check puts the case's file into it and presses OK", tool=tool["id"])
+            self.conclude(["ui_fiji_form_%s_opens" % key], launch, tool["id"])
+            return
         if record is not None:
             problems = form_problems(tool, record["controls"], record["texts"], bool(preload)) + geometry_problems(record["geometry"], record["controls"])
             problems += window_problems(record["windows"], record["geometry"]["screen"], [tool["label"]], [p["title"] for p in preload] + ALLOWED_FRAMES, "at the form")
@@ -320,7 +330,9 @@ class Audit:
         finish = launch.finish()
         problems, unchecked = run_problems(tool, case, inputs, preload, finish, self.files_since(before), self.app) if finish is not None or launch.records else (["not reached"], [])
         problems += self.click_problems(launch, ["form_ok"]) + [o["detail"] for o in self.obs(launch, "fill_failed")] + [o["detail"] for o in self.obs(launch, "dialog_problem")]
-        if finish is not None:
+        if finish is None:
+            problems.append(launch.ended())                      # the watchdog kill, or how else Fiji ended
+        else:
             problems += window_problems(finish.get("shown", []), finish.get("screen", [1600, 1000]), [], (finish.get("windows") or []) + (finish.get("tables") or []) + ALLOWED_FRAMES, "after the run")
         if finish is None and not launch.records:
             self.conclude(["ui_fiji_run_" + key], launch, tool["id"])
@@ -434,8 +446,13 @@ class Audit:
             return
         row = "ui_fiji_prerequisite_%s_%s" % (sanitize(tool["id"]), self.replays)
         if unfilled:
-            self.m.add(row, "HUMAN", "an earlier case (expects %s) was not replayed: the Fiji form cannot express its input (%s); later cases of this app may depend on its effect" % (
-                case.get("expect", {}).get("status", "COMPLETE"), "; ".join(unfilled)), tool=tool["id"])
+            wanted = case.get("expect", {}).get("status", "COMPLETE")
+            done = subprocess.run([sys.executable, "-m", "labconstrictor_tools", "run", "--no-record", self.app, tool["id"],
+                                   *["%s=%s" % (k, v if not isinstance(v, bool) else str(v).lower()) for k, v in inputs.items()]],
+                                  env=dict(os.environ, LC_HOME=self.s.home), cwd=self.tests_dir, capture_output=True, text=True, check=False)
+            agrees = (done.returncode == 0) == (wanted == "COMPLETE")
+            self.m.add(row, "HUMAN" if agrees else "FAIL", "an earlier case (expects %s) was replayed through the command line for its effect on the app's state, because the Fiji form cannot express its input (%s)%s" % (
+                wanted, "; ".join(unfilled), "" if agrees else "; the command line ended with exit code %d, which does not agree: %s" % (done.returncode, (done.stdout + done.stderr)[-200:])), tool=tool["id"])
         elif problems:
             self.m.add(row, "FAIL", "the earlier case of '%s' (needed for a later tool) failed: %s" % (tool["id"], "; ".join(problems)), tool=tool["id"], seconds=launch.seconds)
 
@@ -512,7 +529,7 @@ class Audit:
     def controls_row(self) -> None:
         """ui_fiji_controls_all_known, two-sided: no control found is outside the table AND every dialog the audit meant to read was read (a form with zero controls found fails)."""
         problems = list(self.unknown) + self.absent
-        if self.dialogs["form"] == 0:
+        if self.dialogs["form"] == 0 and not self.prompts:
             problems.append("no form was enumerated: zero controls found")
         if "panel" in self.s.parts and (len(self.listed_apps) > 1 or (self.schema and len(self.schema["tools"]) > 1)) and self.dialogs["chooser"] == 0:
             problems.append("no chooser was enumerated although Fiji shows one")
