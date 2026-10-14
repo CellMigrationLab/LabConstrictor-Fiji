@@ -11,12 +11,12 @@ One Fiji (ImageJ) command runs the tools of every installed LabConstrictor app, 
 
 - [Fiji](https://fiji.sc).
 - At least one LabConstrictor app installed on your computer. The app's installer registers it, which is how the plugin finds it. The app needs **labconstrictor-tools 0.3.0a1 or newer** (tag `v0.3.0-alpha.1`): an app with an older one is left out of the list, with a sentence in the Log window.
-- Apps declare which hosts list them (`hosts:` in their `labconstrictor-app.yaml`); the rule that makes Fiji follow this declaration is being added in Tools 0.3.0a1. Intended for Fiji: Playground, NucleiSky, Guess the Condition and VLab4Mic. CellTracksColab is not listed in any host.
+- Apps declare which hosts list them (`hosts:` in their `labconstrictor-app.yaml`); the rule is a binding rule in Tools 0.3.0a1 (feature `app_hosts_v1`; PROTOCOL.md section App hosts); Napari honours it (PR #61 merged); Fiji and QuPath honour it once their PRs (#47, #35) merge; installers pass the hosts from template 0.1.18 (template PR #33, not merged). Intended for Fiji: Playground, NucleiSky, Guess the Condition and VLab4Mic. CellTracksColab is not listed in any host.
 - Nothing to build: no Java or Maven is needed to install.
 
 ## Install
 
-The full install page for the apps and all three hosts is [Tools `docs/INSTALL.md`](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/INSTALL.md) (in Tools PR #132; the link works once it is merged). For Fiji:
+The full install page for the apps and all three hosts is [Tools `docs/INSTALL.md`](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/INSTALL.md). For Fiji:
 
 1. Download `labconstrictor-fiji-<tag>.jar` from the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-Fiji/releases) (`<tag>` is the release tag; take the latest release).
 2. Put it into `Fiji.app/plugins/` (not a subfolder; remove an older `labconstrictor-fiji-*.jar`) and restart Fiji.
