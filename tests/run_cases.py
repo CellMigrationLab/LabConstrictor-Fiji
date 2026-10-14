@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import check_extras
@@ -463,11 +464,13 @@ def main(argv):
     folder = "cases_real_apps" if REAL_APPS else "cases"
     cases = sorted(p for p in (HERE / folder).glob("*.json") if not wanted or p.stem in wanted)
     failures = 0
+    started = time.monotonic()
     for path in cases:
+        began = time.monotonic()
         name, failed, report = run_case(path)
-        print("%-28s %s %s" % (name, "PASS" if not failed else "FAIL", "; ".join(failed)))
+        print("%-28s %s %s (%.1f s)" % (name, "PASS" if not failed else "FAIL", "; ".join(failed), time.monotonic() - began), flush=True)
         failures += bool(failed)
-    print("%d/%d cases passed" % (len(cases) - failures, len(cases)))
+    print("%d/%d cases passed in %.0f s" % (len(cases) - failures, len(cases), time.monotonic() - started), flush=True)
     return 1 if failures else 0
 
 
