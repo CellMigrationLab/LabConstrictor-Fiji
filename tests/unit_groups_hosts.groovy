@@ -71,7 +71,7 @@ import groovy.json.JsonSlurper
                     return
                 }
                 def ours = hosts.listedFor(q.entry as Map, q.host as String)
-                check(label + ": the verdict is the reference's", ours.listed == theirs[0], ours.listed + " vs " + theirs[0])
+                check(label + ": the verdict is the reference's", ours.listed == theirs[0], ours.listed.toString() + " vs " + theirs[0])
                 check(label + ": the sentence is the reference's, word for word", ours.sentence == theirs[1], ours.sentence + " vs " + theirs[1])
             }
         },
