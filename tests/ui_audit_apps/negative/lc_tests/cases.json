@@ -1,0 +1,23 @@
+[
+ {
+  "tool": "scalar_echo",
+  "inputs": {
+   "a": 2.0,
+   "b": 3.5
+  },
+  "comment": "WRONG on purpose: the sum is 5.5",
+  "expect": {
+   "results": {
+    "values": {
+     "sum": 999.0
+    }
+   }
+  }
+ },
+ {
+  "tool": "explode",
+  "inputs": {},
+  "comment": "WRONG on purpose: this tool always fails, the case expects COMPLETE",
+  "expect": {}
+ }
+]

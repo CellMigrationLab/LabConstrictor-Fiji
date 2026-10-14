@@ -1,0 +1,146 @@
+[
+ {
+  "tool": "scalar_echo",
+  "inputs": {
+   "a": 2.0,
+   "b": 3.5
+  },
+  "comment": "two numbers typed into text fields",
+  "expect": {
+   "results": {
+    "values": {
+     "sum": 5.5
+    }
+   }
+  }
+ },
+ {
+  "tool": "slow",
+  "inputs": {
+   "seconds": 0.6,
+   "steps": 3
+  },
+  "comment": "progress",
+  "expect": {
+   "progress_events_min": 3,
+   "results": {
+    "values": {
+     "steps": 3
+    }
+   }
+  }
+ },
+ {
+  "tool": "unicode_echo",
+  "inputs": {},
+  "comment": "the default text",
+  "expect": {
+   "results": {
+    "values": {
+     "length": 12
+    }
+   }
+  }
+ },
+ {
+  "tool": "table_sum",
+  "inputs": {
+   "tab": "fixtures/table.csv"
+  },
+  "comment": "a table typed as a path",
+  "expect": {
+   "results": {
+    "values": {
+     "total": 21.0
+    }
+   }
+  }
+ },
+ {
+  "tool": "path_info",
+  "inputs": {
+   "some_file": "fixtures/note.txt"
+  },
+  "comment": "a file typed as a path",
+  "expect": {
+   "results": {
+    "values": {
+     "exists": true,
+     "name": "note.txt"
+    }
+   }
+  }
+ },
+ {
+  "tool": "image_stats",
+  "inputs": {
+   "image": "fixtures/cal.tif"
+  },
+  "comment": "an open image",
+  "expect": {
+   "results": {
+    "values": {
+     "shape": [
+      32,
+      32
+     ],
+     "dtype": "uint8",
+     "mean": 93.0
+    }
+   }
+  }
+ },
+ {
+  "tool": "plane_mean",
+  "inputs": {
+   "image": "fixtures/plain.tif"
+  },
+  "comment": "an uncalibrated 2D image",
+  "expect": {
+   "results": {
+    "values": {
+     "shape": [
+      32,
+      32
+     ],
+     "mean": 70.0
+    }
+   }
+  }
+ },
+ {
+  "tool": "kitchen_sink",
+  "inputs": {
+   "required_string": "hello",
+   "image": "fixtures/cal.tif",
+   "count": 4,
+   "flag": false,
+   "mode": "gamma"
+  },
+  "comment": "every output type; the pixel size follows the calibrated image",
+  "expect": {
+   "results": {
+    "doubled": {
+     "shape": [
+      32,
+      32
+     ],
+     "dtype": "uint8"
+    },
+    "rows": {
+     "rows": 4,
+     "columns": [
+      "i",
+      "s",
+      "scale"
+     ]
+    },
+    "summary": {
+     "mode": "gamma",
+     "flag": false,
+     "had_optional_image": false
+    }
+   }
+  }
+ }
+]

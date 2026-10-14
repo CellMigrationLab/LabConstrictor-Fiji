@@ -1,0 +1,329 @@
+// Fiji side of the UI audit (tests/ui_audit.py; NOT part of the product): a test harness in the sense of tests/test_harness.groovy, selected with LC_FIJI_HARNESS=<this file>.
+// One Fiji start does ONE job, named by "mode" in the plan file $LC_UI_PLAN (written by ui_audit.py), and writes what it saw as one JSON object per line to $LC_UI_OUT, line by line
+// as it goes (a crash or a kill loses nothing already written). It only OBSERVES and ACTS: every judgement is made by ui_audit.py, from the schema, the case and the files on disk.
+//   {"kind": "check", "id", "status", "detail", "control", "tool", "seconds"}   one control activated (a row of the matrix)
+//   {"kind": "obs", "what": ..., ...}                                           a fact: dialog (title, items), screenshot, activation_plan, chooser_ok, click_failed
+//   {"kind": "components", "scope", "controls", "unknown", "texts", "geometry", "windows"}   everything one dialog holds, where it is and which windows show
+//   {"kind": "finish", "summary": {...}, ...}                                   the plugin's own summary of the run (the product's `finish` hook); always the last line
+//   {"kind": "fatal", "detail"}                                                 the audit of this start cannot go on
+// Modes: cancel (Cancel on the first chooser), chooser (read the choosers and the tool offered, then Cancel), controls (open the form, press every control, Cancel),
+//        run (fill the form from the case, screenshot it, OK, screenshot the result), copy (the "Copy last run as command" entry; no dialog).
+// plan.inject (negative controls of tests/ui_audit_driver_cases.py): extra_control | remove_control | offscreen_ok | blank_screens.
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import groovy.transform.Field
+import ij.IJ
+import ij.WindowManager
+import java.awt.Container
+import java.awt.Dialog
+import java.awt.FileDialog
+import java.awt.Robot
+import java.awt.Toolkit
+import java.awt.Window
+import java.awt.datatransfer.DataFlavor
+import java.awt.image.BufferedImage
+import javax.imageio.ImageIO
+import javax.swing.JButton
+import javax.swing.JLabel
+import javax.swing.SwingUtilities
+import javax.swing.text.JTextComponent
+
+@Field final int DIALOG_WAIT_MS = 120000        // how long the plugin gets to show the next dialog (discovery, the worker's answers for dropdowns)
+@Field final int SETTLE_MS = 700                // a dialog gets this long to lay itself out before it is read
+@Field final int FILL_SETTLE_MS = 1200          // after the form is filled: the callbacks of SciJava run on a thread of their own
+@Field final int AFTER_RUN_SETTLE_MS = 2000     // after the run: result windows get this long to paint before the screen is taken
+@Field final int CLOSE_WAIT_MS = 5000           // a real click on OK or Cancel must close its dialog within this
+@Field final int POLL_MS = 100
+@Field final int MAX_TEXT = 20000               // of the Log kept in the finish line
+@Field final List<String> DROPPED = ["interpreter", "frames", "unit_catalog", "calibration_states_initial", "calibration_states", "modifiers"]   // summary keys that are not needed here
+
+def plan = new JsonSlurper().parseText(new File(System.getenv("LC_UI_PLAN")).getText("UTF-8"))
+def tree = new GroovyShell(this.class.classLoader).evaluate(new File(System.getenv("LC_UI_TREE")))
+File outFile = new File(System.getenv("LC_UI_OUT"))
+File shots = new File(plan.shots as String)
+shots.mkdirs()
+def lock = new Object()
+def preloaded = [] as Set
+
+def emit = { Map record ->
+    synchronized (lock) { outFile.withWriterAppend("UTF-8") { it << JsonOutput.toJson(record) << "\n" } }
+}
+// One activation in its own block: a failure or an exception becomes a FAIL row and the audit goes on with the next control. Returns true on PASS.
+def guarded = { String id, String control, Closure body ->
+    long began = System.nanoTime()
+    String status = "PASS", detail
+    try {
+        detail = body() as String
+    // groovylint-disable-next-line CatchThrowable
+    } catch (Throwable problem) {          // broad on purpose: whatever went wrong is the result of this control, never the end of the audit
+        status = "FAIL"
+        detail = problem instanceof AssertionError ? problem.message : problem.class.simpleName + ": " + problem.message
+    }
+    emit([kind: "check", id: id, status: status, detail: detail, control: control, tool: plan.tool_key, seconds: (System.nanoTime() - began) / 1e9d])
+    return status == "PASS"
+}
+
+def distinctColours = { BufferedImage image ->        // true when the picture is not one flat colour
+    int first = image.getRGB(0, 0)
+    for (int y = 0; y < image.height; y++) for (int x = 0; x < image.width; x++) if (image.getRGB(x, y) != first) return true
+    return false
+}
+def screenshot = { String which, java.awt.Rectangle area ->
+    File target = new File(shots, plan.tool_id + "_" + which + ".png")
+    target.delete()                                    // a file from an earlier run can never pass for this one
+    def record = [kind: "obs", what: "screenshot", which: which, path: target.path]
+    try {
+        BufferedImage image = new Robot().createScreenCapture(area)
+        if (plan.inject == "blank_screens") {
+            image = new BufferedImage(area.width as int, area.height as int, BufferedImage.TYPE_INT_RGB)
+            image.graphics.fillRect(0, 0, image.width, image.height)
+        }
+        ImageIO.write(image, "png", target)
+        record << [exists: target.isFile(), bytes: target.length(), width: image.width, height: image.height, not_flat: distinctColours(image)]
+    // groovylint-disable-next-line CatchThrowable
+    } catch (Throwable problem) {          // the screenshot is evidence: a failure is reported with its reason and the check on it fails
+        record << [exists: target.isFile(), error: problem.class.simpleName + ": " + problem.message]
+    }
+    emit(record)
+}
+def screenSize = { Toolkit.getDefaultToolkit().getScreenSize() }
+def textsOf
+textsOf = { java.awt.Component c ->
+    def found = []
+    if (c instanceof JLabel && c.text) found << tree.normalise(c.text)
+    if (c instanceof JTextComponent && c.text) found << tree.normalise(c.text)
+    if (c instanceof Container) c.components.each { found.addAll(textsOf(it)) }
+    return found
+}
+def rectOf = { java.awt.Component c ->
+    try {
+        return tree.onEdt { def at = c.locationOnScreen; [at.x, at.y, c.width, c.height] }
+    // groovylint-disable-next-line CatchException
+    } catch (Exception ignored) {          // a component that is not showing has no place on the screen: [0, 0, 0, 0] says so and the geometry check fails on it
+        return [0, 0, 0, 0]
+    }
+}
+def describe = { List controls -> controls.collect { [id: it.id, kind: it.kind, label: it.label, text: it.text, rect: rectOf(it.comp)] } }
+def windowsNow = {
+    tree.onEdt {
+        Window.getWindows().findAll { it.isShowing() }.collect {
+            [cls: it.class.name, title: (it instanceof Dialog || it instanceof java.awt.Frame ? it.title : "") ?: "", dialog: it instanceof Dialog, x: it.x, y: it.y, w: it.width, h: it.height]
+        }
+    }
+}
+def openImages = { WindowManager.getImageTitles() as Set }
+
+// A real mouse click; when it cannot be done (off screen) or does not close the dialog, that is reported (obs click_failed: ui_audit.py fails the check) and the dialog is closed
+// by the component's own click so that the audit can go on.
+def press = { Map control, Dialog dialog, String what ->
+    String problem = null
+    try {
+        tree.realClick(control.comp)
+        long deadline = System.currentTimeMillis() + CLOSE_WAIT_MS
+        while (dialog.isShowing() && System.currentTimeMillis() < deadline) Thread.sleep(POLL_MS)
+        if (dialog.isShowing()) problem = "a real click on " + what + " did not close the dialog within " + CLOSE_WAIT_MS + " ms"
+    } catch (AssertionError refused) {
+        problem = what + ": " + refused.message
+    }
+    if (problem) {
+        emit([kind: "obs", what: "click_failed", id: what, detail: problem])
+        SwingUtilities.invokeLater { control.comp.doClick() }
+    }
+}
+
+def inject = { Dialog dialog, Closure enumerateAgain ->
+    if (plan.inject == "extra_control") tree.onEdt { dialog.contentPane.add(new JButton("Injected"), java.awt.BorderLayout.NORTH); dialog.pack() }
+    if (plan.inject == "remove_control") {
+        def victim = enumerateAgain().controls.find { it.id == "text_field" }
+        tree.onEdt { victim.comp.parent.remove(victim.comp); dialog.pack() }
+    }
+    if (plan.inject == "offscreen_ok") tree.onEdt { dialog.setLocation(screenSize().width as int - 60, 20) }
+}
+
+// ---- the dialogs
+def record = { Dialog dialog, String scope, Map found ->
+    def size = screenSize()
+    emit([kind: "components", scope: scope, controls: describe(found.controls), unknown: found.unknown, texts: textsOf(dialog),
+          geometry: [screen: [size.width, size.height], dialog: tree.onEdt { [dialog.x, dialog.y, dialog.width, dialog.height] }], windows: windowsNow()])
+}
+def pressEvery = { Map found ->
+    def doable = found.controls.findAll { !(it.activation in ["press", "none"]) }
+    emit([kind: "obs", what: "activation_plan", n: doable.size(), ids: doable.collect { it.id }])
+    doable.each { control -> guarded("ui_fiji_form_" + plan.tool_key + "_controls", control.id + " '" + (control.label ?: control.text) + "'") { tree.activate(control) } }
+}
+def fillForm = { Map found ->
+    def failed = []
+    plan.fills.each { fill ->
+        try {
+            tree.fill(found.controls, fill.label as String, fill.value)
+        // groovylint-disable-next-line CatchThrowable
+        } catch (Throwable problem) {
+            failed << (fill.label + ": " + (problem instanceof AssertionError ? problem.message : problem.class.simpleName + ": " + problem.message))
+        }
+    }
+    return failed
+}
+
+def handleChooser = { Dialog dialog, String which, Map state ->
+    Thread.sleep(SETTLE_MS)
+    def found = tree.enumerate(dialog, "chooser", which, openImages())
+    record(dialog, "chooser_" + which, found)
+    def combo = found.controls.find { it.id == "chooser_" + which }
+    def items = combo ? tree.itemsOf(combo.comp) : []
+    emit([kind: "obs", what: "dialog", dialog: which, title: dialog.title, items: items])
+    def button = { String id -> found.controls.find { it.id == id } }
+    if (plan.mode == "cancel") return press(button("chooser_cancel"), dialog, "chooser_cancel")
+    if (plan.emit_panel && combo) guarded("ui_fiji_panel_chooser_" + which, "chooser_" + which) { tree.activate(combo) + "; lists " + items }
+    def target = which == "app" ? plan.app : plan.tool_choice
+    int index = items.indexOf(target)
+    if (index < 0) {
+        emit([kind: "obs", what: "dialog_problem", dialog: which, detail: "'" + target + "' is not in the chooser (items: " + items + ")"])
+        return press(button("chooser_cancel"), dialog, "chooser_cancel")
+    }
+    if (plan.mode == "chooser" && which == "app") {            // switching: every other app first, the wanted one last
+        items.eachWithIndex { item, i -> if (i != index) tree.onEdt { combo.comp.setSelectedIndex(i) } }
+    }
+    tree.onEdt { combo.comp.setSelectedIndex(index) }
+    Thread.sleep(POLL_MS)
+    if (plan.mode == "chooser" && which == "tool") return press(button("chooser_cancel"), dialog, "chooser_cancel")
+    state.okPending = which
+    press(button("chooser_ok"), dialog, "chooser_ok")
+}
+
+def handleForm = { Dialog dialog, Map state ->
+    Thread.sleep(SETTLE_MS)
+    emit([kind: "obs", what: "dialog", dialog: "form", title: dialog.title, items: []])
+    inject(dialog) { tree.enumerate(dialog, "form", "form", openImages()) }
+    def found = tree.enumerate(dialog, "form", "form", openImages())
+    record(dialog, "form_" + plan.tool_key, found)
+    def cancel = found.controls.find { it.id == "form_cancel" }
+    def ok = found.controls.find { it.id == "form_ok" }
+    if (plan.mode == "chooser") return press(cancel, dialog, "form_cancel")
+    if (plan.mode == "controls") {
+        screenshot("form", tree.onEdt { dialog.bounds })
+        pressEvery(found)
+        return press(cancel, dialog, "form_cancel")
+    }
+    def failed = fillForm(found)
+    if (failed) {
+        emit([kind: "obs", what: "fill_failed", detail: "the form could not be filled from the case: " + failed.join("; ")])
+        return press(cancel, dialog, "form_cancel")
+    }
+    Thread.sleep(FILL_SETTLE_MS)
+    screenshot("form", tree.onEdt { dialog.bounds })
+    press(ok, dialog, "form_ok")
+}
+
+def handleFileChooser = { FileDialog chooser ->
+    emit([kind: "obs", what: "dialog_problem", dialog: "single_input_file_prompt", detail: "SciJava showed its native single-input file chooser instead of the form: a tool with exactly one input and no open image cannot be audited (give the case an image to open)"])
+    SwingUtilities.invokeLater { chooser.dispose() }
+}
+
+def drive = {
+    def handled = [] as Set
+    def state = [okPending: null]
+    long deadline = System.currentTimeMillis() + DIALOG_WAIT_MS
+    while (System.currentTimeMillis() < deadline) {
+        def windows = tree.showingWindows()
+        def file = windows.find { it instanceof FileDialog && !handled.contains(it) }
+        Dialog dialog = windows.find { it instanceof Dialog && !(it instanceof FileDialog) && !handled.contains(it) && it.title }
+        if (file) {
+            handled << file
+            return handleFileChooser(file)
+        }
+        if (dialog == null) {
+            Thread.sleep(POLL_MS)
+            continue
+        }
+        handled << dialog
+        if (state.okPending) {                                  // the OK of a chooser opened this dialog
+            emit([kind: "obs", what: "chooser_ok", which: state.okPending, opened: dialog.title])
+            state.okPending = null
+        }
+        String title = dialog.title
+        if (title == "LabConstrictor") handleChooser(dialog, "app", state)
+        else if (title.startsWith("LabConstrictor: ")) handleChooser(dialog, "tool", state)
+        else if (plan.tool_label && title.contains(plan.tool_label as String)) return handleForm(dialog, state)
+        else { emit([kind: "obs", what: "dialog", dialog: "other", title: title, items: []]); continue }
+        deadline = System.currentTimeMillis() + DIALOG_WAIT_MS
+        if (plan.mode == "cancel") return null
+    }
+    emit([kind: "fatal", detail: "no dialog the audit expected appeared within " + DIALOG_WAIT_MS + " ms (the plan: " + plan.mode + " for " + plan.app + "/" + plan.tool_id + ")"])
+    // groovylint-disable-next-line SystemExit
+    System.exit(2)
+}
+def driver = {
+    try {
+        drive()
+    // groovylint-disable-next-line CatchThrowable
+    } catch (Throwable problem) {          // the driver thread must never die silently: say why, and end Fiji (ui_audit.py reports every check that was not reached)
+        emit([kind: "fatal", detail: "the driver stopped: " + problem.class.simpleName + ": " + problem.message])
+        // groovylint-disable-next-line SystemExit
+        System.exit(2)
+    }
+}
+
+// ---- hooks of the product script (see the top of LabConstrictor_Tools.groovy)
+def plain
+plain = { def value, int depth ->
+    if (value == null || value instanceof Number || value instanceof Boolean) return value
+    if (value instanceof Map && depth < 5) return value.collectEntries { k, v -> [(k.toString()): plain(v, depth + 1)] }
+    if (value instanceof Collection && depth < 5) return value.take(200).collect { plain(it, depth + 1) }
+    return value.toString().take(2000)
+}
+// The labels of the entries of Plugins > LabConstrictor in Fiji's own menu bar (null when there is no such menu).
+def menuEntries = {
+    def bar = IJ.getInstance()?.getMenuBar()
+    def plugins = bar == null ? null : (0..<bar.menuCount).collect { bar.getMenu(it) }.find { it.label == "Plugins" }
+    def ours = plugins == null ? null : (0..<plugins.itemCount).collect { plugins.getItem(it) }.find { it.label == "LabConstrictor" }
+    return ours == null ? null : (0..<ours.itemCount).collect { ours.getItem(it).label }
+}
+def finish = { Map summary ->
+    Thread.sleep(plan.mode == "run" ? AFTER_RUN_SETTLE_MS : POLL_MS)
+    def out = [kind: "finish", mode: plan.mode, summary: plain(summary.findAll { !(it.key in DROPPED) }, 0)]
+    if (plan.mode == "run") {
+        screenshot("after_run", new java.awt.Rectangle(screenSize()))
+        out.windows = WindowManager.getImageTitles() as List
+        out.tables = WindowManager.getNonImageTitles() as List
+        out.shown = windowsNow()
+        out.screen = [screenSize().width, screenSize().height]
+        out.windows.findAll { !preloaded.contains(it) }.eachWithIndex { String title, int n ->
+            IJ.saveAs(WindowManager.getImage(title), "PNG", new File(shots, plan.tool_id + "_result_" + n + ".png").path)
+        }
+        out.log = (IJ.getLog() ?: "").take(MAX_TEXT)
+    }
+    if (plan.mode == "copy") {
+        out.menu = menuEntries()
+        try {
+            out.clipboard = Toolkit.getDefaultToolkit().getSystemClipboard().getData(DataFlavor.stringFlavor) as String
+        // groovylint-disable-next-line CatchThrowable
+        } catch (Throwable problem) {          // the clipboard text is the thing under test: a clipboard that cannot be read is said, and ui_audit.py fails the check
+            out.clipboard_error = problem.toString()
+        }
+    }
+    emit(out)
+    // groovylint-disable-next-line SystemExit
+    System.exit(0)
+}
+def setup = {
+    plan.preload.each { item ->                              // "images the person already has open": opened by Fiji itself, so the calibration is the one Fiji reads from the file
+        def imp = IJ.openImage(item.path as String)
+        if (imp == null) {
+            emit([kind: "obs", what: "fill_failed", detail: "Fiji cannot open the case's image " + item.path])
+            return
+        }
+        imp.setTitle(item.title as String)
+        imp.show()
+        preloaded << item.title
+    }
+    if (plan.script_macro) System.setProperty("lc.macro.options", plan.script_macro as String)   // the "copy_last" call without the menu command (the script reads this property first)
+    if (plan.mode != "copy") Thread.start(driver)
+}
+
+return [
+    interactive : false,                                     // never block on a modal error dialog: the failure is in the summary
+    preferred   : { String kind -> null },
+    setup       : setup,
+    awaitPrune  : { true },
+    finish      : finish,
+]

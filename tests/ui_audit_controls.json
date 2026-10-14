@@ -1,0 +1,250 @@
+{
+ "_about": "Control table of the Fiji UI audit (docs/UI_AUDIT.md). Read by tests/ui_audit_tree.groovy (classifies every Swing component of a dialog) and by tests/ui_audit_support.py (checks it, documents it). The FIRST entry that matches a component wins. A component of an interactive class (button, combo box, spinner, slider, text component, list, table, tree) that matches no entry is UNKNOWN and fails ui_fiji_controls_all_known. Fields: id; scope (chooser = the app and tool choosers, form = the tool form); kind (short class name of the Swing class, a text component is JTextComponent); text (the exact button text); label_prefix / label_suffix (of the normalised label: the component's own text, else the label of its row); dialog (app | tool, choosers only); items_open_images (a combo box whose items are all open images); editable (text components); activation (what the audit does, see ui_audit_tree.groovy); effect (what must be true afterwards).",
+ "controls": [
+  {
+   "id": "chooser_app",
+   "scope": "chooser",
+   "kind": "JComboBox",
+   "dialog": "app",
+   "activation": "select_items",
+   "effect": "lists every registered app that Fiji lists (sorted); each item can be selected and reads back; the chosen app's tools are offered next",
+   "source": "registry (apps/*.json) and the discovery rule app_hosts_v1 (HOST_FEATURES: Which apps a host offers)"
+  },
+  {
+   "id": "chooser_tool",
+   "scope": "chooser",
+   "kind": "JComboBox",
+   "dialog": "tool",
+   "activation": "select_items",
+   "effect": "lists every tool of the app (the label, or 'label (id)' when two tools share a label); each item can be selected and reads back",
+   "source": "schema tools[] (label, or label (id) for a shared label)"
+  },
+  {
+   "id": "chooser_ok",
+   "scope": "chooser",
+   "kind": "JButton",
+   "text": [
+    "OK"
+   ],
+   "activation": "press",
+   "effect": "accepts the choice: the next dialog (tool chooser or tool form) opens",
+   "source": "SciJava input dialog"
+  },
+  {
+   "id": "chooser_cancel",
+   "scope": "chooser",
+   "kind": "JButton",
+   "text": [
+    "Cancel"
+   ],
+   "activation": "press",
+   "effect": "nothing is run: the plugin ends with cancelled and starts no worker",
+   "source": "SciJava input dialog; run_cases cancel cases"
+  },
+  {
+   "id": "form_ok",
+   "scope": "form",
+   "kind": "JButton",
+   "text": [
+    "OK"
+   ],
+   "activation": "press",
+   "effect": "runs the tool (checked by ui_fiji_run_<tool>)",
+   "source": "SciJava input dialog"
+  },
+  {
+   "id": "form_cancel",
+   "scope": "form",
+   "kind": "JButton",
+   "text": [
+    "Cancel"
+   ],
+   "activation": "press",
+   "effect": "nothing is run: the plugin ends with cancelled, no worker and no run record",
+   "source": "SciJava input dialog"
+  },
+  {
+   "id": "file_browse",
+   "scope": "form",
+   "kind": "JButton",
+   "text": [
+    "...",
+    "Browse...",
+    "Browse"
+   ],
+   "activation": "browse",
+   "effect": "opens a file chooser; closing it leaves the field unchanged and the form open",
+   "source": "schema: type file, folder, table, image, labels (HOST_FEATURES: plain parameters)"
+  },
+  {
+   "id": "image_choice",
+   "scope": "form",
+   "kind": "JComboBox",
+   "items_open_images": true,
+   "activation": "select_items",
+   "effect": "lists the open images; each can be selected and reads back",
+   "source": "schema: type image or labels (HOST_FEATURES: ImageOut/ImageIn; images come from the open windows)"
+  },
+  {
+   "id": "choice_combo",
+   "scope": "form",
+   "kind": "JComboBox",
+   "activation": "select_items",
+   "effect": "lists the declared choices; each can be selected and reads back",
+   "source": "schema: type choice, ChoicesFrom (HOST_FEATURES: ChoicesFrom)"
+  },
+  {
+   "id": "use_selection_checkbox",
+   "scope": "form",
+   "kind": "JCheckBox",
+   "label_prefix": "use the selection as ",
+   "activation": "toggle",
+   "effect": "ticks and unticks (the ROI or ROI Manager selection becomes the region)",
+   "source": "schema: region_of (HOST_FEATURES: RegionOf)"
+  },
+  {
+   "id": "use_image_checkbox",
+   "scope": "form",
+   "kind": "JCheckBox",
+   "label_prefix": "use ",
+   "activation": "toggle",
+   "effect": "ticks and unticks (an optional image is sent only when ticked)",
+   "source": "schema: optional image (required: false)"
+  },
+  {
+   "id": "set_checkbox",
+   "scope": "form",
+   "kind": "JCheckBox",
+   "label_prefix": "set ",
+   "activation": "toggle",
+   "effect": "ticks and unticks (an optional value is sent only when ticked)",
+   "source": "schema: nullable (HOST_FEATURES: Optional / \"Set <name>\")"
+  },
+  {
+   "id": "flag_checkbox",
+   "scope": "form",
+   "kind": "JCheckBox",
+   "activation": "toggle",
+   "effect": "a yes/no parameter: ticks and unticks",
+   "source": "schema: type boolean"
+  },
+  {
+   "id": "radio",
+   "scope": "form",
+   "kind": "JRadioButton",
+   "activation": "select_radio",
+   "effect": "a choice shown as radio buttons: each can be selected and reads back",
+   "source": "schema: widget radio (HOST_FEATURES: Widget radio)"
+  },
+  {
+   "id": "slider",
+   "scope": "form",
+   "kind": "JSlider",
+   "activation": "slide",
+   "effect": "a bounded number: moves and reads back",
+   "source": "schema: widget slider with both bounds (HOST_FEATURES: Widget slider)"
+  },
+  {
+   "id": "channel_spinner",
+   "scope": "form",
+   "kind": "JSpinner",
+   "label_suffix": " channel",
+   "activation": "step",
+   "effect": "the pick-channel number steps and reads back",
+   "source": "schema: pick_channel (HOST_FEATURES: PickChannel: a channel number)"
+  },
+  {
+   "id": "number_spinner",
+   "scope": "form",
+   "kind": "JSpinner",
+   "activation": "step",
+   "effect": "a pixel size linked to an image (its unit is in the label): steps and reads back; 0 follows the image again",
+   "source": "schema: pixel_size_of (HOST_FEATURES: PixelSizeOf: no use-the-calibration button)"
+  },
+  {
+   "id": "text_field",
+   "scope": "form",
+   "kind": "JTextComponent",
+   "editable": true,
+   "activation": "type",
+   "effect": "a number, text, file, folder or '(or file)' field: typed text reads back",
+   "source": "schema: integer, float, string, file, folder, table (numbers are text fields: plugin docs)"
+  },
+  {
+   "id": "message_text",
+   "scope": "form",
+   "kind": "JTextComponent",
+   "editable": false,
+   "activation": "none",
+   "effect": "a read-only note (the tool's description, the image-source note): nothing to activate",
+   "source": "schema: description"
+  },
+  {
+   "id": "scrollbar",
+   "scope": "any",
+   "kind": "JScrollBar",
+   "activation": "none",
+   "effect": "scrolling infrastructure of a long form: nothing to activate",
+   "source": "Swing"
+  }
+ ],
+ "panel_controls": [
+  {
+   "id": "chooser_app",
+   "source": "registry",
+   "effect": "the app chooser (see the table)"
+  },
+  {
+   "id": "chooser_tool",
+   "source": "schema",
+   "effect": "the tool chooser (see the table)"
+  },
+  {
+   "id": "chooser_ok",
+   "source": "SciJava",
+   "effect": "OK on a chooser opens the next dialog"
+  },
+  {
+   "id": "chooser_cancel",
+   "source": "SciJava",
+   "effect": "Cancel on a chooser ends the plugin: no run, no worker, no run record"
+  },
+  {
+   "id": "form_cancel",
+   "source": "SciJava",
+   "effect": "Cancel on a form ends the plugin: no run, no worker, no run record"
+  },
+  {
+   "id": "menu",
+   "source": "README / HOST_FEATURES: Menu entry",
+   "effect": "Plugins > LabConstrictor holds exactly 'LabConstrictor Tools...' and 'Copy last run as command' (jar), or 'LabConstrictor Tools' (loose script)"
+  },
+  {
+   "id": "copy_empty",
+   "source": "HOST_FEATURES: Copy as command",
+   "effect": "with no earlier run the entry says 'nothing to copy yet' and copies nothing"
+  },
+  {
+   "id": "copy_terminal",
+   "source": "HOST_FEATURES: Copy as command (format)",
+   "effect": "after a run the clipboard holds the terminal line of that run: the text saved in state/last_command.json, '<python> -m labconstrictor_tools run <App> <tool> name=value ...'"
+  },
+  {
+   "id": "copy_python",
+   "source": "HOST_FEATURES: Copy as command (format)",
+   "effect": "after a run the clipboard holds the Python snippet (client.run_once) saved in state/last_command.json"
+  },
+  {
+   "id": "log",
+   "source": "HOST_FEATURES: Copy as command (Fiji: the Log after each run)",
+   "effect": "the Log window holds the command to repeat the run, the same text as the saved last command"
+  }
+ ],
+ "absent_in_fiji": [
+  "Rescan apps",
+  "Restart worker",
+  "Details",
+  "Keep the worker running",
+  "Use the image's calibration"
+ ]
+}

@@ -1,0 +1,20 @@
+[
+ {
+  "tool": "echo_numbers",
+  "inputs": {
+   "n": 3,
+   "x": 2.5,
+   "m": 7
+  },
+  "comment": "the numbers typed are the numbers sent",
+  "expect": {
+   "results": {
+    "values": {
+     "n": 3,
+     "x": 2.5,
+     "m": 7
+    }
+   }
+  }
+ }
+]

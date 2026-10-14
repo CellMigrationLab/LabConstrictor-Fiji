@@ -1,0 +1,4 @@
+{
+ "explode": "always fails by design; the failure path is covered by the host's own cases (adv_failure_is_an_error_not_a_hang)",
+ "stubborn": "blocks for 30 s ignoring Cancel on purpose; the kill path is covered by the host's cancel_stubborn_killed case"
+}
