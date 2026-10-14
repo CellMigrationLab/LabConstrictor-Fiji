@@ -79,6 +79,7 @@ def expected_widgets(tool: dict[str, Any], has_images: bool) -> list[dict[str, A
             add(p, ["number_spinner"], base_label(p))
         elif p.get("widget") == "slider" and not p.get("nullable") and p.get("minimum") is not None and p.get("maximum") is not None:
             add(p, ["slider"], base_label(p))
+            add(p, ["number_spinner"], base_label(p))                 # SciJava's slider style is a slider and its number box, both in the row of the label
         else:
             add(p, ["text_field"], base_label(p))
     return wanted
@@ -114,7 +115,7 @@ def form_problems(tool: dict[str, Any], found: list[dict[str, Any]], texts: list
 def chooser_problems(which: str, found: list[dict[str, Any]], items: list[str], wanted_items: Optional[list[str]]) -> list[str]:
     """The app or tool chooser: exactly its combo box, OK and Cancel (two-sided), and the items it lists are the ones the registry holds."""
     problems: list[str] = []
-    ids = sorted(control["id"] for control in found)
+    ids = sorted(control["id"] for control in found if control["id"] != "scrollbar")   # the scroll bars of the combo box's list are not controls of the dialog
     wanted_ids = sorted(["chooser_" + which, "chooser_ok", "chooser_cancel"])
     if ids != wanted_ids:
         problems.append("the %s chooser holds %s, expected %s" % (which, ids, wanted_ids))

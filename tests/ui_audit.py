@@ -1,11 +1,12 @@
 """Fiji UI audit: drives the LabConstrictor plugin of an INSTALLED app through its real SciJava dialogs, presses every control, opens every tool's form, runs each tool with the inputs of
-the app's own lc_tests/cases.json and takes the screenshots (contract: LabConstrictor-Tools docs/TEST_STRATEGY.md section 3 and tests/release_sandbox/README.md; this file's own docs: docs/UI_AUDIT.md).
+the app's own lc_tests/cases.json and takes the screenshots (contract: LabConstrictor-Tools docs/TEST_STRATEGY.md section 3 and tests/release_sandbox/README.md).
 
     python tests/ui_audit.py        # under a display is NOT needed: every Fiji start is made under xvfb-run
 
 Environment: LC_HOME (registry with the app), LC_FIJI_HOME, LC_APP (or LC_APPS=a,b,c), LC_APP_TESTS (the app's lc_tests; with several apps: a=folder,b=folder), LC_EXPECT_FIJI
-(listed | not_listed), LC_SHOTS (default ./screens), LC_UI_TOOL_TIMEOUT (seconds per Fiji start, default 300), LC_UI_TOOLS, LC_UI_PARTS, LC_UI_INJECT, LC_FIJI_MODE=jar.
-Prints one line per assertion, `CHECK <id> PASS|FAIL <detail>` (or `NOTE <id> not run: <reason>`), and keeps <LC_SHOTS>/matrix_fiji_<app>.json up to date after every row. It never stops at the first
+(listed | not_listed), LC_SHOTS (default ./screens), LC_UI_TOOL_TIMEOUT (seconds per Fiji start, default 300), LC_UI_TOOLS, LC_UI_PARTS, LC_UI_INJECT, LC_FIJI_MODE=jar with LC_FIJI_JAR=<jar> (removed from Fiji afterwards), LC_FIJI_PLUGIN_DIR=<folder with LabConstrictor_Tools.groovy and lib/> (default: this repository's script), LC_HOST_VERSION
+(the tag or SHA under test; required with the last two; recorded as host_version in the matrix), LC_UI_ORDERED.
+Prints one line per assertion, `CHECK <id> PASS|FAIL <detail>` (or `NOTE <id> not run: <reason>`), and keeps <LC_SHOTS>/matrix_ui_fiji_<app>.json up to date after every row. It never stops at the first
 failure: every control, form and run is its own guarded job, and the exit code (1 when any check is FAIL or NOT_RUN) is decided only after everything ran.
 """
 
@@ -15,7 +16,7 @@ from typing import Any, Callable, Optional
 
 from ui_audit_app import Audit, expected_ids
 from ui_audit_forms import tool_choice_names
-from ui_audit_launch import Launch, discover_apps, launch_arguments, run_fiji
+from ui_audit_launch import Launch, discover_apps, host_version, launch_arguments, remove_jar, run_fiji
 from ui_audit_matrix import Matrix
 from ui_audit_settings import Settings, read_settings
 
@@ -48,7 +49,8 @@ def multi_verdicts(audits: dict[str, Audit], probes: dict[str, dict[str, Any]], 
 
 def main(settings: Settings, runner: Callable[..., Launch] = run_fiji, arguments: Callable[..., list[str]] = launch_arguments, discover: Callable[..., Any] = discover_apps,
          out: Optional[Any] = None) -> int:
-    matrices = {app: Matrix(settings.shots, app, settings.parts, out) for app in settings.apps}
+    version = host_version()
+    matrices = {app: Matrix(settings.shots, app, settings.parts, out, version) for app in settings.apps}
     audits = {app: Audit(settings, app, matrices[app], runner, arguments, discover) for app in settings.apps}
     for app, audit in audits.items():
         ids = expected_ids(audit.schema, settings, audit.tool_ids(), settings.apps if settings.multi else [], app) if audit.schema else ["ui_fiji_driver_crashed"]
@@ -72,4 +74,9 @@ def main(settings: Settings, runner: Callable[..., Launch] = run_fiji, arguments
 
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    sys.exit(main(read_settings()))
+    configuration = read_settings()
+    try:
+        sys.exit(main(configuration))
+    finally:
+        if configuration.jar:
+            remove_jar(configuration.fiji)

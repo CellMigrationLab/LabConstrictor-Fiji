@@ -7,6 +7,7 @@ the matrix is complete up to the moment of a crash); when the time limit passes 
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -104,15 +105,88 @@ def run_fiji(fiji: Path, arguments: list[str], env: dict[str, str], out: Path, t
     return launch
 
 
-def launch_arguments(options: Optional[str], menu_entry: Optional[str], jar: bool) -> list[str]:
-    """The arguments that start the plugin: the loose script (`--run`), or, with LC_FIJI_MODE=jar, the built jar's menu command through a macro (tests/run_cases.py installs both).
-    `options`: a macro call with these options (jar mode); `menu_entry`: in jar mode, run that other menu entry instead (the "Copy last run as command" entry)."""
-    import run_cases
+PRODUCT = Path(__file__).resolve().parent.parent / "src" / "main" / "resources" / "org" / "cellmigrationlab" / "labconstrictor"
 
-    arguments = run_cases.install_into_fiji({"macro": options} if options is not None else None)
-    if jar and menu_entry is not None:
-        Path(arguments[1]).write_text('run("%s"%s);\n' % (menu_entry, ', "%s"' % options if options else ""))
-    return arguments
+
+def replace_if_changed(source: Path, target: Path) -> None:
+    """Make `target` a copy of `source` without ever leaving it half written or missing (an audit running in parallel starts Fiji from the same folder): write beside it, then os.replace."""
+    data = source.read_bytes()
+    if target.is_file() and target.read_bytes() == data:
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(".%s.%d.tmp" % (target.name, os.getpid()))
+    temporary.write_bytes(data)
+    os.replace(temporary, target)
+
+
+def plugin_dir() -> Path:
+    """The folder holding LabConstrictor_Tools.groovy and lib/: LC_FIJI_PLUGIN_DIR (e.g. the unzipped release script) or this repository's own."""
+    return Path(os.environ["LC_FIJI_PLUGIN_DIR"]) if os.environ.get("LC_FIJI_PLUGIN_DIR") else PRODUCT
+
+
+def host_version() -> str:
+    """What is under test, for the matrix: LC_HOST_VERSION (a tag or SHA) or, for this repository's own script, `repo@<short sha>`."""
+    if os.environ.get("LC_HOST_VERSION"):
+        return os.environ["LC_HOST_VERSION"]
+    if os.environ.get("LC_FIJI_PLUGIN_DIR") or os.environ.get("LC_FIJI_JAR"):
+        raise SystemExit("ui_audit.py: set LC_HOST_VERSION (the tag or SHA of the released plugin under test)")
+    done = subprocess.run(["git", "-C", str(PRODUCT), "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=False)
+    return "repo@" + (done.stdout.strip() or "unknown")
+
+
+def install_script(fiji: Path) -> list[str]:
+    """The loose script and its lib/ in Fiji's scripts/Plugins/LabConstrictor (idempotent and atomic, so that two audits can share one Fiji); no jar next to it (the menu would list the tool
+    twice). Returns the launcher arguments."""
+    target, source = fiji / "scripts" / "Plugins" / "LabConstrictor", plugin_dir()
+    (fiji / "plugins" / "labconstrictor-fiji.jar").unlink(missing_ok=True)
+    replace_if_changed(source / "LabConstrictor_Tools.groovy", target / "LabConstrictor_Tools.groovy")
+    libs = sorted((source / "lib").glob("*.groovy"))
+    for lib in libs:
+        replace_if_changed(lib, target / "lib" / lib.name)
+    for stale in (target / "lib").glob("*.groovy"):
+        if stale.name not in {lib.name for lib in libs}:
+            stale.unlink(missing_ok=True)
+    return ["--run", str(target / "LabConstrictor_Tools.groovy")]
+
+
+def jar_in_fiji(fiji: Path) -> Path:
+    return fiji / "plugins" / "labconstrictor-fiji.jar"
+
+
+def remove_jar(fiji: Path) -> None:
+    """Leave the shared Fiji as it was: no plugin jar after a jar run."""
+    jar_in_fiji(fiji).unlink(missing_ok=True)
+
+
+_PRIVATE: list[Path] = []
+
+
+def private_script() -> list[str]:
+    """The plugin script and lib/ in a folder of this audit's own (outside Fiji): every start but the menu check runs from it, so another process that rewrites the shared Fiji's
+    scripts/Plugins/LabConstrictor cannot pull the files from under a start."""
+    if not _PRIVATE:
+        _PRIVATE.append(Path(tempfile.mkdtemp(prefix="lcaudit_script_")))
+    target, source = _PRIVATE[0], plugin_dir()
+    replace_if_changed(source / "LabConstrictor_Tools.groovy", target / "LabConstrictor_Tools.groovy")
+    for lib in sorted((source / "lib").glob("*.groovy")):
+        replace_if_changed(lib, target / "lib" / lib.name)
+    return ["--run", str(target / "LabConstrictor_Tools.groovy")]
+
+
+def launch_arguments(options: Optional[str], menu_entry: Optional[str], jar: bool) -> list[str]:
+    """The arguments that start the plugin: the loose script (`--run`), or, with LC_FIJI_MODE=jar and LC_FIJI_JAR=<the jar>, the jar's menu command through a macro.
+    `options`: a macro call with these options; `menu_entry`: in jar mode, run that other menu entry instead (the "Copy last run as command" entry)."""
+    fiji = Path(os.environ["LC_FIJI_HOME"])
+    if not jar:
+        return install_script(fiji) if options is not None else private_script()    # the menu check (the copy entry) needs the script where Fiji builds its menu from
+    if not os.environ.get("LC_FIJI_JAR"):
+        raise SystemExit("ui_audit.py: LC_FIJI_MODE=jar needs LC_FIJI_JAR=<the plugin jar>")
+    shutil.rmtree(fiji / "scripts" / "Plugins" / "LabConstrictor", ignore_errors=True)   # never both: the menu would list the tool twice
+    replace_if_changed(Path(os.environ["LC_FIJI_JAR"]), jar_in_fiji(fiji))
+    macro = Path(tempfile.mkdtemp(prefix="lcaudit_macro_")) / "start.ijm"
+    entry = menu_entry or "LabConstrictor Tools..."
+    macro.write_text('run("%s"%s);\n' % (entry, ', "%s"' % options if options else ""))
+    return ["-macro", str(macro)]
 
 
 def discover_apps(home: str, fiji: Path) -> Any:

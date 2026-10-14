@@ -1,4 +1,4 @@
-"""The environment of the Fiji UI audit (docs/UI_AUDIT.md). A missing or wrong variable is a usage error (exit 2), never a guessed default."""
+"""The environment of the Fiji UI audit (see tests/ui_audit.py). A missing or wrong variable is a usage error (exit 2), never a guessed default."""
 
 import os
 from dataclasses import dataclass
@@ -23,6 +23,7 @@ class Settings:
     parts: list[str]               # LC_UI_PARTS: panel, tools (default: both)
     inject: Optional[str]          # LC_UI_INJECT: a seeded failure (negative controls)
     jar: bool                      # LC_FIJI_MODE=jar: the built jar's menu command instead of the loose script
+    ordered: list[str]             # LC_UI_ORDERED: apps whose tools are a sequence (replay the earlier cases first); default GuessTheCondition
 
 
 def usage(message: str) -> SystemExit:
@@ -66,4 +67,4 @@ def read_settings(env: Mapping[str, str] = os.environ) -> Settings:
     if not (fiji / "jars").is_dir():
         raise usage("LC_FIJI_HOME=%s is not a Fiji installation (no jars/ folder)" % fiji)
     return Settings(env["LC_HOME"], fiji, apps, multi, tests, Path(env.get("LC_SHOTS", "screens")), expect == "listed", float(env.get("LC_UI_TOOL_TIMEOUT", "300")), tools, parts, inject,
-                    mode == "jar")
+                    mode == "jar", [a.strip() for a in env.get("LC_UI_ORDERED", "GuessTheCondition").split(",") if a.strip()])

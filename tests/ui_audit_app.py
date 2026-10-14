@@ -1,4 +1,4 @@
-"""The audit of ONE app in Fiji: which Fiji starts it makes (docs/UI_AUDIT.md) and how each is judged.
+"""The audit of ONE app in Fiji: which Fiji starts it makes (see tests/ui_audit.py) and how each is judged.
 
 Every job is its own Fiji process under a watchdog (tests/ui_audit_launch.py); the harness (tests/ui_audit_body.groovy) acts and reports, and every verdict is made HERE, from the app's schema,
 its cases, the files on disk and the clipboard text, never from the state of the dialog under test. Whatever a start did not reach is recorded (FAIL when the watchdog killed it, NOT_RUN
@@ -9,6 +9,8 @@ import json
 import os
 import shlex
 import shutil
+import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -17,8 +19,8 @@ from typing import Any, Callable, Optional
 from ui_audit_forms import (absent_problems, chooser_problems, control_table, form_problems, geometry_problems, norm, tool_choice_names, window_problems)
 from ui_audit_launch import Launch, discover_apps, launch_arguments, run_fiji
 from ui_audit_matrix import Matrix, sanitize
-from ui_audit_runs import (absolute_inputs, build_fills, is_ordered, load_cases, load_no_case, number_text, preload_for, replay_before, run_problems, screenshot_problems,
-                           tool_case)
+from ui_audit_runs import (absolute_inputs, build_fills, is_ordered, load_cases, load_no_case, number_text, order_tools, preload_for, replay_before, run_problems,
+                           screenshot_problems, tool_case)
 from ui_audit_settings import Settings
 
 HERE = Path(__file__).resolve().parent
@@ -27,7 +29,7 @@ COPY_OPTIONS = {"empty": "copy_last=true", "terminal": "copy_last=true kind=term
 COPY_ENTRY = "Copy last run as command"                  # the jar's menu entry that copies the last command
 MENU_SCRIPT = ["labconstrictor tools"]
 MENU_JAR = ["labconstrictor tools...", "copy last run as command"]
-PANEL_IDS = ["chooser_app", "chooser_tool", "chooser_ok", "chooser_cancel", "form_cancel", "menu", "copy_empty", "copy_terminal", "copy_python", "log"]
+PANEL_IDS = ["chooser_app", "chooser_tool", "chooser_ok", "chooser_cancel", "form_ok", "form_cancel", "menu", "copy_empty", "copy_terminal", "copy_python", "log"]
 Runner = Callable[..., Launch]
 
 
@@ -65,10 +67,11 @@ class Audit:
         self.absent: list[str] = []
         self.last_run: Optional[tuple[dict[str, Any], dict[str, Any]]] = None
         self.logged = False
+        self.replays = 0
 
     # ---------------------------------------------------------------- one Fiji start
     def start(self, mode: str, tool: Optional[dict[str, Any]] = None, emit_panel: bool = False, fills: Optional[list[dict[str, Any]]] = None,
-              preload: Optional[list[dict[str, str]]] = None, option: Optional[str] = None) -> tuple[Launch, list[dict[str, Any]]]:
+              preload: Optional[list[dict[str, str]]] = None, option: Optional[str] = None, cwd: Optional[Path] = None) -> tuple[Launch, list[dict[str, Any]]]:
         """One Fiji start for `mode` (see tests/ui_audit_body.groovy); returns it and the activation rows it reported (they are in the matrix already)."""
         assert self.schema is not None
         names = tool_choice_names(self.schema)
@@ -79,8 +82,8 @@ class Audit:
                 "script_macro": option if mode == "copy" and not self.s.jar else None, "inject": self.s.inject if mode in ("controls", "run") else None}
         work = Path(tempfile.mkdtemp(prefix="lcaudit_plan_"))
         (work / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
-        env = dict(os.environ, LC_HOME=self.s.home, LC_FIJI_HARNESS=str(HERE / "ui_audit_body.groovy"), LC_UI_PLAN=str(work / "plan.json"),
-                   LC_UI_OUT=str(work / "out.jsonl"), LC_UI_TREE=str(HERE / "ui_audit_tree.groovy"), LC_UI_CONTROLS=str(HERE / "ui_audit_controls.json"))
+        env = dict(os.environ, LC_HOME=self.s.home, LC_FIJI_HARNESS=os.environ.get("LC_BODY_OVERRIDE", str(HERE / "ui_audit_body.groovy")), LC_UI_PLAN=str(work / "plan.json"),
+                   LC_UI_OUT=str(work / "out.jsonl"), LC_UI_TREE=os.environ.get("LC_UI_TREE_OVERRIDE", str(HERE / "ui_audit_tree.groovy")), LC_UI_CONTROLS=str(HERE / "ui_audit_controls.json"))
         rows: list[dict[str, Any]] = []
 
         def route(record: dict[str, Any]) -> None:
@@ -90,7 +93,10 @@ class Audit:
 
         arguments = self.arguments(option if mode == "copy" else None, COPY_ENTRY if mode == "copy" else None, self.s.jar)
         self.began = time.time()
-        launch = self.runner(self.s.fiji, arguments, env, work / "out.jsonl", self.s.timeout, route, self.tests_dir)
+        launch = self.runner(self.s.fiji, arguments, env, work / "out.jsonl", self.s.timeout, route, cwd or self.tests_dir)
+        if not launch.timed_out and launch.returncode not in (0, 2, 3) and not launch.records:   # Fiji itself failed to start (nothing of the harness ran): once more, and say so
+            self.m.add("ui_fiji_start_retry", "NOTE", "Fiji exited with %s after %.0f s before the harness wrote anything (%s); started again" % (launch.returncode, launch.seconds, launch.tail), tool=chosen["id"])
+            launch = self.runner(self.s.fiji, arguments, env, work / "out.jsonl", self.s.timeout, route, cwd or self.tests_dir)
         for record in launch.records:
             if record.get("kind") == "components":
                 self.record_components(record)
@@ -155,7 +161,7 @@ class Audit:
             tools = [o["title"] for o in self.obs(launch, "dialog") if o["dialog"] == "form"] or None
         return {"apps": apps, "tools": tools, "launch": launch}
 
-    def judge_chooser(self, launch: Launch, which: str, wanted_items: list[str]) -> None:
+    def judge_chooser(self, launch: Launch, which: str, wanted_items: list[str], preload: list[dict[str, str]]) -> None:
         check_id = "ui_fiji_panel_chooser_" + which
         record = next((r for r in launch.records if r.get("kind") == "components" and r["scope"] == "chooser_" + which), None)
         if record is None:
@@ -163,7 +169,7 @@ class Audit:
         items = next((o["items"] for o in self.obs(launch, "dialog") if o["dialog"] == which), [])
         title = next((o["title"] for o in self.obs(launch, "dialog") if o["dialog"] == which), "")
         problems = chooser_problems(which, record["controls"], items, wanted_items) + geometry_problems(record["geometry"], record["controls"])
-        problems += window_problems(record["windows"], record["geometry"]["screen"], [title], ALLOWED_FRAMES, "at the %s chooser" % which)
+        problems += window_problems(record["windows"], record["geometry"]["screen"], [title], [p["title"] for p in preload] + ALLOWED_FRAMES, "at the %s chooser" % which)
         subs = [r for r in launch.records if r.get("kind") == "check" and r["id"] == check_id]
         problems += ["activation: %s: %s" % (r["control"], r["detail"]) for r in subs if r["status"] == "FAIL"]
         problems += [] if subs else ["the chooser's items were never activated"]
@@ -177,7 +183,7 @@ class Audit:
         before = self.runs_now()
         launch, _rows = self.start("cancel")
         finish = launch.finish()
-        problems = self.click_problems(launch, ["chooser_cancel"]) + (["the plugin did not end after Cancel"] if finish is None else [])
+        problems = self.click_problems(launch, ["chooser_cancel"]) + self.ignored_cancel(launch, finish)
         if finish is not None:
             summary = finish["summary"]
             problems += [] if summary.get("cancelled") is True else ["the summary does not say cancelled"]
@@ -186,6 +192,13 @@ class Audit:
         self.m.add("ui_fiji_panel_chooser_cancel", "FAIL" if problems else "PASS", "; ".join(problems) if problems else "Cancel on the first chooser ended the plugin: cancelled, no run, no worker, no run record",
                    seconds=launch.seconds)
         self.conclude(["ui_fiji_panel_chooser_cancel"], launch)
+
+    def ignored_cancel(self, launch: Launch, finish: Optional[dict[str, Any]]) -> list[str]:
+        """What a Cancel that did not end the plugin did instead (the harness reports the dialogs showing; the run the plugin went on to make is a record under runs/)."""
+        if finish is not None:
+            return []
+        said = [o["detail"] for o in self.obs(launch, "cancel_ignored")]
+        return said or ["the plugin did not end after Cancel (%s)" % launch.ended()]
 
     def last_command(self) -> Optional[dict[str, Any]]:
         path = Path(self.s.home) / "state" / "last_command.json"
@@ -272,6 +285,7 @@ class Audit:
             problems = form_problems(tool, record["controls"], record["texts"], bool(preload)) + geometry_problems(record["geometry"], record["controls"])
             problems += window_problems(record["windows"], record["geometry"]["screen"], [tool["label"]], [p["title"] for p in preload] + ALLOWED_FRAMES, "at the form")
             problems += absent_problems(record["controls"]) + [d["detail"] for d in self.obs(launch, "dialog_problem")]
+            problems += ["unknown control(s), not in the control table: " + ", ".join(record["unknown"])] if record["unknown"] else []
             self.m.add("ui_fiji_form_%s_opens" % key, "FAIL" if problems else "PASS", "; ".join(problems) if problems else "%d parameter(s): every declared widget found and nothing else but OK and Cancel; "
                        "inside the %dx%d screen; no other window or dialog" % (len(tool["inputs"]), *record["geometry"]["screen"]), tool=tool["id"], seconds=launch.seconds)
         plan = next(iter(self.obs(launch, "activation_plan")), None)
@@ -293,10 +307,8 @@ class Audit:
 
     def judge_form_cancel(self, launch: Launch, before: set[str]) -> None:
         finish = launch.finish()
-        problems = self.click_problems(launch, ["form_cancel"])
-        if finish is None:
-            problems.append("the plugin did not end after Cancel")
-        else:
+        problems = self.click_problems(launch, ["form_cancel"]) + self.ignored_cancel(launch, finish)
+        if finish is not None:
             problems += [] if finish["summary"].get("cancelled") is True else ["the summary does not say cancelled"]
             problems += ["a run started (status %r)" % finish["summary"]["status"]] if "status" in finish["summary"] else []
         new = self.runs_now() - before
@@ -306,7 +318,7 @@ class Audit:
     def judge_run(self, tool: dict[str, Any], case: dict[str, Any], inputs: dict[str, Any], preload: list[dict[str, str]], launch: Launch, before: set[str], began: float) -> None:
         key = sanitize(tool["id"])
         finish = launch.finish()
-        problems, unchecked = run_problems(tool, case, inputs, preload, finish, self.files_since(before)) if finish is not None or launch.records else (["not reached"], [])
+        problems, unchecked = run_problems(tool, case, inputs, preload, finish, self.files_since(before), self.app) if finish is not None or launch.records else (["not reached"], [])
         problems += self.click_problems(launch, ["form_ok"]) + [o["detail"] for o in self.obs(launch, "fill_failed")] + [o["detail"] for o in self.obs(launch, "dialog_problem")]
         if finish is not None:
             problems += window_problems(finish.get("shown", []), finish.get("screen", [1600, 1000]), [], (finish.get("windows") or []) + (finish.get("tables") or []) + ALLOWED_FRAMES, "after the run")
@@ -318,12 +330,24 @@ class Audit:
                 ", ".join("%s:%s" % (o["name"], o["type"]) for o in tool["outputs"]), "; inputs from case " + json.dumps(case.get("inputs", {}))[:120]), tool=tool["id"], seconds=launch.seconds)
             if unchecked:
                 self.m.add("ui_fiji_run_" + key, "HUMAN", "expectations of the case that Fiji cannot check: " + ", ".join(unchecked), tool=tool["id"], control="not asserted in Fiji")
-            if not problems and summary.get("status") == "COMPLETE":
+            if "status" in summary:
                 self.last_run = (tool, inputs)
+            if not problems and summary.get("status") == "COMPLETE":
                 if not self.logged:
                     self.judge_log(finish or {}, summary)
+        self.judge_form_ok(launch, finish)
         self.judge_screens(tool, launch, began, with_run=True)
         self.conclude(["ui_fiji_run_" + key, "ui_fiji_screens_" + key], launch, tool["id"])
+
+    def judge_form_ok(self, launch: Launch, finish: Optional[dict[str, Any]]) -> None:
+        """OK on the form (the first run of the audit): a real click closed the dialog and the plugin started a run (whatever its outcome: the outcome is ui_fiji_run_<tool>)."""
+        if self.m.has_row("ui_fiji_panel_form_ok") or "panel" not in self.s.parts:
+            return
+        problems = self.click_problems(launch, ["form_ok"])
+        problems += [] if finish is not None and "status" in finish.get("summary", {}) else ["the plugin reported no run after OK (%s)" % launch.ended()]
+        status = finish["summary"]["status"] if finish is not None and "status" in finish.get("summary", {}) else None
+        self.m.add("ui_fiji_panel_form_ok", "FAIL" if problems else "PASS",
+                   "; ".join(problems) if problems else "a real click on OK closed the form and the plugin ran the tool (status %s)" % status, seconds=launch.seconds)
 
     def judge_log(self, finish: dict[str, Any], summary: dict[str, Any]) -> None:
         last, log = self.last_command(), finish.get("log", "")
@@ -358,9 +382,11 @@ class Audit:
         preload = preload_for(tool, inputs, self.tests_dir)
         before = self.runs_now()
         if "tools" in self.s.parts or first:
-            launch, rows = self.start("controls", tool, emit_panel=first and "panel" in self.s.parts, preload=preload)
+            panel = first and "panel" in self.s.parts
+            # the panel start presses Cancel and watches what the plugin does; a plugin whose Cancel runs the tool must not do it in the folder the real runs use
+            launch, rows = self.start("controls", tool, emit_panel=panel, preload=preload, cwd=self.scratch_copy() if panel else None)
             if first and "panel" in self.s.parts:
-                self.judge_panel_choosers(launch, tool)
+                self.judge_panel_choosers(launch, tool, preload)
             self.judge_form(tool, launch, rows, preload, first and "panel" in self.s.parts, before)
             if case is None:
                 self.judge_screens(tool, launch, self.began - 1, with_run=False)
@@ -383,26 +409,44 @@ class Audit:
         launch, _rows = self.start("run", tool, fills=fills, preload=preload)
         self.judge_run(tool, case, inputs, preload, launch, before, self.began)
 
+    def scratch_copy(self) -> Path:
+        """A throw-away copy of the app's tests folder (the working folder of the Cancel observation)."""
+        target = Path(tempfile.mkdtemp(prefix="lcaudit_scratch_")) / "lc_tests"
+        shutil.copytree(self.tests_dir, target)
+        return target
+
     def replay(self, case: dict[str, Any]) -> None:
         """A prerequisite of an ordered app (an earlier case whose state a later one needs): run through the same form, not audited; a failure is a row of its own."""
         assert self.schema is not None
+        self.replays += 1
         tool = next(t for t in self.schema["tools"] if t["id"] == case["tool"])
         inputs = absolute_inputs(case, tool, self.tests_dir)
         preload = preload_for(tool, inputs, self.tests_dir)
         before = self.runs_now()
         launch, _rows = self.start("run", tool, fills=build_fills(tool, inputs, preload), preload=preload)
-        problems, _unchecked = run_problems(tool, case, inputs, preload, launch.finish(), self.files_since(before))
-        if problems:
-            self.m.add("ui_fiji_prerequisite_" + sanitize(tool["id"]), "FAIL", "the earlier case of '%s' (needed for a later tool) failed: %s" % (tool["id"], "; ".join(problems)), tool=tool["id"], seconds=launch.seconds)
+        problems, _unchecked = run_problems(tool, case, inputs, preload, launch.finish(), self.files_since(before), self.app)
+        unfilled = [o["detail"] for o in self.obs(launch, "fill_failed")]
+        finish = launch.finish()
+        if finish is not None and "status" in finish.get("summary", {}):
+            self.last_run = (tool, inputs)
+        refused_early = finish is not None and finish["summary"].get("error") and "status" not in finish["summary"] and not self.files_since(before)["new_runs"]
+        if refused_early and case.get("expect", {}).get("status", "COMPLETE") != "COMPLETE":     # the plugin refused before any run: nothing changed, as the case expects
+            return
+        row = "ui_fiji_prerequisite_%s_%s" % (sanitize(tool["id"]), self.replays)
+        if unfilled:
+            self.m.add(row, "HUMAN", "an earlier case (expects %s) was not replayed: the Fiji form cannot express its input (%s); later cases of this app may depend on its effect" % (
+                case.get("expect", {}).get("status", "COMPLETE"), "; ".join(unfilled)), tool=tool["id"])
+        elif problems:
+            self.m.add(row, "FAIL", "the earlier case of '%s' (needed for a later tool) failed: %s" % (tool["id"], "; ".join(problems)), tool=tool["id"], seconds=launch.seconds)
 
-    def judge_panel_choosers(self, launch: Launch, tool: dict[str, Any]) -> None:
+    def judge_panel_choosers(self, launch: Launch, tool: dict[str, Any], preload: list[dict[str, str]]) -> None:
         assert self.schema is not None
         if len(self.listed_apps) > 1:
-            self.judge_chooser(launch, "app", self.listed_apps)
+            self.judge_chooser(launch, "app", self.listed_apps, preload)
         else:
             self.m.add("ui_fiji_panel_chooser_app", "HUMAN", "not applicable: only one app is listed, so Fiji shows no app chooser")
         if len(self.schema["tools"]) > 1:
-            self.judge_chooser(launch, "tool", tool_choice_names(self.schema))
+            self.judge_chooser(launch, "tool", tool_choice_names(self.schema), preload)
         else:
             self.m.add("ui_fiji_panel_chooser_tool", "HUMAN", "not applicable: the app has one tool, so Fiji shows no tool chooser")
         opened = self.obs(launch, "chooser_ok")
@@ -437,12 +481,21 @@ class Audit:
             return
         self.tests_dir = Path(tempfile.mkdtemp(prefix="lcaudit_tests_")) / "lc_tests"
         shutil.copytree(tests, self.tests_dir)   # the cases may write into their fixtures (a demo experiment): never into the app's own tree
+        generator = self.tests_dir / "make_fixtures.py"
+        if generator.is_file():                  # an app that generates its fixtures (the README's `python lc_tests/make_fixtures.py lc_tests/fixtures`): start from a pristine set
+            shutil.rmtree(self.tests_dir / "fixtures", ignore_errors=True)
+            made = subprocess.run([sys.executable, str(generator), str(self.tests_dir / "fixtures")], cwd=self.tests_dir, capture_output=True, text=True, check=False)
+            if made.returncode:
+                self.m.add("ui_fiji_driver_crashed", "FAIL", "make_fixtures.py failed (exit %d): %s" % (made.returncode, made.stderr[-300:]))
+                return
         if not self.listing():
             return
         multi_rows()
-        cases, no_case, ordered = load_cases(self.tests_dir), load_no_case(self.tests_dir), is_ordered(self.tests_dir)
+        cases, no_case = load_cases(self.tests_dir), load_no_case(self.tests_dir)
+        ordered = self.app in self.s.ordered or is_ordered(self.tests_dir)
         tool_ids = self.tool_ids()
         tools = [t for t in self.schema["tools"] if t["id"] in tool_ids]
+        tools = order_tools(tools, cases) if ordered else tools
         if "panel" in self.s.parts:
             self.panel_cancel(len(self.schema["tools"]))
             self.panel_copy_empty_and_menu()

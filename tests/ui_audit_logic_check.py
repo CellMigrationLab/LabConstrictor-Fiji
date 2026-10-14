@@ -61,10 +61,10 @@ def test_matrix() -> None:
         m.add("b", "FAIL", "multi\nline   detail " + "x" * 600)
         m.add("d", "HUMAN", "a person")
         m.add("a", "PASS", "one control", control="text_field 'x'")
-        on_disk = json.loads((Path(folder) / "matrix_fiji_demo.json").read_text())
+        on_disk = json.loads((Path(folder) / "matrix_ui_fiji_demo.json").read_text())
         check("matrix_written_after_each_row", len(on_disk["rows"]) == 4 and on_disk["finished"] is None, "rows %d" % len(on_disk["rows"]))
         code = m.finish()
-        final = json.loads((Path(folder) / "matrix_fiji_demo.json").read_text())
+        final = json.loads((Path(folder) / "matrix_ui_fiji_demo.json").read_text())
         check("matrix_not_run_is_red", m.status_of("c") == "NOT_RUN" and code == 1 and final["finished"], str(m.counts()))
         lines = out.getvalue().splitlines()
         check("matrix_lines_one_line", all("\n" not in x for x in lines) and "CHECK b FAIL" in lines[1] and len(lines[1]) < 520 and "NOTE d not run: a person" in lines[2] and "CHECK c FAIL not run:" in lines[3] and len(lines) == 4, repr(lines)[:200])
@@ -112,22 +112,23 @@ def test_runs() -> None:
     summary["image_out"], summary["table_rows"] = summary.pop("image_out"), summary.pop("table_rows")
     tool = dict(tool, outputs=[{"name": "out", "type": "image"}, {"name": "rows", "type": "table"}, {"name": "values", "type": "values"}])
     summary = {"status": "COMPLETE", "request": {"text": "hello", "count": 4, "mode": "b", "flag": False, "maybe": "m"}, "image_out": [32, 32, 1, 8], "table_rows": {"rows": 4, "cols": ["i"]}, "values_values": {"mode": "b"}}
+    fin = lambda summary: {"summary": summary, "images": [{"title": "app:out", "width": 32, "height": 32, "pixel_width": 1.0, "pixel_height": 1.0, "unit": "pixel", "overlay": 0, "roi": None}]}   # noqa: E731
     files = {"new_runs": ["20260101_kitchen"], "record_files": ["run.json"], "log_file": True}
-    problems, _un = runs.run_problems(tool, case, inputs, preload, {"summary": summary}, files)
+    problems, _un = runs.run_problems(tool, case, inputs, preload, fin(summary), files)
     check("run_ok", problems == [], str(problems))
     failed = dict(summary, status="FAILED", failure_message="boom")
-    check("seeded_failed_run_fails", any("status 'FAILED'" in p for p in runs.run_problems(tool, case, inputs, preload, {"summary": failed}, files)[0]), "")
+    check("seeded_failed_run_fails", any("status 'FAILED'" in p for p in runs.run_problems(tool, case, inputs, preload, fin(failed), files)[0]), "")
     blank = dict(summary, image_out=[0, 0, 1, 8], values_values={})
-    problems = runs.run_problems(tool, case, inputs, preload, {"summary": blank}, files)[0]
+    problems = runs.run_problems(tool, case, inputs, preload, fin(blank), files)[0]
     check("seeded_blank_result_fails", any("blank" in p and "out" in p for p in problems) and any("empty" in p and "values" in p for p in problems), str(problems)[:200])
     wrong = dict(summary, values_values={"mode": "a"})
-    check("seeded_wrong_value_fails", any("mode is 'a'" in p for p in runs.run_problems(tool, case, inputs, preload, {"summary": wrong}, files)[0]), "")
+    check("seeded_wrong_value_fails", any("mode is 'a'" in p for p in runs.run_problems(tool, case, inputs, preload, fin(wrong), files)[0]), "")
     missing = {k: v for k, v in summary.items() if k != "table_rows"}
-    check("seeded_missing_result_fails", any("'rows'" in p and "not shown" in p for p in runs.run_problems(tool, case, inputs, preload, {"summary": missing}, files)[0]), "")
-    check("no_run_record_fails", any("run record" in p for p in runs.run_problems(tool, case, inputs, preload, {"summary": summary}, dict(files, new_runs=[]))[0]), "")
+    check("seeded_missing_result_fails", any("'rows'" in p and "not shown" in p for p in runs.run_problems(tool, case, inputs, preload, fin(missing), files)[0]), "")
+    check("no_run_record_fails", any("run record" in p for p in runs.run_problems(tool, case, inputs, preload, fin(summary), dict(files, new_runs=[]))[0]), "")
     check("no_finish_fails", runs.run_problems(tool, case, inputs, preload, None, files)[0] != [], "")
     sent = dict(summary, request={"text": "hello", "count": 5, "mode": "b", "flag": False, "maybe": "m"})
-    check("seeded_wrong_value_sent_fails", any("count" in p for p in runs.run_problems(tool, case, inputs, preload, {"summary": sent}, files)[0]), "")
+    check("seeded_wrong_value_sent_fails", any("count" in p for p in runs.run_problems(tool, case, inputs, preload, fin(sent), files)[0]), "")
     cases = [{"tool": "a", "expect": {"status": "FAILED"}}, {"tool": "a", "expect": {}}, {"tool": "stress_real_memory"}, {"tool": "b", "cancel_after_s": 1}, {"tool": "c", "skip": "x"}]
     check("case_choice", runs.tool_case(cases, "a") is cases[1] and runs.tool_case(cases, "stress_real_memory") is None and runs.tool_case(cases, "b") is None and runs.tool_case(cases, "c") is None, "")
     done: list[int] = []
@@ -152,8 +153,39 @@ def test_screens_and_settings() -> None:
             check("settings_usage_error_" + word.split()[0], word in str(stop), str(stop)[:100])
 
 
+def test_placement() -> None:
+    import numpy
+    import tifffile
+
+    import ui_audit_placement as placement
+
+    folder = Path(tempfile.mkdtemp())
+    path = str(folder / "cal.tif")
+    tifffile.imwrite(path, numpy.zeros((32, 32), dtype="uint8"), imagej=True, resolution=(2.0, 2.0), metadata={"unit": "um"})
+    check("fixture_scale_read_with_tifffile", placement.fixture_pixel_size_um(path) == 0.5, str(placement.fixture_pixel_size_um(path)))
+    tool = {"inputs": [{"name": "image", "type": "image"}], "outputs": [{"name": "out", "type": "image", "display": {"apply_to": "image"}}, {"name": "pts", "type": "points"}]}
+    case = {"tool": "t", "expect": {"results": {"pts": {"rows": 3}}}}
+    preload = [{"path": path, "title": "cal.tif"}]
+
+    def image(title: str, width: float, unit: str, roi: object = None) -> dict[str, object]:
+        return {"title": title, "width": 32, "height": 32, "pixel_width": width, "pixel_height": width, "unit": unit, "overlay": 0, "roi": roi}
+
+    def problems_of(finish: dict[str, object], schema_tool: dict[str, object] = tool) -> list[str]:
+        return placement.placement_problems("app", schema_tool, case, {"image": path}, finish, preload)
+
+    good = {"summary": {}, "images": [image("cal.tif", 0.5, "micron", {"type": "point", "name": "app:pts", "points": 3}), image("app:out", 0.5, "micron")]}
+    check("placement_ok", problems_of(good) == [], str(problems_of(good)))
+    check("seeded_result_without_the_scale_fails", any("scale" in p for p in problems_of({"summary": {}, "images": [good["images"][0], image("app:out", 1.0, "pixel")]})), "")
+    stray = {"summary": {}, "images": [image("cal.tif", 0.5, "micron"), image("other.tif", 1.0, "pixel", {"type": "point", "name": "app:pts", "points": 3}), good["images"][1]]}
+    check("seeded_points_on_the_wrong_image_fail", any("not on 'cal.tif'" in p for p in problems_of(stray)) and any("also on 'other.tif'" in p for p in problems_of(stray)), str(problems_of(stray))[:200])
+    wrong_count = {"summary": {}, "images": [image("cal.tif", 0.5, "micron", {"type": "point", "name": "app:pts", "points": 2}), good["images"][1]]}
+    check("seeded_wrong_point_count_fails", any("expected a point ROI with 3" in p for p in problems_of(wrong_count)), "")
+    sized = {"inputs": [{"name": "image", "type": "image"}, {"name": "scale", "type": "float", "pixel_size_of": "image"}], "outputs": []}
+    check("seeded_wrong_pixel_size_sent_fails", any("declares 0.5 um" in p for p in problems_of({"summary": {"request": {"scale": 0.9}}, "images": good["images"]}, sized)), "")
+
+
 if __name__ == "__main__":
-    for test in (test_matrix, test_forms, test_runs, test_screens_and_settings):
+    for test in (test_matrix, test_forms, test_runs, test_placement, test_screens_and_settings):
         test()
     print("%d logic check(s) failed" % len(FAILURES))
     sys.exit(1 if FAILURES else 0)

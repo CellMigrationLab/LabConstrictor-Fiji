@@ -35,6 +35,7 @@ import javax.swing.text.JTextComponent
 @Field final List<Class> INTERACTIVE = [AbstractButton, JComboBox, JSpinner, JSlider, JTextComponent, JList, JTable, JTree, JScrollBar]
 @Field final int SETTLE_MS = 300                  // the callbacks of SciJava run on a thread of their own: they get this long before a value is read back
 @Field final int ITEM_SETTLE_MS = 150
+@Field final int SETTLE_LONG_MS = 3000           // how long a click gets to show its effect before the control is said not to react
 @Field final int WINDOW_WAIT_MS = 15000           // how long a browse button gets to open its chooser
 @Field final int POLL_MS = 100
 @Field final int CLICK_DELAY_MS = 80
@@ -128,9 +129,11 @@ def selectItems = { Map control ->
     return count + " item(s) selected and read back"
 }
 def realClick = { Component c ->
-    def where = onEdt { [c.locationOnScreen, c.size] }
+    def where = onEdt { [c.locationOnScreen, c.size, c instanceof javax.swing.JComponent ? c.visibleRect : new Rectangle(0, 0, c.width, c.height)] }
     Rectangle screen = new Rectangle(Toolkit.getDefaultToolkit().getScreenSize())
-    int x = (where[0].x as int) + (int) (where[1].width / 2), y = (where[0].y as int) + (int) (where[1].height / 2)
+    Rectangle visible = where[2]                          // a component wider than the panel it sits in is clipped (SciJava's check boxes): the click goes where a person can see it
+    if (visible.empty) fail("the control has no visible part: a real click cannot reach it")
+    int x = (where[0].x as int) + visible.x + (int) (visible.width / 2), y = (where[0].y as int) + visible.y + (int) (visible.height / 2)
     if (!screen.contains(x, y)) fail("the control is at (" + x + "," + y + "), outside the " + screen.width + "x" + screen.height + " screen: a real click cannot reach it")
     Robot robot = new Robot()
     robot.mouseMove(x, y)
@@ -142,10 +145,13 @@ def realClick = { Component c ->
 }
 def toggle = { Map control ->
     AbstractButton box = control.comp
+    settle(SETTLE_MS)                                     // callbacks of an earlier control may still be refreshing the form from the module
     boolean original = onEdt { box.selected }
     for (boolean wanted : [!original, original]) {
         realClick(box)
-        settle(SETTLE_MS)
+        long deadline = System.currentTimeMillis() + SETTLE_LONG_MS
+        while ((onEdt { box.selected }) != wanted && System.currentTimeMillis() < deadline) Thread.sleep(POLL_MS)
+        settle(SETTLE_MS)                                 // and it must STAY so: SciJava's own refresh of the widget from the module value comes after the click
         if ((onEdt { box.selected }) != wanted) fail("a click should leave it " + (wanted ? "ticked" : "unticked") + " (enabled: " + onEdt { box.enabled } + ")")
     }
     return "ticked and unticked"
@@ -184,12 +190,21 @@ def selectRadio = { Map control ->
 def slide = { Map control ->
     JSlider slider = control.comp
     int original = onEdt { slider.value }, target = original == onEdt { slider.maximum } ? onEdt { slider.minimum } : onEdt { slider.maximum }
-    onEdt { slider.setValue(target) }
-    settle(SETTLE_MS)
-    int now = onEdt { slider.value }
-    onEdt { slider.setValue(original) }
-    if (now != target) fail("set " + target + " and the slider reads " + now)
-    return "moved " + original + " -> " + target
+    def partner = null                                    // SciJava's slider style: the number box in the same row must show the value the slider shows
+    Container node = onEdt { slider.parent }
+    for (int up = 0; up < 3 && partner == null && node != null; up++, node = onEdt { node.parent }) {
+        def all = []
+        onEdt { collect(node, all) }
+        partner = all.find { it instanceof JSpinner }
+    }
+    for (int wanted : [target, (int) ((original + target) / 2), original]) {
+        onEdt { slider.setValue(wanted) }
+        settle(SETTLE_MS)
+        int now = onEdt { slider.value }
+        if (now != wanted) fail("set " + wanted + " and the slider reads " + now)
+        if (partner != null && (onEdt { (partner.value as Number).intValue() }) != wanted) fail("the slider is at " + wanted + " but the number box beside it shows " + onEdt { partner.value })
+    }
+    return "moved " + original + " -> " + target + (partner == null ? "" : ", the number box followed every position")
 }
 def showingWindows = { onEdt { Window.getWindows().findAll { it.isShowing() } } as List }
 def closeWindowsExcept = { List known ->
@@ -212,6 +227,7 @@ def browse = { Map control ->
     closeWindowsExcept(before)
     if (showingWindows().any { !before.contains(it) }) fail("the file chooser " + what + " did not close")
     if (!before.every { it.isShowing() }) fail("the form closed together with the file chooser")
+    before.each { Window w -> onEdt { w.toFront(); w.requestFocus() } }
     return "opened " + what + " and closed it; the form is still open"
 }
 
@@ -226,6 +242,7 @@ def activate = { Map control ->
 def fill = { List controls, String label, def value ->
     String wanted = normalise(label)
     def control = controls.find { it.label == wanted && !(it.id in ["file_browse", "radio", "form_ok", "form_cancel", "message_text"]) }
+    if (control != null && control.id == "slider") control = controls.find { it.id == "number_spinner" && it.label == wanted } ?: control   // type the number, as a person can
     if (control == null) control = controls.find { it.id == "radio" && normalise(it.text) == normalise(value.toString()) }
     if (control == null) fail("no component for '" + label + "' to put " + value + " into")
     def comp = control.comp
@@ -241,9 +258,10 @@ def fill = { List controls, String label, def value ->
         onEdt { comp.doClick() }
     } else if (comp instanceof JSpinner) {
         def current = onEdt { comp.value }
-        onEdt { comp.setValue(current instanceof Integer ? (value as Number).intValue() : (value as Number).doubleValue()) }
+        def number = new BigDecimal(value.toString())
+        onEdt { comp.setValue(current instanceof Integer ? number.intValue() : number.doubleValue()) }
     } else if (comp instanceof JSlider) {
-        onEdt { comp.setValue((value as Number).intValue()) }
+        onEdt { comp.setValue(new BigDecimal(value.toString()).intValue()) }
     } else {
         fail("the component of '" + label + "' is a " + comp.class.simpleName + ": there is no way to fill it")
     }

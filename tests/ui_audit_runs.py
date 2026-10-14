@@ -4,8 +4,10 @@ Cases are the app's (the format of `labconstrictor-tools test`: tool, inputs, ex
 expects FAILED, cancels, is skipped, or belongs to a `stress_*` tool is never run: memory stress such as stress_real_memory must not run in a GUI). File inputs become Fiji
 inputs the way a person gives them: an image or labels file is OPENED as an ImagePlus (its title is the file name; Fiji reads the calibration from the file itself) and chosen in the
 form; a table, file or folder path is typed into its field (relative paths are made absolute against the cases file's folder, as the Tools' own runner does).
-Apps whose tools depend on each other in order (Guess the Condition: prepare_game before play_round) list `"ordered": true` in `lc_tests/ui_audit.json`: before a tool is audited,
-every earlier COMPLETE case of the file is replayed through the same dialog (without audit) so the state the case needs exists.
+Apps whose tools depend on each other in order (Guess the Condition: a game whose state is in the results folder) are "ordered": LC_UI_ORDERED names them (default GuessTheCondition), or the
+app's `lc_tests/ui_audit.json` says `{"ordered": true}`. The tools are then audited in the order of their chosen cases, and before each one every earlier case of the file is replayed through
+the same dialog (without audit), whatever status it expects, because a case that expects FAILED can still change the state (Guess the Condition: the last guess is saved by the call that
+says "last image"); only a skipped, cancelling or stress case is left out.
 Everything the checks compare with comes from the schema, the files on disk and the case; never from the state of the dialog.
 """
 
@@ -15,12 +17,12 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ui_audit_forms import base_label
+from ui_audit_placement import placement_problems
 
 PATH_TYPES = ("image", "labels", "table", "file", "folder")
 SCALAR_TYPES = ("integer", "float", "string", "boolean", "choice")
 RESULT_KEYS = {"image": "image_", "labels": "image_", "table": "table_", "values": "values_", "message": "message_", "points": "points_", "shapes": "shapes_", "file": "file_"}
 DTYPES = {8: "uint8", 16: "uint16", 32: "float32"}
-UNIT_UM = {"um": 1.0, "µm": 1.0, "micron": 1.0, "microns": 1.0, "nm": 1e-3, "mm": 1e3, "cm": 1e4}   # ImageJ unit texts of a length, in micrometres
 TOLERANCE = 1e-6
 
 
@@ -56,17 +58,28 @@ def runnable(case: dict[str, Any]) -> bool:
             and not case["tool"].startswith("stress_"))
 
 
+def replayable(case: dict[str, Any]) -> bool:
+    """A case that an ordered app replays as a prerequisite: any expected status, but not skipped, not cancelling, not a stress tool."""
+    return not case.get("skip") and not case.get("cancel_after_s") and not case["tool"].startswith("stress_")
+
+
+def order_tools(tools: list[dict[str, Any]], cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The tools in the order of their chosen cases (a tool without one last, in schema order): the order an ordered app was written to be played in."""
+    position = {t["id"]: (cases.index(c) if (c := tool_case(cases, t["id"])) is not None else len(cases)) for t in tools}
+    return sorted(tools, key=lambda t: position[t["id"]])
+
+
 def tool_case(cases: list[dict[str, Any]], tool_id: str) -> Optional[dict[str, Any]]:
     return next((case for case in cases if case["tool"] == tool_id and runnable(case)), None)
 
 
 def replay_before(cases: list[dict[str, Any]], chosen: dict[str, Any], done: list[int]) -> list[dict[str, Any]]:
-    """The runnable cases that stand before `chosen` in the file and have not been run yet (`done` = their indexes, extended), for an ordered app."""
+    """The replayable cases that stand before `chosen` in the file and have not been run yet (`done` = their indexes, extended), for an ordered app."""
     prerequisites = []
     for index, case in enumerate(cases):
         if case is chosen:
             break
-        if runnable(case) and index not in done:
+        if replayable(case) and index not in done:
             prerequisites.append(case)
             done.append(index)
     return prerequisites
@@ -134,27 +147,6 @@ def close(found: Any, wanted: Any) -> bool:
     return found == wanted
 
 
-def fixture_pixel_size_um(path: str) -> Optional[float]:
-    """The pixel size in micrometres that the TIFF itself declares (ImageJ unit text, or a centimetre resolution unit), read with tifffile, never with Fiji; None when the file declares
-    none the Tools' unit rules accept (no resolution, a default 72 or 96 dpi, an unknown unit text)."""
-    import tifffile
-
-    with tifffile.TiffFile(path) as tif:
-        page = tif.pages[0]
-        tag = page.tags.get("XResolution")
-        if tag is None or not tag.value[0]:
-            return None
-        per_unit = tag.value[0] / tag.value[1]
-        unit = (tif.imagej_metadata or {}).get("unit")
-        if unit:
-            factor = UNIT_UM.get(str(unit))
-            return None if factor is None else factor / per_unit
-        resolution_unit = page.tags.get("ResolutionUnit")
-        if resolution_unit is not None and int(resolution_unit.value) == 3 and abs(per_unit - 37.8) / 37.8 > 0.005:   # centimetres, not the 96 dpi default
-            return 1e4 / per_unit
-        return None
-
-
 def request_problems(tool: dict[str, Any], inputs: dict[str, Any], summary: dict[str, Any]) -> list[str]:
     """What was SENT to the worker (summary.request) equals what the case gave, for every scalar input."""
     sent = summary.get("request") or {}
@@ -164,35 +156,6 @@ def request_problems(tool: dict[str, Any], inputs: dict[str, Any], summary: dict
             got, wanted = sent.get(p["name"]), inputs[p["name"]]
             if not (close(got, wanted) or str(got) == str(wanted)):
                 problems.append("sent %s=%r, the case gives %r" % (p["name"], got, wanted))
-    return problems
-
-
-def placement_problems(tool: dict[str, Any], inputs: dict[str, Any], summary: dict[str, Any], preload: list[dict[str, str]]) -> list[str]:
-    """Results land on the right image with the right scale, judged from the fixture file and the plugin's summary of the ImagePlus it made (never from a control).
-    * a pixel size linked to an image (PixelSizeOf) is sent as the size the fixture TIFF declares (a value the case gives itself wins);
-    * a points or shapes result is placed on the image of its apply_to (else the first image input);
-    * an image result with an apply_to of the same size has the calibration of that source image."""
-    problems: list[str] = []
-    titles = {item["path"]: item["title"] for item in preload}
-    sent = summary.get("request") or {}
-    for p in tool["inputs"]:
-        source = inputs.get(p.get("pixel_size_of") or "")
-        if p.get("pixel_size_of") and isinstance(source, str) and Path(source).is_file() and inputs.get(p["name"]) is None:
-            size = fixture_pixel_size_um(source)
-            if size is not None and not close(sent.get(p["name"]), size):
-                problems.append("the pixel size of '%s' is sent as %r, the file %s declares %.6g um" % (p["name"], sent.get(p["name"]), Path(source).name, size))
-    image_inputs = [p["name"] for p in tool["inputs"] if p["type"] in ("image", "labels")]
-    for output in tool["outputs"]:
-        source_name = (output.get("display") or {}).get("apply_to") or (image_inputs[0] if image_inputs else None)
-        source = inputs.get(source_name or "")
-        if output["type"] in ("points", "shapes") and isinstance(source, str) and source in titles:
-            placed = (summary.get("%s_%s" % (output["type"], output["name"])) or {}).get("image")
-            if placed != titles[source]:
-                problems.append("the %s result '%s' is on the image %r, it belongs to %r" % (output["type"], output["name"], placed, titles[source]))
-        if output["type"] in ("image", "labels") and (output.get("display") or {}).get("apply_to") and isinstance(source, str) and Path(source).is_file():
-            size, shown = fixture_pixel_size_um(source), summary.get("calibration_" + output["name"]) or {}
-            if size is not None and shown and not (close(shown.get("width"), size) and shown.get("unit") in ("um", "µm", "micron")):
-                problems.append("the image result '%s' has the scale %r %s, its source %s declares %.6g um" % (output["name"], shown.get("width"), shown.get("unit"), Path(source).name, size))
     return problems
 
 
@@ -251,7 +214,7 @@ def not_blank(kind: str, name: str, shown: Any) -> Optional[str]:
 
 
 def run_problems(tool: dict[str, Any], case: dict[str, Any], inputs: dict[str, Any], preload: list[dict[str, str]], finish: Optional[dict[str, Any]],
-                 files: dict[str, Any]) -> tuple[list[str], list[str]]:
+                 files: dict[str, Any], app: str = "app") -> tuple[list[str], list[str]]:
     """(problems, expectations of the case that Fiji cannot check) for one run. `files` is what the audit found on disk: new_runs (run record folders), record_files, log_file."""
     if finish is None:
         return ["Fiji ended without the plugin reporting the run"], []
@@ -259,7 +222,7 @@ def run_problems(tool: dict[str, Any], case: dict[str, Any], inputs: dict[str, A
     problems: list[str] = []
     unchecked: list[str] = []
     wanted_status = case.get("expect", {}).get("status", "COMPLETE")
-    if summary.get("error"):
+    if summary.get("error") and wanted_status == "COMPLETE":
         problems.append("the run was refused: %s" % summary["error"])
     if summary.get("status") != wanted_status:
         problems.append("status %r, expected %r%s" % (summary.get("status"), wanted_status, ": " + str(summary["failure_message"]) if summary.get("failure_message") else ""))
@@ -282,7 +245,7 @@ def run_problems(tool: dict[str, Any], case: dict[str, Any], inputs: dict[str, A
         if case.get("expect", {}).get("progress_events_min", 0) > len(summary.get("progress_events") or []):
             problems.append("%d progress events, expected at least %d" % (len(summary.get("progress_events") or []), case["expect"]["progress_events_min"]))
         unchecked += ["max_seconds"] if "max_seconds" in case.get("expect", {}) else []
-        problems += request_problems(tool, inputs, summary) + placement_problems(tool, inputs, summary, preload)
+        problems += request_problems(tool, inputs, summary) + placement_problems(app, tool, case, inputs, finish, preload)
     if len(files.get("new_runs", [])) != 1:
         problems.append("%d new run record folder(s) under runs/, expected exactly 1" % len(files.get("new_runs", [])))
     elif not files.get("record_files"):

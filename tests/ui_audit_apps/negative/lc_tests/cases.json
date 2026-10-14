@@ -19,5 +19,13 @@
   "inputs": {},
   "comment": "WRONG on purpose: this tool always fails, the case expects COMPLETE",
   "expect": {}
+ },
+ {
+  "tool": "stubborn",
+  "inputs": {
+   "seconds": 600.0
+  },
+  "comment": "WRONG on purpose: a tool that hangs for 10 minutes and ignores Cancel (the watchdog must kill it)",
+  "expect": {}
  }
 ]

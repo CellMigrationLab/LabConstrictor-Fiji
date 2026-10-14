@@ -8,7 +8,7 @@
 //   {"kind": "fatal", "detail"}                                                 the audit of this start cannot go on
 // Modes: cancel (Cancel on the first chooser), chooser (read the choosers and the tool offered, then Cancel), controls (open the form, press every control, Cancel),
 //        run (fill the form from the case, screenshot it, OK, screenshot the result), copy (the "Copy last run as command" entry; no dialog).
-// plan.inject (negative controls of tests/ui_audit_driver_cases.py): extra_control | remove_control | offscreen_ok | blank_screens.
+// plan.inject (negative controls of tests/ui_audit_negative.py): extra_control | remove_control | offscreen_ok | blank_screens.
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import groovy.transform.Field
@@ -34,6 +34,7 @@ import javax.swing.text.JTextComponent
 @Field final int AFTER_RUN_SETTLE_MS = 2000     // after the run: result windows get this long to paint before the screen is taken
 @Field final int CLOSE_WAIT_MS = 5000           // a real click on OK or Cancel must close its dialog within this
 @Field final int POLL_MS = 100
+@Field final int CANCEL_WAIT_MS = 6000          // after a Cancel the plugin gets this long to end (its finish hook ends Fiji); then what it does instead is reported and Fiji is ended here
 @Field final int MAX_TEXT = 20000               // of the Log kept in the finish line
 @Field final List<String> DROPPED = ["interpreter", "frames", "unit_catalog", "calibration_states_initial", "calibration_states", "modifiers"]   // summary keys that are not needed here
 
@@ -131,6 +132,20 @@ def press = { Map control, Dialog dialog, String what ->
     }
 }
 
+// Cancel, then leave: `observe` waits for the plugin's own end (the finish hook exits Fiji and writes the summary); when it goes on instead (a Cancel that does not cancel) the windows it shows
+// are reported (obs cancel_ignored) and Fiji is ended here. Without `observe` Fiji is ended at once, so that a plugin that goes on cannot run a tool just because the audit pressed Cancel.
+def cancelAndLeave = { Map control, Dialog dialog, String what, boolean observe ->
+    press(control, dialog, what)
+    if (observe) {
+        Thread.sleep(CANCEL_WAIT_MS)
+        def shown = windowsNow().findAll { it.dialog }.collect { it.title }
+        emit([kind: "obs", what: "cancel_ignored", id: what, detail: "the plugin did not end within " + CANCEL_WAIT_MS + " ms of the click on Cancel; dialogs showing now: " + shown])
+    }
+    Thread.sleep(POLL_MS)
+    // groovylint-disable-next-line SystemExit
+    System.exit(observe ? 3 : 0)
+}
+
 def inject = { Dialog dialog, Closure enumerateAgain ->
     if (plan.inject == "extra_control") tree.onEdt { dialog.contentPane.add(new JButton("Injected"), java.awt.BorderLayout.NORTH); dialog.pack() }
     if (plan.inject == "remove_control") {
@@ -172,20 +187,20 @@ def handleChooser = { Dialog dialog, String which, Map state ->
     def items = combo ? tree.itemsOf(combo.comp) : []
     emit([kind: "obs", what: "dialog", dialog: which, title: dialog.title, items: items])
     def button = { String id -> found.controls.find { it.id == id } }
-    if (plan.mode == "cancel") return press(button("chooser_cancel"), dialog, "chooser_cancel")
+    if (plan.mode == "cancel") return cancelAndLeave(button("chooser_cancel"), dialog, "chooser_cancel", true)
     if (plan.emit_panel && combo) guarded("ui_fiji_panel_chooser_" + which, "chooser_" + which) { tree.activate(combo) + "; lists " + items }
     def target = which == "app" ? plan.app : plan.tool_choice
     int index = items.indexOf(target)
     if (index < 0) {
         emit([kind: "obs", what: "dialog_problem", dialog: which, detail: "'" + target + "' is not in the chooser (items: " + items + ")"])
-        return press(button("chooser_cancel"), dialog, "chooser_cancel")
+        return cancelAndLeave(button("chooser_cancel"), dialog, "chooser_cancel", false)
     }
     if (plan.mode == "chooser" && which == "app") {            // switching: every other app first, the wanted one last
         items.eachWithIndex { item, i -> if (i != index) tree.onEdt { combo.comp.setSelectedIndex(i) } }
     }
     tree.onEdt { combo.comp.setSelectedIndex(index) }
     Thread.sleep(POLL_MS)
-    if (plan.mode == "chooser" && which == "tool") return press(button("chooser_cancel"), dialog, "chooser_cancel")
+    if (plan.mode == "chooser" && which == "tool") return cancelAndLeave(button("chooser_cancel"), dialog, "chooser_cancel", false)
     state.okPending = which
     press(button("chooser_ok"), dialog, "chooser_ok")
 }
@@ -198,16 +213,17 @@ def handleForm = { Dialog dialog, Map state ->
     record(dialog, "form_" + plan.tool_key, found)
     def cancel = found.controls.find { it.id == "form_cancel" }
     def ok = found.controls.find { it.id == "form_ok" }
-    if (plan.mode == "chooser") return press(cancel, dialog, "form_cancel")
+    if (plan.mode == "chooser") return cancelAndLeave(cancel, dialog, "form_cancel", false)
     if (plan.mode == "controls") {
         screenshot("form", tree.onEdt { dialog.bounds })
         pressEvery(found)
-        return press(cancel, dialog, "form_cancel")
+        return cancelAndLeave(cancel, dialog, "form_cancel", plan.emit_panel as boolean)
     }
     def failed = fillForm(found)
     if (failed) {
         emit([kind: "obs", what: "fill_failed", detail: "the form could not be filled from the case: " + failed.join("; ")])
-        return press(cancel, dialog, "form_cancel")
+        // groovylint-disable-next-line SystemExit
+        System.exit(0)                                          // no click: the Cancel of this plugin runs the tool (see ui_fiji_panel_form_cancel), and nothing may run on a form that is half filled
     }
     Thread.sleep(FILL_SETTLE_MS)
     screenshot("form", tree.onEdt { dialog.bounds })
@@ -215,7 +231,8 @@ def handleForm = { Dialog dialog, Map state ->
 }
 
 def handleFileChooser = { FileDialog chooser ->
-    emit([kind: "obs", what: "dialog_problem", dialog: "single_input_file_prompt", detail: "SciJava showed its native single-input file chooser instead of the form: a tool with exactly one input and no open image cannot be audited (give the case an image to open)"])
+    emit([kind: "obs", what: "dialog_problem", dialog: "single_input_file_prompt", detail: "SciJava showed its native single-input file chooser instead of the form: " +
+                                                                                                                    "a tool with exactly one input and no open image cannot be audited (give the case an image to open)"])
     SwingUtilities.invokeLater { chooser.dispose() }
 }
 
@@ -285,6 +302,13 @@ def finish = { Map summary ->
         screenshot("after_run", new java.awt.Rectangle(screenSize()))
         out.windows = WindowManager.getImageTitles() as List
         out.tables = WindowManager.getNonImageTitles() as List
+        out.images = WindowManager.getImageTitles().collect { String title ->        // what every open image holds now, read from the ImagePlus itself (the result placement checks of ui_audit_placement.py)
+            def imp = WindowManager.getImage(title)
+            def cal = imp.getCalibration(), roi = imp.getRoi(), overlay = imp.getOverlay()
+            [title: title, width: imp.getWidth(), height: imp.getHeight(), channels: imp.getNChannels(), slices: imp.getNSlices(), frames: imp.getNFrames(), bits: imp.getBitDepth(),
+             pixel_width: cal.pixelWidth, pixel_height: cal.pixelHeight, unit: cal.getUnit(), x_origin: cal.xOrigin, y_origin: cal.yOrigin,
+             roi: roi == null ? null : [type: roi.getTypeAsString().toLowerCase(), name: roi.getName(), points: roi.getFloatPolygon().npoints], overlay: overlay == null ? 0 : overlay.size()]
+        }
         out.shown = windowsNow()
         out.screen = [screenSize().width, screenSize().height]
         out.windows.findAll { !preloaded.contains(it) }.eachWithIndex { String title, int n ->
