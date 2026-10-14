@@ -1,0 +1,28 @@
+{
+ "app": "victim",
+ "tool": "Scalar echo",
+ "register": [
+  {
+   "name": "victim",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "tamper": [
+  {
+   "app": "victim",
+   "entry": {
+    "hosts": null
+   }
+  }
+ ],
+ "expect": {
+  "equals": {
+   "error": "no apps registered"
+  },
+  "log_contains": [
+   "'victim' is not listed in fiji: its hosts declaration is not valid (hosts must be a list of host names); register the app again with a valid one"
+  ]
+ }
+}

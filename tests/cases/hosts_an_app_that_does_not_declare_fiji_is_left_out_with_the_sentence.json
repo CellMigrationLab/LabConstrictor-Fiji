@@ -1,0 +1,25 @@
+{
+ "app": "victim",
+ "tool": "Scalar echo",
+ "register": [
+  {
+   "name": "victim",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": [],
+   "hosts": [
+    "notebook",
+    "napari",
+    "qupath"
+   ]
+  }
+ ],
+ "expect": {
+  "equals": {
+   "error": "no apps registered"
+  },
+  "log_contains": [
+   "app skipped: 'victim' is not listed in fiji: the app declares hosts: notebook, napari, qupath"
+  ]
+ }
+}

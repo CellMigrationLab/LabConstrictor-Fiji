@@ -60,8 +60,15 @@ jobs:
         run: |
           /usr/bin/python3 -m venv "$HOME/lcvenv"
           echo "$HOME/lcvenv/bin" >> "$GITHUB_PATH"
-          "$HOME/lcvenv/bin/pip" install git+https://github.com/CellMigrationLab/LabConstrictor-Tools numpy pandas tifffile scipy scikit-image
+          # TEMPORARY (one place): Tools PR #133 (the app_hosts_v1 rule) is not merged yet, so CI installs Tools from its branch. Switch back to
+          # `git+https://github.com/CellMigrationLab/LabConstrictor-Tools` (main) before this PR is merged.
+          "$HOME/lcvenv/bin/pip" install git+https://github.com/CellMigrationLab/LabConstrictor-Tools@claude/app-hosts-discovery numpy pandas tifffile scipy scikit-image
           ls -ld "$HOME/lcvenv/bin" "$(readlink -f "$HOME/lcvenv/bin/python")"
+      - name: Sandbox listing driver (tests/sandbox_listing.py) passes and fails as its contract says
+        timeout-minutes: 20
+        env:
+          FIJI_TIMEOUT: "300"
+        run: $HOME/lcvenv/bin/python tests/sandbox_driver_cases.py
       - name: Cases through the loose Groovy script (fast; includes the unit checks and the script-only cases)
         timeout-minutes: 70   # every case is also killed after FIJI_TIMEOUT seconds (whole process group), so one hung case costs 5 minutes
         env:

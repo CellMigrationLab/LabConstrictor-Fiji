@@ -1,0 +1,17 @@
+{
+ "unit_checks": [
+  "app_hosts_vectors",
+  "app_hosts_reference",
+  "app_hosts_compat",
+  "app_hosts_missing_key_fails"
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 60
+  }
+ }
+}

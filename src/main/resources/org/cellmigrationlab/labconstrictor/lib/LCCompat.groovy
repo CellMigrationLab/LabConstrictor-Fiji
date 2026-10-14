@@ -14,7 +14,7 @@ class LCCompat {
     static final Map<String, Integer> PRE_ORDER = [a: 0, alpha: 0, b: 1, beta: 1, rc: 2, c: 2]
     static final int RELEASE_RANK = 3              // a release sorts after its pre-releases
     static final String MINIMUM_TOOLS = '0.3.0a1'  // what this host needs: the run-record helpers and the prune command (tag v0.3.0-alpha.1)
-    static final List<String> REQUIRED_FEATURES = ['reserved_inputs_v1']   // the worker accepts and ignores reserved underscore inputs (_job_dir, _calibration, ...)
+    static final List<String> REQUIRED_FEATURES = ['reserved_inputs_v1', 'app_hosts_v1']   // reserved_inputs_v1: the worker ignores reserved underscore inputs (_job_dir, ...); app_hosts_v1: the registry entry can declare the hosts (LCHosts)
 
     /** `0.2.0rc1` / `v0.2.0-rc.1` / `0.2` as a sortable list (a release sorts after its pre-releases); null when it is not a version (or not text). */
     static List<Integer> parseVersion(Object text) {
