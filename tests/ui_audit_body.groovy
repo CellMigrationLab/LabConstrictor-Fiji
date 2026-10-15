@@ -215,6 +215,11 @@ def handleForm = { Dialog dialog, Map state ->
     def cancel = found.controls.find { it.id == "form_cancel" }
     def ok = found.controls.find { it.id == "form_ok" }
     if (plan.mode == "chooser") return cancelAndLeave(cancel, dialog, "form_cancel", false)
+    if (plan.mode == "cancel_form") return cancelAndLeave(cancel, dialog, "form_cancel", true)   // alpha.3 FJ-1b: a plain Cancel on the untouched form, the plugin must end
+    if (plan.mode == "ok_empty") {                                                                // alpha.3 FJ-1b: OK on the untouched form (a required input empty): the plugin must refuse
+        screenshot("form", tree.onEdt { dialog.bounds })
+        return press(ok, dialog, "form_ok")
+    }
     if (plan.mode == "controls") {
         screenshot("form", tree.onEdt { dialog.bounds })
         pressEvery(found)
@@ -309,6 +314,22 @@ def menuEntries = {
     def ours = plugins == null ? null : (0..<plugins.itemCount).collect { plugins.getItem(it) }.find { it.label == "LabConstrictor" }
     return ours == null ? null : (0..<ours.itemCount).collect { ours.getItem(it).label }
 }
+// The text of ImageJ's status line (the product says 'LabConstrictor: cancelled' there); null when it cannot be read.
+def statusText = {
+    try {
+        def found = []
+        def walk
+        walk = { java.awt.Component c ->
+            if ((c instanceof java.awt.Label || c instanceof JLabel) && c.text) found << c.text
+            if (c instanceof Container) c.components.each { walk(it) }
+        }
+        tree.onEdt { walk(IJ.getInstance().getStatusBar()) }
+        return found.join(" | ")
+    // groovylint-disable-next-line CatchThrowable
+    } catch (Throwable problem) {
+        return "unreadable: " + problem.toString()
+    }
+}
 def finish = { Map summary ->
     Thread.sleep(plan.mode == "run" ? AFTER_RUN_SETTLE_MS : POLL_MS)
     def out = [kind: "finish", mode: plan.mode, summary: plain(summary.findAll { !(it.key in DROPPED) }, 0)]
@@ -351,6 +372,7 @@ def finish = { Map summary ->
             out.clipboard_error = problem.toString()
         }
     }
+    out.status_text = statusText()
     emit(out)
     // groovylint-disable-next-line SystemExit
     System.exit(0)

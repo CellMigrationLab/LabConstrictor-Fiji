@@ -302,7 +302,9 @@ class Audit:
         done = [r for r in rows if r["id"] == "ui_fiji_form_%s_controls" % key]
         if plan is not None:
             failed = [r for r in done if r["status"] == "FAIL"]
-            if plan["n"] == 0:
+            if plan["n"] == 0 and not tool["inputs"]:
+                status, detail = "PASS", "the tool declares no parameter: the form holds only OK and Cancel (checked by _opens), so there is nothing to activate"
+            elif plan["n"] == 0:
                 status, detail = "FAIL", "no control of the form could be activated (0 found)"
             elif failed:
                 status, detail = "FAIL", "%d of %d control(s) failed: %s" % (len(failed), plan["n"], "; ".join("%s: %s" % (r["control"], r["detail"]) for r in failed))
@@ -524,7 +526,51 @@ class Audit:
             self.panel_copy("python")
             if not self.logged:
                 self.m.add("ui_fiji_panel_log", "NOT_RUN", "no tool completed a run, so there is no Log of a run to read")
+        if "panel" in self.s.parts:
+            self.fj1b_rows(tools)
         self.controls_row()
+
+    def fj1b_rows(self, tools: list[dict[str, Any]]) -> None:
+        """alpha.3 (FJ-1b): a plain Cancel on the untouched form of a tool with a required file/folder/table input ends the command (nothing runs, no run record, status line says cancelled);
+        OK on the untouched form of a tool with a required image and no image open still refuses with missing_parameter."""
+        needs_path = [t for t in tools if any(p.get("required", True) and p["type"] in ("file", "folder", "table") for p in t["inputs"]) and len(t["inputs"]) > 1][:6]
+        if not needs_path:
+            self.m.add("ui_fiji_fj1b_cancel_form", "HUMAN", "no tool of this app has a required file/folder/table input on a form of several parameters: nothing to cancel with an empty required path")
+        for tool in needs_path:
+            before = self.runs_now()
+            launch, _rows = self.start("cancel_form", tool, cwd=self.scratch_copy())
+            finish = launch.finish()
+            problems = self.click_problems(launch, ["form_cancel"]) + self.ignored_cancel(launch, finish)
+            if finish is not None:
+                summary = finish["summary"]
+                problems += [] if summary.get("cancelled") is True else ["the summary does not say cancelled"]
+                problems += ["a run started (status %r, error %r)" % (summary.get("status"), summary.get("error"))] if "status" in summary else []
+                text = finish.get("status_text") or ""
+                if text and not text.startswith("unreadable") and "cancelled" not in text.lower():
+                    problems.append("the status line says %r, not 'LabConstrictor: cancelled'" % text)
+            new = self.runs_now() - before
+            problems += ["%d run record(s) were created (%s)" % (len(new), ", ".join(sorted(new)))] if new else []
+            detail = "; ".join(problems) if problems else "plain Cancel on the untouched form ended the command: cancelled, nothing ran, no run record, status line %r" % ((finish or {}).get("status_text"),)
+            self.m.add("ui_fiji_fj1b_cancel_form_" + sanitize(tool["id"]), "FAIL" if problems else "PASS", detail, tool=tool["id"], seconds=launch.seconds)
+        with_image = [t for t in tools if any(p.get("required", True) and p["type"] in ("image", "labels") for p in t["inputs"])][:1]
+        if not with_image:
+            self.m.add("ui_fiji_fj1b_missing_image", "HUMAN", "no tool of this app has a required image input: nothing to refuse")
+        for tool in with_image:
+            before = self.runs_now()
+            launch, _rows = self.start("ok_empty", tool, cwd=self.scratch_copy())
+            finish = launch.finish()
+            problems = self.click_problems(launch, ["form_ok"])
+            if finish is None:
+                problems.append("the plugin did not end (%s)" % launch.ended())
+            else:
+                summary = finish["summary"]
+                said = str(summary.get("error") or "") + " " + str(summary.get("code") or "") + " " + str(finish.get("log") or "")
+                if "missing_parameter" not in said:
+                    problems.append("no missing_parameter refusal: summary %s" % json.dumps(summary)[:300])
+                problems += ["the tool ran to COMPLETE with no image open"] if summary.get("status") == "COMPLETE" else []
+            self.m.add("ui_fiji_fj1b_missing_image_" + sanitize(tool["id"]), "FAIL" if problems else "PASS",
+                       "; ".join(problems) if problems else "no image open, OK on the untouched form: refused: error %r, code %r, status %r, status line %r" % (
+                           str(((finish or {}).get("summary") or {}).get("error"))[:240], ((finish or {}).get("summary") or {}).get("code"), ((finish or {}).get("summary") or {}).get("status"), (finish or {}).get("status_text")), tool=tool["id"], seconds=launch.seconds)
 
     def controls_row(self) -> None:
         """ui_fiji_controls_all_known, two-sided: no control found is outside the table AND every dialog the audit meant to read was read (a form with zero controls found fails)."""
