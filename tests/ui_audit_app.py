@@ -16,7 +16,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from ui_audit_forms import (absent_problems, chooser_problems, control_table, form_problems, geometry_problems, norm, tool_choice_names, window_problems)
+from ui_audit_fj1b import fj1b_ids, fj1b_rows
+from ui_audit_forms import (absent_problems, chooser_problems, control_table, form_problems, geometry_problems, norm, settle_problems, tool_choice_names, window_problems)
 from ui_audit_launch import Launch, discover_apps, launch_arguments, run_fiji
 from ui_audit_matrix import Matrix, sanitize
 from ui_audit_runs import (absolute_inputs, build_fills, is_ordered, load_cases, load_no_case, number_text, order_tools, preload_for, replay_before, run_problems,
@@ -40,6 +41,7 @@ def expected_ids(schema: dict[str, Any], settings: Settings, tool_ids: list[str]
     ids = ["ui_fiji_controls_all_known"]
     if "panel" in settings.parts:
         ids += ["ui_fiji_panel_" + name for name in PANEL_IDS]
+        ids += fj1b_ids([t for t in schema["tools"] if t["id"] in tool_ids])
     if "tools" in settings.parts:
         for tool_id in tool_ids:
             key = sanitize(tool_id)
@@ -80,7 +82,8 @@ class Audit:
         chosen = tool or first
         plan = {"mode": mode, "app": self.app, "tool_choice": names[self.schema["tools"].index(chosen)], "tool_label": chosen["label"], "tool_id": chosen["id"],
                 "tool_key": sanitize(chosen["id"]), "shots": str(self.shots_dir), "emit_panel": emit_panel, "fills": fills or [], "preload": preload or [],
-                "script_macro": option if mode == "copy" else None, "inject": self.s.inject if mode in ("controls", "run") else None}
+                "script_macro": option if mode == "copy" else None, "inject": self.s.inject if mode in ("controls", "run") else None,
+                "settle_timeout_ms": int(self.s.settle_timeout * 1000)}
         work = Path(tempfile.mkdtemp(prefix="lcaudit_plan_"))
         (work / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
         env = dict(os.environ, LC_HOME=self.s.home, LC_FIJI_HARNESS=os.environ.get("LC_BODY_OVERRIDE", str(HERE / "ui_audit_body.groovy")), LC_UI_PLAN=str(work / "plan.json"),
@@ -165,6 +168,10 @@ class Audit:
     def judge_chooser(self, launch: Launch, which: str, wanted_items: list[str], preload: list[dict[str, str]]) -> None:
         check_id = "ui_fiji_panel_chooser_" + which
         record = next((r for r in launch.records if r.get("kind") == "components" and r["scope"] == "chooser_" + which), None)
+        stuck = [p for p in settle_problems(launch.records) if "chooser_" + which in p or "'LabConstrictor" in p]
+        if stuck and record is None:
+            self.m.add(check_id, "FAIL", "; ".join(stuck), seconds=launch.seconds)
+            return
         if record is None:
             return
         items = next((o["items"] for o in self.obs(launch, "dialog") if o["dialog"] == which), [])
@@ -283,6 +290,12 @@ class Audit:
         key = sanitize(tool["id"])
         record = next((r for r in launch.records if r.get("kind") == "components" and r["scope"] == "form_" + key), None)
         prompt = next(iter(self.obs(launch, "single_input_prompt")), None)
+        stuck = settle_problems(launch.records)
+        if stuck:                                                # the dialog was neither read nor clicked: say so, and judge nothing about a half-built form (H-F1)
+            self.m.add("ui_fiji_form_%s_opens" % key, "FAIL", "; ".join(stuck), tool=tool["id"], seconds=launch.seconds)
+            self.m.add("ui_fiji_form_%s_controls" % key, "NOT_RUN", "not run: the layout of the form never settled (see ui_fiji_form_%s_opens)" % key, tool=tool["id"])
+            self.conclude(["ui_fiji_form_%s_opens" % key, "ui_fiji_form_%s_controls" % key], launch, tool["id"])
+            return
         if record is None and prompt is not None:
             self.prompts += 1
             fine = len(tool["inputs"]) == 1 and prompt["open"] and tool["inputs"][0]["type"] in ("file", "table", "image", "labels", "folder")
@@ -330,6 +343,11 @@ class Audit:
     def judge_run(self, tool: dict[str, Any], case: dict[str, Any], inputs: dict[str, Any], preload: list[dict[str, str]], launch: Launch, before: set[str], began: float) -> None:
         key = sanitize(tool["id"])
         finish = launch.finish()
+        stuck = settle_problems(launch.records)
+        if stuck:
+            self.m.add("ui_fiji_run_" + key, "FAIL", "; ".join(stuck) + " (nothing was filled or clicked, so the tool was not run)", tool=tool["id"], seconds=launch.seconds)
+            self.m.add("ui_fiji_screens_" + key, "NOT_RUN", "not run: the layout of the form never settled (see ui_fiji_run_%s)" % key, tool=tool["id"])
+            return
         problems, unchecked = run_problems(tool, case, inputs, preload, finish, self.files_since(before), self.app) if finish is not None or launch.records else (["not reached"], [])
         problems += self.click_problems(launch, ["form_ok"]) + [o["detail"] for o in self.obs(launch, "fill_failed")] + [o["detail"] for o in self.obs(launch, "dialog_problem")]
         if finish is None:
@@ -527,50 +545,8 @@ class Audit:
             if not self.logged:
                 self.m.add("ui_fiji_panel_log", "NOT_RUN", "no tool completed a run, so there is no Log of a run to read")
         if "panel" in self.s.parts:
-            self.fj1b_rows(tools)
+            fj1b_rows(self, tools)
         self.controls_row()
-
-    def fj1b_rows(self, tools: list[dict[str, Any]]) -> None:
-        """alpha.3 (FJ-1b): a plain Cancel on the untouched form of a tool with a required file/folder/table input ends the command (nothing runs, no run record, status line says cancelled);
-        OK on the untouched form of a tool with a required image and no image open still refuses with missing_parameter."""
-        needs_path = [t for t in tools if any(p.get("required", True) and p["type"] in ("file", "folder", "table") for p in t["inputs"]) and len(t["inputs"]) > 1][:6]
-        if not needs_path:
-            self.m.add("ui_fiji_fj1b_cancel_form", "HUMAN", "no tool of this app has a required file/folder/table input on a form of several parameters: nothing to cancel with an empty required path")
-        for tool in needs_path:
-            before = self.runs_now()
-            launch, _rows = self.start("cancel_form", tool, cwd=self.scratch_copy())
-            finish = launch.finish()
-            problems = self.click_problems(launch, ["form_cancel"]) + self.ignored_cancel(launch, finish)
-            if finish is not None:
-                summary = finish["summary"]
-                problems += [] if summary.get("cancelled") is True else ["the summary does not say cancelled"]
-                problems += ["a run started (status %r, error %r)" % (summary.get("status"), summary.get("error"))] if "status" in summary else []
-                text = finish.get("status_text") or ""
-                if text and not text.startswith("unreadable") and "cancelled" not in text.lower():
-                    problems.append("the status line says %r, not 'LabConstrictor: cancelled'" % text)
-            new = self.runs_now() - before
-            problems += ["%d run record(s) were created (%s)" % (len(new), ", ".join(sorted(new)))] if new else []
-            detail = "; ".join(problems) if problems else "plain Cancel on the untouched form ended the command: cancelled, nothing ran, no run record, status line %r" % ((finish or {}).get("status_text"),)
-            self.m.add("ui_fiji_fj1b_cancel_form_" + sanitize(tool["id"]), "FAIL" if problems else "PASS", detail, tool=tool["id"], seconds=launch.seconds)
-        with_image = [t for t in tools if any(p.get("required", True) and p["type"] in ("image", "labels") for p in t["inputs"])][:1]
-        if not with_image:
-            self.m.add("ui_fiji_fj1b_missing_image", "HUMAN", "no tool of this app has a required image input: nothing to refuse")
-        for tool in with_image:
-            before = self.runs_now()
-            launch, _rows = self.start("ok_empty", tool, cwd=self.scratch_copy())
-            finish = launch.finish()
-            problems = self.click_problems(launch, ["form_ok"])
-            if finish is None:
-                problems.append("the plugin did not end (%s)" % launch.ended())
-            else:
-                summary = finish["summary"]
-                said = str(summary.get("error") or "") + " " + str(summary.get("code") or "") + " " + str(finish.get("log") or "")
-                if "missing_parameter" not in said:
-                    problems.append("no missing_parameter refusal: summary %s" % json.dumps(summary)[:300])
-                problems += ["the tool ran to COMPLETE with no image open"] if summary.get("status") == "COMPLETE" else []
-            self.m.add("ui_fiji_fj1b_missing_image_" + sanitize(tool["id"]), "FAIL" if problems else "PASS",
-                       "; ".join(problems) if problems else "no image open, OK on the untouched form: refused: error %r, code %r, status %r, status line %r" % (
-                           str(((finish or {}).get("summary") or {}).get("error"))[:240], ((finish or {}).get("summary") or {}).get("code"), ((finish or {}).get("summary") or {}).get("status"), (finish or {}).get("status_text")), tool=tool["id"], seconds=launch.seconds)
 
     def controls_row(self) -> None:
         """ui_fiji_controls_all_known, two-sided: no control found is outside the table AND every dialog the audit meant to read was read (a form with zero controls found fails)."""

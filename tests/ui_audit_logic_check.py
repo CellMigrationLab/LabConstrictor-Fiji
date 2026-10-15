@@ -10,7 +10,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ui_audit_forms as forms  # noqa: E402
@@ -153,6 +153,56 @@ def test_screens_and_settings() -> None:
             check("settings_usage_error_" + word.split()[0], word in str(stop), str(stop)[:100])
 
 
+def test_two_shapes_outputs(placement: Any, folder: Path) -> None:
+    """NucleiSky `relocalize`: reference_outlines belongs to reference.tif and query_outlines to query.tif; each is judged against its own image (the overlay of the other image is not a stray)."""
+    import numpy
+    import tifffile
+
+    paths = {}
+    for name in ("reference", "query"):
+        paths[name] = str(folder / (name + ".tif"))
+        tifffile.imwrite(paths[name], numpy.zeros((32, 32), dtype="uint8"))
+    tool = {"inputs": [{"name": "reference", "type": "image"}, {"name": "query", "type": "image"}],
+            "outputs": [{"name": "reference_outlines", "type": "shapes", "display": {"apply_to": "reference"}}, {"name": "query_outlines", "type": "shapes", "display": {"apply_to": "query"}}]}
+    case = {"tool": "relocalize", "expect": {"results": {"reference_outlines": {"features": 4}, "query_outlines": {"features": 5}}}}
+    preload = [{"path": paths["reference"], "title": "reference.tif"}, {"path": paths["query"], "title": "query.tif"}]
+
+    def image(title: str, overlay: int) -> dict[str, object]:
+        return {"title": title, "width": 32, "height": 32, "pixel_width": 1.0, "pixel_height": 1.0, "unit": "pixel", "overlay": overlay, "roi": None}
+
+    def problems_of(reference: int, query: int, extra: int = 0, wanted: dict[str, Any] = case) -> list[str]:
+        images = [image("reference.tif", reference), image("query.tif", query)] + ([image("third.tif", extra)] if extra else [])
+        return placement.placement_problems("app", tool, wanted, paths, {"summary": {}, "images": images}, preload)
+
+    check("two_shapes_outputs_each_on_its_own_image_pass", problems_of(4, 5) == [], str(problems_of(4, 5)))
+    check("seeded_two_shapes_outputs_swapped_fail", any("'reference.tif'" in p for p in problems_of(5, 4)) and any("'query.tif'" in p for p in problems_of(5, 4)), str(problems_of(5, 4)))
+    check("seeded_two_shapes_missing_overlay_fails", any("query_outlines" in p and "query.tif" in p for p in problems_of(4, 0)), str(problems_of(4, 0)))
+    check("seeded_shapes_on_an_unrelated_image_fail", any("third.tif" in p for p in problems_of(4, 5, 2)), str(problems_of(4, 5, 2)))
+    unknown = {"tool": "relocalize", "expect": {}}
+    check("two_shapes_outputs_without_a_count_need_at_least_one", problems_of(7, 3, wanted=unknown) == [] and problems_of(7, 0, wanted=unknown) != [], str(problems_of(7, 0, wanted=unknown)))
+
+
+def test_settle_and_fj1b() -> None:
+    import ui_audit_fj1b as fj1b
+
+    stuck = [{"kind": "obs", "what": "settled", "dialog": "form"}, {"kind": "obs", "what": "settle_timeout", "dialog": "form", "detail": "the dialog 'X' was still changing after 6000 ms"}]
+    check("seeded_unsettled_dialog_fails_labelled", forms.settle_problems(stuck)[0].startswith("LAYOUT NOT SETTLED") and "still changing" in forms.settle_problems(stuck)[0], str(forms.settle_problems(stuck)))
+    check("settled_dialog_has_no_problem", forms.settle_problems(stuck[:1]) == [] and forms.settle_problems([]) == [], "")
+    tools = [{"id": "a", "inputs": [{"name": "f", "type": "file"}, {"name": "n", "type": "integer"}]}, {"id": "b", "inputs": [{"name": "f", "type": "file"}]},
+             {"id": "c", "inputs": [{"name": "i", "type": "image"}]}, {"id": "d", "inputs": [{"name": "i", "type": "image"}]}, {"id": "e", "inputs": []}]
+    check("fj1b_targets", [t["id"] for t in fj1b.fj1b_targets(tools)[0]] == ["a"] and [t["id"] for t in fj1b.fj1b_targets(tools)[1]] == ["c"], str(fj1b.fj1b_ids(tools)))
+    check("fj1b_ids_are_expected_rows", fj1b.fj1b_ids(tools) == ["ui_fiji_fj1b_cancel_form_a", "ui_fiji_fj1b_missing_image_c"], str(fj1b.fj1b_ids(tools)))
+    check("fj1b_ids_without_targets_name_the_human_rows", fj1b.fj1b_ids(tools[4:]) == ["ui_fiji_fj1b_cancel_form", "ui_fiji_fj1b_missing_image"], "")
+    import types
+
+    import ui_audit_app as app
+
+    expected = app.expected_ids({"tools": tools}, types.SimpleNamespace(listed=True, parts=["panel", "tools"]), ["a", "b"], [], "demo")  # type: ignore[arg-type]
+    check("fj1b_rows_are_in_the_expected_list_of_the_selected_tools", "ui_fiji_fj1b_cancel_form_a" in expected and "ui_fiji_fj1b_missing_image_c" not in expected, str([e for e in expected if "fj1b" in e]))
+    many = [{"id": "t%d" % n, "inputs": [{"name": "f", "type": "folder"}, {"name": "x", "type": "string"}]} for n in range(9)]
+    check("fj1b_has_no_cap_on_tools", len(fj1b.fj1b_targets(many)[0]) == 9, "")
+
+
 def test_placement() -> None:
     import numpy
     import tifffile
@@ -180,12 +230,13 @@ def test_placement() -> None:
     check("seeded_points_on_the_wrong_image_fail", any("not on 'cal.tif'" in p for p in problems_of(stray)) and any("also on 'other.tif'" in p for p in problems_of(stray)), str(problems_of(stray))[:200])
     wrong_count = {"summary": {}, "images": [image("cal.tif", 0.5, "micron", {"type": "point", "name": "app:pts", "points": 2}), good["images"][1]]}
     check("seeded_wrong_point_count_fails", any("expected a point ROI with 3" in p for p in problems_of(wrong_count)), "")
+    test_two_shapes_outputs(placement, folder)
     sized = {"inputs": [{"name": "image", "type": "image"}, {"name": "scale", "type": "float", "pixel_size_of": "image"}], "outputs": []}
     check("seeded_wrong_pixel_size_sent_fails", any("declares 0.5 um" in p for p in problems_of({"summary": {"request": {"scale": 0.9}}, "images": good["images"]}, sized)), "")
 
 
 if __name__ == "__main__":
-    for test in (test_matrix, test_forms, test_runs, test_placement, test_screens_and_settings):
+    for test in (test_matrix, test_forms, test_runs, test_settle_and_fj1b, test_placement, test_screens_and_settings):
         test()
     print("%d logic check(s) failed" % len(FAILURES))
     sys.exit(1 if FAILURES else 0)

@@ -2,7 +2,7 @@
 // One Fiji start does ONE job, named by "mode" in the plan file $LC_UI_PLAN (written by ui_audit.py), and writes what it saw as one JSON object per line to $LC_UI_OUT, line by line
 // as it goes (a crash or a kill loses nothing already written). It only OBSERVES and ACTS: every judgement is made by ui_audit.py, from the schema, the case and the files on disk.
 //   {"kind": "check", "id", "status", "detail", "control", "tool", "seconds"}   one control activated (a row of the matrix)
-//   {"kind": "obs", "what": ..., ...}                                           a fact: dialog (title, items), screenshot, activation_plan, chooser_ok, click_failed
+//   {"kind": "obs", "what": ..., ...}                                           a fact: dialog (title, items), screenshot, activation_plan, chooser_ok, click_failed, settled / settle_timeout (the layout of a dialog)
 //   {"kind": "components", "scope", "controls", "unknown", "texts", "geometry", "windows"}   everything one dialog holds, where it is and which windows show
 //   {"kind": "finish", "summary": {...}, ...}                                   the plugin's own summary of the run (the product's `finish` hook); always the last line
 //   {"kind": "fatal", "detail"}                                                 the audit of this start cannot go on
@@ -29,7 +29,8 @@ import javax.swing.SwingUtilities
 import javax.swing.text.JTextComponent
 
 @Field final int DIALOG_WAIT_MS = 120000        // how long the plugin gets to show the next dialog (discovery, the worker's answers for dropdowns)
-@Field final int SETTLE_MS = 700                // a dialog gets this long to lay itself out before it is read
+@Field final int SETTLE_MS = 700                // a dialog is read only after its position, size and component count have not changed for this long (H-F1: a late layout under CPU load)
+@Field final int OVERSIZE_WAIT_MS = 10000       // a dialog bigger than the screen is given this long, unchanged, to become sane (a late layout); after that it is read as it is and the geometry check fails it
 @Field final int FILL_SETTLE_MS = 1200          // after the form is filled: the callbacks of SciJava run on a thread of their own
 @Field final int AFTER_RUN_SETTLE_MS = 2000     // after the run: result windows get this long to paint before the screen is taken
 @Field final int CLOSE_WAIT_MS = 5000           // a real click on OK or Cancel must close its dialog within this
@@ -180,8 +181,45 @@ def fillForm = { Map found ->
     return failed
 }
 
+// Waits until the dialog has stopped changing: the same place, size and number of components (all levels) in every poll for SETTLE_MS; a layout that comes late under CPU load (H-F1: the
+// simulate_sample form seen at 1066x3024 on a 1600x1000 screen) is then read in its final state, never in a half-built one. True when it settled (obs settled: how long it took); false after
+// the plan's settle_timeout_ms (obs settle_timeout: the states seen), and the caller must not read the dialog: ui_audit.py turns that into a FAIL row that says so, never into a pass. A dialog
+// that is bigger than the screen has to stay unchanged for OVERSIZE_WAIT_MS instead (the late layout may still shrink it); if it is still too big then, it is a real oversize and is read.
+def settle = { Dialog dialog, String what ->
+    def countAll
+    countAll = { java.awt.Component c -> 1 + (c instanceof Container ? c.components.sum(0) { countAll(it) } : 0) }
+    int timeout = plan.settle_timeout_ms as int
+    long began = System.currentTimeMillis()
+    long changed = began
+    def last = null
+    def states = [] as LinkedHashSet
+    while (System.currentTimeMillis() - began < timeout) {
+        def now = tree.onEdt { [dialog.x, dialog.y, dialog.width, dialog.height, countAll(dialog), dialog.isShowing()] }
+        if (now != last) {
+            last = now
+            changed = System.currentTimeMillis()
+            states << String.format("%dx%d at (%d,%d), %d components", now[2], now[3], now[0], now[1], now[4])
+        }
+        boolean oversized = last[2] > screenSize().width || last[3] > screenSize().height
+        if (last[5] && System.currentTimeMillis() - changed >= (oversized ? OVERSIZE_WAIT_MS : SETTLE_MS)) {
+            emit([kind: "obs", what: "settled", dialog: what, waited_ms: changed - began, states: states.size(), oversized: oversized])
+            return true
+        }
+        Thread.sleep(POLL_MS)
+    }
+    emit([kind: "obs", what: "settle_timeout", dialog: what, detail: "the dialog '" + dialog.title + "' was still changing after " + timeout + " ms (states seen: " + states.take(8).join("; ") + ")"])
+    return false
+}
+
+// A dialog that never settled is not read and not clicked (a click on a half-built dialog proves nothing, and the Cancel of a form can run the tool): Fiji is ended here.
+def leaveUnsettled = {
+    Thread.sleep(POLL_MS)
+    // groovylint-disable-next-line SystemExit
+    System.exit(0)
+}
+
 def handleChooser = { Dialog dialog, String which, Map state ->
-    Thread.sleep(SETTLE_MS)
+    if (!settle(dialog, "chooser_" + which)) return leaveUnsettled()
     def found = tree.enumerate(dialog, "chooser", which, openImages())
     record(dialog, "chooser_" + which, found)
     def combo = found.controls.find { it.id == "chooser_" + which }
@@ -206,8 +244,29 @@ def handleChooser = { Dialog dialog, String which, Map state ->
     press(button("chooser_ok"), dialog, "chooser_ok")
 }
 
+// Seeded late layouts (negative controls): `late_layout` makes the form too big for the screen for 3 s and then right again (a correct audit waits, reads it right and passes); `never_settles`
+// resizes it every 200 ms for as long as the audit looks (a correct audit says so and does not read it).
+def injectLayout = { Dialog dialog ->
+    if (plan.inject == "late_layout") {
+        Thread.start {
+            tree.onEdt { dialog.setSize(1066, 3024) }
+            Thread.sleep(3000)
+            tree.onEdt { dialog.pack() }
+        }
+    }
+    if (plan.inject == "never_settles") {
+        Thread.start {
+            for (int n = 1; n < 1000 && dialog.isShowing(); n++) {
+                tree.onEdt { dialog.setSize(400 + n, 300 + n) }
+                Thread.sleep(200)
+            }
+        }
+    }
+}
+
 def handleForm = { Dialog dialog, Map state ->
-    Thread.sleep(SETTLE_MS)
+    injectLayout(dialog)
+    if (!settle(dialog, "form")) return leaveUnsettled()
     emit([kind: "obs", what: "dialog", dialog: "form", title: dialog.title, items: []])
     inject(dialog) { tree.enumerate(dialog, "form", "form", openImages()) }
     def found = tree.enumerate(dialog, "form", "form", openImages())
@@ -327,7 +386,7 @@ def statusText = {
         return found.join(" | ")
     // groovylint-disable-next-line CatchThrowable
     } catch (Throwable problem) {
-        return "unreadable: " + problem.toString()
+        return "unreadable: " + problem
     }
 }
 def finish = { Map summary ->

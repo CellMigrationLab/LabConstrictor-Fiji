@@ -160,3 +160,9 @@ def window_problems(windows: list[dict[str, Any]], screen: list[int], dialogs: l
         if not window["dialog"] and not any(token in window["title"] for token in ("ImageJ", "Fiji")) and not any(window["title"].startswith(a) for a in allowed):
             problems.append("%s: unexpected window '%s' (%s)" % (where, window["title"], window["cls"]))
     return problems
+
+
+def settle_problems(records: list[dict[str, Any]]) -> list[str]:
+    """A dialog whose layout kept changing until the harness's time ran out (obs `settle_timeout`) was NOT read and NOT clicked: that is a labelled failure of the layout (H-F1), never a pass and
+    never a set of false failures about a half-built dialog."""
+    return ["LAYOUT NOT SETTLED, the dialog was not read: " + r["detail"] for r in records if r.get("kind") == "obs" and r.get("what") == "settle_timeout"]

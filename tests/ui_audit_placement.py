@@ -5,11 +5,13 @@ calibration, its ROI and overlay, and the ROI Manager) against the FIXTURE FILE'
 * an image result with an ApplyTo whose size equals its source's has the source's calibration (ImageJ units), which is the one the fixture declares; with other sizes it stays at the pixel
   origin (scale 1, no unit);
 * a points result is the ROI of the image it belongs to (ApplyTo, else the first image input), a point ROI with as many points as the case says (else as the tool returned), and on no other image;
-* a shapes result is the overlay of that image, with the case's number of outlines (else at least one), and no other image carries it.
+* a shapes result is the overlay of ITS image (ApplyTo, else the first image input), with the case's number of outlines (else at least one). A tool with several shapes outputs (NucleiSky
+  `relocalize`: reference_outlines on reference.tif, query_outlines on query.tif) is judged output by output against the image each one belongs to: the overlay an image holds must be
+  exactly the outlines of the shapes outputs that belong to it, and an image that no shapes output belongs to carries none.
 """
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 UNIT_UM = {"um": 1.0, "µm": 1.0, "micron": 1.0, "microns": 1.0, "nm": 1e-3, "mm": 1e3, "cm": 1e4}   # ImageJ unit texts of a length, in micrometres
 TOLERANCE = 1e-6
@@ -65,10 +67,16 @@ def placement_problems(app: str, tool: dict[str, Any], case: dict[str, Any], inp
     images = {item["title"]: item for item in finish.get("images", [])}
     titles = {item["path"]: item["title"] for item in preload}
     image_inputs = [p["name"] for p in tool["inputs"] if p["type"] in ("image", "labels")]
+
+    def title_of(output: dict[str, Any]) -> Optional[str]:
+        source = inputs.get((output.get("display") or {}).get("apply_to") or (image_inputs[0] if image_inputs else ""))
+        return titles.get(source) if isinstance(source, str) else None
+
+    overlays = shape_overlays(tool, case, summary, title_of)
     for output in tool["outputs"]:
         name, kind = output["name"], output["type"]
         source = inputs.get((output.get("display") or {}).get("apply_to") or (image_inputs[0] if image_inputs else ""))
-        title = titles.get(source) if isinstance(source, str) else None
+        title = title_of(output)
         if kind in ("image", "labels"):
             shown = next((i for t, i in images.items() if t == "%s:%s" % (app, name) or t.startswith("%s:%s [" % (app, name))), None)
             if shown is None:
@@ -76,8 +84,25 @@ def placement_problems(app: str, tool: dict[str, Any], case: dict[str, Any], inp
             elif (output.get("display") or {}).get("apply_to") and isinstance(source, str) and Path(source).is_file() and title in images:
                 problems += scale_problems(name, shown, images[title], fixture_pixel_size_um(source), Path(source).name)
         elif kind in ("points", "shapes") and title is not None:
-            problems += roi_problems(app, name, kind, title, images, expected_count(case, name, "rows" if kind == "points" else "features"), (summary.get("%s_%s" % (kind, name)) or {}).get("count"))
+            wanted = overlays[title] if kind == "shapes" else expected_count(case, name, "rows")
+            returned = None if kind == "shapes" else (summary.get("points_" + name) or {}).get("count")
+            problems += roi_problems(app, name, kind, title, images, wanted, returned, set(overlays))
     return problems
+
+
+def shape_overlays(tool: dict[str, Any], case: dict[str, Any], summary: dict[str, Any], title_of: Callable[[dict[str, Any]], Optional[str]]) -> dict[str, Optional[int]]:
+    """Image title -> the number of outlines its overlay must hold: the sum over the shapes outputs that belong to it (the case's `features`, else what the tool returned); None when any of
+    them is unknown (then at least one)."""
+    counts: dict[str, Optional[int]] = {}
+    for output in tool["outputs"]:
+        title = title_of(output) if output["type"] == "shapes" else None
+        if title is None:
+            continue
+        wanted = expected_count(case, output["name"], "features")
+        count = wanted if wanted is not None else (summary.get("shapes_" + output["name"]) or {}).get("count")
+        previous = counts.get(title, 0)
+        counts[title] = previous + count if isinstance(count, int) and previous is not None else None
+    return counts
 
 
 def scale_problems(name: str, result: dict[str, Any], source: dict[str, Any], fixture_um: Optional[float], source_file: str) -> list[str]:
@@ -95,8 +120,9 @@ def scale_problems(name: str, result: dict[str, Any], source: dict[str, Any], fi
     return problems
 
 
-def roi_problems(app: str, name: str, kind: str, title: str, images: dict[str, dict[str, Any]], wanted: Optional[int], returned: Optional[int]) -> list[str]:
-    """A points result is the point ROI of the image `title`, a shapes result its overlay; nothing of it on any other image."""
+def roi_problems(app: str, name: str, kind: str, title: str, images: dict[str, dict[str, Any]], wanted: Optional[int], returned: Optional[int], shape_images: set[str]) -> list[str]:
+    """A points result is the point ROI of the image `title`, a shapes result its overlay (`wanted` is what the overlay of `title` must hold in all); nothing of it on any other image: for
+    shapes, an image that is none of `shape_images` (the images some shapes output belongs to) must carry no overlay."""
     image = images.get(title)
     if image is None:
         return ["the image '%s' the %s result '%s' belongs to is not open" % (title, kind, name)]
@@ -110,5 +136,5 @@ def roi_problems(app: str, name: str, kind: str, title: str, images: dict[str, d
     else:
         if image["overlay"] < 1 or (count is not None and image["overlay"] != count):
             problems.append("the outlines '%s' are not on '%s': its overlay holds %d element(s), expected %s" % (name, title, image["overlay"], count if count is not None else "at least 1"))
-        stray = [t for t, i in images.items() if t != title and i["overlay"] > 0]
+        stray = [t for t, i in images.items() if t not in shape_images and i["overlay"] > 0]
     return problems + ["the %s '%s' is also on '%s'" % (kind, name, t) for t in stray]

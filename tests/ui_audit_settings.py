@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Mapping, Optional
 
 PARTS = ("panel", "tools")
-INJECTIONS = ("extra_control", "remove_control", "offscreen_ok", "blank_screens")
+INJECTIONS = ("extra_control", "remove_control", "offscreen_ok", "blank_screens", "late_layout", "never_settles")
 
 
 @dataclass
@@ -24,6 +24,7 @@ class Settings:
     inject: Optional[str]          # LC_UI_INJECT: a seeded failure (negative controls)
     jar: bool                      # LC_FIJI_MODE=jar: the built jar's menu command instead of the loose script
     ordered: list[str]             # LC_UI_ORDERED: apps whose tools are a sequence (replay the earlier cases first); default GuessTheCondition
+    settle_timeout: float = 45.0   # LC_UI_SETTLE_TIMEOUT: seconds a dialog gets to stop changing its size before it is reported as FAIL (layout not settled) and not read
 
 
 def usage(message: str) -> SystemExit:
@@ -66,5 +67,8 @@ def read_settings(env: Mapping[str, str] = os.environ) -> Settings:
     fiji = Path(env["LC_FIJI_HOME"])
     if not (fiji / "jars").is_dir():
         raise usage("LC_FIJI_HOME=%s is not a Fiji installation (no jars/ folder)" % fiji)
+    settle = float(env.get("LC_UI_SETTLE_TIMEOUT", "45"))
+    if settle <= 0:
+        raise usage("LC_UI_SETTLE_TIMEOUT must be a positive number of seconds, not %r" % env.get("LC_UI_SETTLE_TIMEOUT"))
     return Settings(env["LC_HOME"], fiji, apps, multi, tests, Path(env.get("LC_SHOTS", "screens")), expect == "listed", float(env.get("LC_UI_TOOL_TIMEOUT", "300")), tools, parts, inject,
-                    mode == "jar", [a.strip() for a in env.get("LC_UI_ORDERED", "GuessTheCondition").split(",") if a.strip()])
+                    mode == "jar", [a.strip() for a in env.get("LC_UI_ORDERED", "GuessTheCondition").split(",") if a.strip()], settle)
