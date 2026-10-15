@@ -1,0 +1,22 @@
+{
+ "app": "synthetic",
+ "tool": "Path info",
+ "register": [
+  {
+   "name": "synthetic",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "cancel_dialog": "Path info",
+ "script_mode_only": true,
+ "expect": {
+  "at": {
+   "cancelled": true,
+   "status": "$absent",
+   "status_line": "LabConstrictor: cancelled",
+   "retention.runs.count": 0
+  }
+ }
+}
