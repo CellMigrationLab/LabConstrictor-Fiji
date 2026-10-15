@@ -734,7 +734,10 @@ def harvest(MutableModuleInfo info, String title, Map links = [:], Map tool = [:
     module.tool = tool
     module.states.putAll(states)              // what the fields start as: set by the dialog's own events from here on (2.2)
     def harvested = moduleService.run(module, true).get()
-    return harvested.canceled ? null : harvested      // Cancel: the module still comes back (ModuleRunner.call), so it is asked, not only null-checked
+    // Cancel: the module still comes back (ModuleRunner.call), so it is asked, not only null-checked. SciJava also cancels before any dialog when a required input cannot be filled
+    // (no image open): that is no press, the run goes on and the tool refuses with a named reason (missing_parameter), as it always did.
+    boolean pressed = harvested.canceled && info.inputs().findAll { it.isRequired() }.every { harvested.getInput(it.getName()) != null }
+    return pressed ? null : harvested
 }
 
 /** [name shown in the chooser, tool] for each tool of the app: the label, or `label (id)` when two tools share a label (never pick the wrong one). */
