@@ -276,6 +276,9 @@ class LCModule extends DefaultMutableModule {
     LCModule(MutableModuleInfo info) { super(info) }
     @Override
     void run() {}                              // all work happens after harvesting
+    boolean canceled = false                   // SciJava's ModuleRunner returns the module even after Cancel and only calls cancel() on it: this is the one trace of the press
+    @Override
+    void cancel() { canceled = true }
 
     static Closure logger = { String level, String message, Throwable problem -> }   // set below to lcLog (a class cannot call the script's methods)
     // SciJava resolves callbacks by method name, so each linked image parameter gets a fixed slot (max 8 per tool), and so does each pixel-size field (`edited`).
@@ -730,7 +733,11 @@ def harvest(MutableModuleInfo info, String title, Map links = [:], Map tool = [:
     module.links = links
     module.tool = tool
     module.states.putAll(states)              // what the fields start as: set by the dialog's own events from here on (2.2)
-    return moduleService.run(module, true).get()
+    def harvested = moduleService.run(module, true).get()
+    // Cancel: the module still comes back (ModuleRunner.call), so it is asked, not only null-checked. SciJava also cancels before any dialog when a required input cannot be filled
+    // (no image open): that is no press, the run goes on and the tool refuses with a named reason (missing_parameter), as it always did.
+    boolean pressed = harvested.canceled && info.inputs().findAll { it.isRequired() }.every { harvested.getInput(it.getName()) != null }
+    return pressed ? null : harvested
 }
 
 /** [name shown in the chooser, tool] for each tool of the app: the label, or `label (id)` when two tools share a label (never pick the wrong one). */
@@ -1130,7 +1137,12 @@ void describeDialog(Map summary, def info) {
 }
 
 /** The way out of an interactive request that the person cancelled: nothing is run. */
-Map cancelled(Map summary) { return [aborted: true, result: hooks.finish(summary + [cancelled: true])] }
+Map cancelled(Map summary) {
+    IJ.showStatus("LabConstrictor: cancelled")
+    IJ.log("LabConstrictor: cancelled, nothing was run")
+    lcLog("INFO", "the request was cancelled in a dialog: nothing was run")
+    return [aborted: true, result: hooks.finish(summary + [cancelled: true, status_line: "LabConstrictor: cancelled"])]
+}
 
 /** Interactive run: choose the app and tool, show the tool's dialog, record the run. Returns [app, tool, module], or [aborted: true, result: ...] when cancelled. */
 Map requestFromDialog(Map found, Map summary) {

@@ -107,8 +107,8 @@ def answerDialog = { Window dialog, String title ->
             .collect { it.getSelectedItem()?.toString() }
     }
     if (title == cfg.tool) { if (cfg.dialog_steps) runSteps(dialog) else { typeIntoSpinners(dialog); selectImages(dialog) } }
-    def ok = components(dialog, JButton).find { it.text == "OK" }
-    if (ok) SwingUtilities.invokeLater { ok.doClick() }
+    def pressed = components(dialog, JButton).find { it.text == (cfg.cancel_dialog == title ? "Cancel" : "OK") }   // "cancel_dialog": the title of the dialog on which Cancel is pressed instead of OK
+    if (pressed) SwingUtilities.invokeLater { pressed.doClick() }
 }
 
 // SciJava shows a native file chooser instead of a dialog for tools with exactly one input.
