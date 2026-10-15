@@ -276,6 +276,9 @@ class LCModule extends DefaultMutableModule {
     LCModule(MutableModuleInfo info) { super(info) }
     @Override
     void run() {}                              // all work happens after harvesting
+    boolean canceled = false                   // SciJava's ModuleRunner returns the module even after Cancel and only calls cancel() on it: this is the one trace of the press
+    @Override
+    void cancel() { canceled = true }
 
     static Closure logger = { String level, String message, Throwable problem -> }   // set below to lcLog (a class cannot call the script's methods)
     // SciJava resolves callbacks by method name, so each linked image parameter gets a fixed slot (max 8 per tool), and so does each pixel-size field (`edited`).
@@ -730,7 +733,12 @@ def harvest(MutableModuleInfo info, String title, Map links = [:], Map tool = [:
     module.links = links
     module.tool = tool
     module.states.putAll(states)              // what the fields start as: set by the dialog's own events from here on (2.2)
-    return moduleService.run(module, true).get()
+    def harvested = moduleService.run(module, true).get()
+    // Cancel: the module still comes back (ModuleRunner.call), so it is asked, not only null-checked. SciJava also cancels before any dialog when a required image has no open window
+    // to take: that is no press, the run goes on and the tool refuses with a named reason (missing_parameter), as it always did. Any other Cancel (an empty required file included) is a press.
+    boolean noImageToTake = (tool.inputs ?: []).any { it.required != false && it.type in ["image", "labels"] } && !WindowManager.getImageTitles()
+    boolean pressed = harvested.canceled && !noImageToTake
+    return pressed ? null : harvested
 }
 
 /** [name shown in the chooser, tool] for each tool of the app: the label, or `label (id)` when two tools share a label (never pick the wrong one). */
@@ -1130,7 +1138,12 @@ void describeDialog(Map summary, def info) {
 }
 
 /** The way out of an interactive request that the person cancelled: nothing is run. */
-Map cancelled(Map summary) { return [aborted: true, result: hooks.finish(summary + [cancelled: true])] }
+Map cancelled(Map summary) {
+    IJ.showStatus("LabConstrictor: cancelled")
+    IJ.log("LabConstrictor: cancelled, nothing was run")
+    lcLog("INFO", "the request was cancelled in a dialog: nothing was run")
+    return [aborted: true, result: hooks.finish(summary + [cancelled: true, status_line: "LabConstrictor: cancelled"])]
+}
 
 /** Interactive run: choose the app and tool, show the tool's dialog, record the run. Returns [app, tool, module], or [aborted: true, result: ...] when cancelled. */
 Map requestFromDialog(Map found, Map summary) {
@@ -1979,6 +1992,25 @@ ImagePlus asImage(def image) {
     return imp
 }
 
+/** Optional diagnostic of showAffine: compare Fiji's own warp with an image result of the same run, but only one that is explicitly the warp of this affine (an image result with the
+ *  same `apply_to`) and has the same size. Anything else is said in the log and left out of the summary; a failure here is reported on its own and never hides the overlay. */
+void crossCheckWarp(Map r, List results, FloatProcessor warped, Map summary) {
+    def candidates = results.findAll { it.type == "image" && it.apply_to != null && it.apply_to == r.apply_to }
+    if (candidates.isEmpty()) { lcLog("INFO", "affine '" + r.name + "': no image result is declared as its warp (same apply_to), so Fiji's warp is not cross-checked"); return }
+    try {
+        def other = IJ.openImage(candidates[0].path)
+        if (other == null) throw new IOException("cannot open " + candidates[0].path)
+        def reference = other.getProcessor().convertToFloat()
+        if (reference.getWidth() != warped.getWidth() || reference.getHeight() != warped.getHeight())
+            throw new IllegalStateException("its size " + reference.getWidth() + "x" + reference.getHeight() + " is not the warp's " + warped.getWidth() + "x" + warped.getHeight())
+        summary.fiji_warp_vs_worker_warp_rel_diff = relativeDifference(warped, reference)
+    // groovylint-disable-next-line CatchException
+    } catch (Exception problem) {                              // a diagnostic only: said (log and summary), never thrown
+        lcLog("WARNING", "affine '" + r.name + "': the cross-check with the image result failed: " + problem.message)
+        summary.warp_cross_check_skipped = problem.message
+    }
+}
+
 /** Resample `apply_to` into the `relative_to` frame with the returned matrix (maps source px -> target px) and show a green/magenta overlay. */
 void showAffine(Map r, Map images, List results, Map summary, boolean replace = false) {
     def source = asImage(images[r.apply_to]), target = asImage(images[r.relative_to ?: r.apply_to])
@@ -1991,8 +2023,7 @@ void showAffine(Map r, Map images, List results, Map summary, boolean replace = 
     }
     def warped = resample(source, target.getWidth(), target.getHeight(), r.matrix_yx)
     summary.affine_matrix = r.matrix_yx
-    def workerWarp = results.find { it.type == "image" }      // only used to cross-check Fiji's own application
-    if (workerWarp) summary.fiji_warp_vs_worker_warp_rel_diff = relativeDifference(warped, IJ.openImage(workerWarp.path).getProcessor().convertToFloat())
+    crossCheckWarp(r, results, warped, summary)               // optional diagnostic: never allowed to stop the overlay below
     def gray = { ImagePlus imp -> imp.getProcessor().convertToByteProcessor(true) }
     def green = gray(target), magenta = gray(new ImagePlus("warped", warped))
     def rgb = new ColorProcessor(target.getWidth(), target.getHeight())
@@ -2200,6 +2231,8 @@ void takeMacroParameter(MacroModule module, Map p, String options) {
         module.values["set_" + p.name] = text != null
         if (text == null) return
     }
+    if (text == null && p.required && p.type in ["integer", "float", "boolean", "string", "choice"] && !p.pixel_size_of)   // a macro never invents a value the tool did not default
+        throw new IllegalArgumentException(coded("missing_parameter", "'" + p.label + "' is required: give " + p.name + "=<value>"))
     if (p.region_of) module.values["selection_" + p.name] = (Macro.getValue(options, "selection_" + p.name, "false") ?: "true").toLowerCase() in ["true", "1", "yes"]   // a bare flag counts as true
     switch (p.type) {
         case ["image", "labels"]: takeMacroImage(module, p, text, fileText); break
