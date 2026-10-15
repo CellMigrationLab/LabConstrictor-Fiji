@@ -1,0 +1,25 @@
+{
+ "app": "synthetic",
+ "tool": "Slow with progress",
+ "register": [
+  {
+   "name": "synthetic",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "cancel_dialog": "Slow with progress",
+ "overrides": {
+  "seconds": 30.0,
+  "steps": 60
+ },
+ "expect": {
+  "at": {
+   "cancelled": true,
+   "status": "$absent",
+   "status_line": "LabConstrictor: cancelled",
+   "retention.runs.count": 0
+  }
+ }
+}
