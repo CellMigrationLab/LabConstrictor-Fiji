@@ -1,0 +1,4 @@
+[
+ {"tool": "blank_values", "inputs": {"a": 1.0}, "comment": "WRONG on purpose: completes but shows no value", "expect": {}},
+ {"tool": "blank_image", "inputs": {"a": 1.0}, "comment": "WRONG on purpose: the image has no pixels (Tools refuses it)", "expect": {}}
+]
