@@ -129,6 +129,11 @@ def selectItems = { Map control ->
     return count + " item(s) selected and read back"
 }
 def realClick = { Component c ->
+    // VL-11: a form taller than the screen is scrollable; a person scrolls a control into view before clicking it, so the driver does too (it asked for the click before, and failed 21 'set' boxes below the fold)
+    if (c instanceof javax.swing.JComponent) {
+        onEdt { c.scrollRectToVisible(new Rectangle(0, 0, c.width, c.height)) }
+        Thread.sleep(150)
+    }
     def where = onEdt { [c.locationOnScreen, c.size, c instanceof javax.swing.JComponent ? c.visibleRect : new Rectangle(0, 0, c.width, c.height)] }
     Rectangle screen = new Rectangle(Toolkit.getDefaultToolkit().getScreenSize())
     Rectangle visible = where[2]                          // a component wider than the panel it sits in is clipped (SciJava's check boxes): the click goes where a person can see it
@@ -197,12 +202,26 @@ def slide = { Map control ->
         onEdt { collect(node, all) }
         partner = all.find { it instanceof JSpinner }
     }
+    // VL-11: SciJava's slider works in positions (min..max of the JSlider) that map linearly onto the number box's own range (e.g. position 25 of 0..99 is the value 26 of 1..100): the check is that
+    // the box shows the linear image of the position, from the box's own minimum and maximum, not that position and value are equal
+    def model = partner == null ? null : onEdt { partner.model }
+    int pMin = onEdt { slider.minimum }, pMax = onEdt { slider.maximum }
     for (int wanted : [target, (int) ((original + target) / 2), original]) {
         onEdt { slider.setValue(wanted) }
         settle(SETTLE_MS)
         int now = onEdt { slider.value }
         if (now != wanted) fail("set " + wanted + " and the slider reads " + now)
-        if (partner != null && (onEdt { (partner.value as Number).intValue() }) != wanted) fail("the slider is at " + wanted + " but the number box beside it shows " + onEdt { partner.value })
+        if (partner != null) {
+            double shown = onEdt { (partner.value as Number).doubleValue() }
+            if (model != null && model.hasProperty("minimum") && model.minimum != null && model.maximum != null && pMax > pMin) {
+                double lo = (model.minimum as Number).doubleValue(), hi = (model.maximum as Number).doubleValue()
+                double expected = lo + (wanted - pMin) * (hi - lo) / (pMax - pMin)
+                double tolerance = Math.max(1e-6 * Math.abs(hi - lo), ((model.stepSize as Number).doubleValue()) / 2)
+                if (Math.abs(shown - expected) > tolerance) fail("the slider is at position " + wanted + " of " + pMin + ".." + pMax + ", so the number box (range " + lo + ".." + hi + ") should show " + expected + " but shows " + shown)
+            } else if ((int) shown != wanted) {
+                fail("the slider is at " + wanted + " but the number box beside it shows " + shown + " (the box's range is unknown, so only equality could be checked)")
+            }
+        }
     }
     return "moved " + original + " -> " + target + (partner == null ? "" : ", the number box followed every position")
 }
