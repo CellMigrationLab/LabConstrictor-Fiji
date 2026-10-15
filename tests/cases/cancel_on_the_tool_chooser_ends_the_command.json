@@ -10,6 +10,7 @@
   }
  ],
  "cancel_dialog": "LabConstrictor: synthetic",
+ "script_mode_only": true,
  "expect": {
   "at": {
    "cancelled": true,

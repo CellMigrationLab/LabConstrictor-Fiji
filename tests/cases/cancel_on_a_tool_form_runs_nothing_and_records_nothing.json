@@ -14,6 +14,7 @@
   "seconds": 30.0,
   "steps": 60
  },
+ "script_mode_only": true,
  "expect": {
   "at": {
    "cancelled": true,
