@@ -113,6 +113,8 @@ These are deliberate: the host does something simpler instead of failing, writes
 
 CI (`fiji-gui` workflow) runs the loose-script and the jar cases as two parallel jobs on separate runners (`fiji-gui (script)`, `fiji-gui (jar)`); the `fiji-gui` check is green only when both are. Each case line carries its duration.
 
+UI audit (not part of `run_cases.py`, nor of the default CI jobs): `tests/ui_audit.py` presses every control and runs every tool of an installed app through the real dialogs; see [docs/UI_AUDIT.md](docs/UI_AUDIT.md) for how to start it. Its Python judges are checked without Fiji by `python tests/ui_audit_logic_check.py` (needs numpy and tifffile; runs in the `fiji-gui` script job), its seeded failures by `python tests/ui_audit_negative.py`.
+
 Lint: `tests/lint_groovy.sh` runs `npm-groovy-lint` (pinned) on the script with `.groovylintrc.json` (needs node and Java); CI runs it as the `lint` job.
 
 Cases are JSON (`tests/cases/*.json`): the app and tool, images to preload, dialog overrides, optional cancel timing, expectations.

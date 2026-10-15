@@ -13,7 +13,8 @@ A driver that presses every control of the LabConstrictor Fiji plugin, opens the
 | `LC_UI_TOOLS`, `LC_UI_PARTS` | only these tools / only `panel` or `tools` (the rest is reported as `HUMAN`) |
 | `LC_UI_ORDERED` | apps whose tools are a sequence (default `GuessTheCondition`): tools run in the order of their cases, earlier cases are replayed first, whatever status they expect |
 | `LC_FIJI_PLUGIN_DIR`, `LC_FIJI_MODE=jar` + `LC_FIJI_JAR`, `LC_HOST_VERSION` | test a RELEASED plugin: the unzipped release script folder, or the release jar (put into `plugins/` and removed afterwards); `LC_HOST_VERSION` (tag or SHA) is then required and is written to the matrix as `host_version`. Default: this repository's script, `repo@<sha>` |
-| `LC_UI_INJECT` | a seeded failure (`extra_control`, `remove_control`, `offscreen_ok`, `blank_screens`) for the negative controls |
+| `LC_UI_SETTLE_TIMEOUT` | seconds a dialog gets to stop changing its size before it is reported as `LAYOUT NOT SETTLED` (default 45) |
+| `LC_UI_INJECT` | a seeded failure (`extra_control`, `remove_control`, `offscreen_ok`, `blank_screens`, `never_settles`) or a seeded late layout the audit must absorb (`late_layout`) for the negative controls |
 
 ## What it does
 Every job is its own Fiji process in its own process group under a watchdog (a modal dialog blocks the event thread): the choosers, each tool's form, each tool's run, each
@@ -37,9 +38,29 @@ written first: every expected id without a row ends as `NOT_RUN`. Exit code 1 wh
 Cases that expect FAILED or cancel, and `stress_*` tools, are never run through the form. File inputs become Fiji inputs the way a person gives them: an image or labels file is
 opened as an ImagePlus (Fiji reads the calibration from the file) and chosen in the form; a table, file or folder path is typed into its field.
 
+| `ui_fiji_fj1b_cancel_form_<tool>` | a plain Cancel on the untouched form of every tool with a required file/folder/table input (on a form of several parameters) ends the command: cancelled, nothing ran, no run record, the status line says cancelled |
+| `ui_fiji_fj1b_missing_image_<tool>` | OK on the untouched form of one tool with a required image, with no image open, is refused with `missing_parameter` (nothing runs) |
+
+The FJ-1b ids are in the expected list from the start (`tests/ui_audit_fj1b.py`): a start that was killed leaves them `NOT_RUN`, never absent. When no tool qualifies, the HUMAN rows `ui_fiji_fj1b_cancel_form` / `ui_fiji_fj1b_missing_image` say so.
+
+## A form that lays itself out late
+Under CPU load a dialog can still be growing when it is first looked at (a `simulate_sample` form seen at 1066x3024 on a 1600x1000 screen gave 21 false FAIL rows). Before a dialog is read or clicked
+the harness waits until its position, size and number of components have not changed for 0.7 s; a dialog that is bigger than the screen has to stay unchanged for 10 s before it counts as really
+oversized (and then the geometry check fails it, as it should). A dialog that is still changing after `LC_UI_SETTLE_TIMEOUT` is neither read nor clicked: its `_opens` / `_run` row is a `FAIL` whose
+detail starts `LAYOUT NOT SETTLED` and its `_controls` / `_screens` row is `NOT_RUN`. A late layout can therefore not produce a pass or a set of false failures.
+
+## Where results go
+A tool with several shapes outputs (NucleiSky `relocalize`: `reference_outlines` on `reference.tif`, `query_outlines` on `query.tif`) is judged output by output against its own image: the overlay of
+each image must hold exactly the outlines of the outputs that belong to it, and an image no shapes output belongs to carries none (`tests/ui_audit_placement.py`).
+
+## Running it
+Not part of the default CI jobs (it needs an installed app and a Fiji with a display, and takes minutes per app). `tests/ui_audit_logic_check.py` (no Fiji, a second) runs in the `fiji-gui` script
+job; `tests/lint_groovy.sh` lints `tests/ui_audit_*.groovy` in the `lint` job. The audit itself is started by hand as shown at the top (under `xvfb-run -a -s "-screen 0 1600x1000x24"` on a
+machine without a display); the apps of `tests/ui_audit_apps/` are fixtures of its own negative controls.
+
 ## Negative controls
 `python tests/ui_audit_negative.py` seeds a removed control, an extra control, an off-screen OK, blank screenshots, a failing tool, a wrong value, blank results, a hung tool and a wrongly
-listed or hidden app, and fails if any of them does not turn the audit red. `python tests/ui_audit_logic_check.py` checks the Python judges on fake reports (no Fiji);
+listed or hidden app and a form whose layout never settles, and fails if any of them does not turn the audit red (and if a form that is only late turns it red). `python tests/ui_audit_logic_check.py` checks the Python judges on fake reports (no Fiji);
 `tests/ui_audit_tree_check.groovy` checks the Swing side on a fake dialog. `sh tests/lint_groovy.sh` lints the harness.
 
 ## Notes on what Fiji does
