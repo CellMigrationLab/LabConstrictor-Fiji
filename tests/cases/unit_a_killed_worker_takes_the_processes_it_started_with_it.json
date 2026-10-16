@@ -1,0 +1,16 @@
+{
+ "unit_checks": [
+  "worker_tree_is_killed",
+  "worker_children_do_not_outlive_a_clean_close"
+ ],
+ "script_mode_only": true,
+ "fixtures": [],
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 6
+  }
+ }
+}

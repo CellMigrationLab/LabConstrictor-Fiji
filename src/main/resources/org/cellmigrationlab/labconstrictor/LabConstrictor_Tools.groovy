@@ -24,6 +24,8 @@ import org.scijava.module.DefaultMutableModuleInfo
 import org.scijava.module.DefaultMutableModuleItem
 import org.scijava.module.MutableModuleInfo
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 // ---- constants (limits, timeouts, intervals): every number the script depends on is named and explained here
 @Field final String JOB_DIR_KEY = "_job_dir"     // reserved input: host-owned directory for outputs
@@ -37,6 +39,7 @@ import java.nio.file.Files
 @Field final int EXIT_WAIT_MS = 10000            // how long a worker gets to exit after its input is closed, then it is killed: the 10 s the worker itself promises (conformance.json limits.worker_close_timeout_s; HOST_PARITY K03)
 @Field final int LOOKUP_TIMEOUT_MS = 60000       // a ChoicesFrom lookup that has not answered by then is cancelled and its worker is thrown away (conformance.json limits.lookup_timeout_s, a default not yet confirmed)
 @Field final int CANCEL_POLL_MS = 50             // while a task runs: how often Esc, the harness's cancel time and the task status are looked at
+@Field final int OUTPUTS_WAIT_MS = 10000         // after a task reads COMPLETE (or any end): how long the client gets to publish its outputs and say so (it sets the status first, then fills the outputs)
 @Field final int KILL_SETTLE_MS = 10000          // after a worker was killed: how long its task gets to report the end (the client notices the dead process on a thread of its own)
 @Field final int EXIT_POLL_MS = 100              // while a closed worker exits: how often it is looked at
 @Field final int CATALOG_TIMEOUT_S = 30          // how long the app's interpreter gets to name its unit catalog (it only imports the standard library)
@@ -1407,36 +1410,56 @@ void listenForProgress(def task, List progress) {
     }
 }
 
-/** Wait for a started task. Esc (or the harness) sends Cancel; a tool that ignores it for CANCEL_GRACE_MS is killed.
- *  Returns when Cancel was sent (epoch ms), or null if it never was. */
-Long waitForTask(Service service, def task, long started) {
+/** The ends a task can have, as the events the client sends (see `watchTaskEnd`). */
+@Field final List<Service.ResponseType> TASK_END_EVENTS = [Service.ResponseType.COMPLETION, Service.ResponseType.CANCELATION, Service.ResponseType.FAILURE, Service.ResponseType.CRASH]
+
+/** A latch that opens when the task has ended AND the client has finished publishing the outcome. Appose 0.12.0 sets `task.status` to COMPLETE first and only then copies the
+ *  response's outputs into `task.outputs` (`Service.Task.handle`), from the thread that reads the worker's output, and `status` is not volatile: a poll of the status says the task
+ *  is finished before its outputs are there. The listeners are called after that copy, on the same thread, so the latch is the barrier (and its count-down is what makes the
+ *  outputs visible to the reader). Must be called before `task.start()`; it is registered first, so no later listener that throws can keep it closed. */
+CountDownLatch watchTaskEnd(def task) {
+    def ended = new CountDownLatch(1)
+    task.listen { event -> if (event.responseType in TASK_END_EVENTS) ended.countDown() }
+    return ended
+}
+
+/** Wait for a started task whose end is signalled by `ended` (see `watchTaskEnd`). Esc (or the harness) sends Cancel; a tool that ignores it for CANCEL_GRACE_MS is killed
+ *  (with every process it started). Returns when Cancel was sent (epoch ms), or null if it never was. When the status reads finished but the outputs are not published within
+ *  OUTPUTS_WAIT_MS the wait ends and says so in the log; the caller sees `ended.count > 0`. */
+Long waitForTask(Service service, def task, long started, CountDownLatch ended) {
     Long cancelSent = null
+    Long finishedSeen = null
     IJ.resetEscape()
     def cancelAfter = hooks.cancelAfterMs()
-    while (!task.status.isFinished()) {
+    while (!ended.await(CANCEL_POLL_MS, TimeUnit.MILLISECONDS)) {
         hooks.whileWaiting(System.currentTimeMillis() - started)
+        if (task.status.isFinished()) {
+            if (finishedSeen == null) finishedSeen = System.currentTimeMillis()
+            if (System.currentTimeMillis() - finishedSeen > OUTPUTS_WAIT_MS) {
+                lcLog("ERROR", "the task reads " + task.status + " but its outputs were not published " + OUTPUTS_WAIT_MS + " ms later")
+                break
+            }
+            continue
+        }
         if (cancelSent == null && (IJ.escapePressed() || hooks.cancelWhen(System.currentTimeMillis() - started) || (cancelAfter != null && System.currentTimeMillis() - started > cancelAfter))) {
             task.cancel()
             cancelSent = System.currentTimeMillis()
             IJ.showStatus("LabConstrictor: cancelling...")
         }
-        if (cancelSent != null && System.currentTimeMillis() - cancelSent > CANCEL_GRACE_MS && !task.status.isFinished()) {
-            service.kill()                                   // the tool ignored Cancel
-            settleAfterKill(task)
+        if (cancelSent != null && System.currentTimeMillis() - cancelSent > CANCEL_GRACE_MS) {
+            lib("LCWorkers").killTree(service)               // the tool ignored Cancel: the worker and everything it started
+            settleAfterKill(task, ended)
             break
         }
-        Thread.sleep(CANCEL_POLL_MS)
     }
     return cancelSent
 }
 
-/** After `service.kill()`: the client learns that its worker is dead on a thread of its own, so the task still reads RUNNING for a moment. The outcome (what the person is
+/** After the worker was killed: the client learns that its worker is dead on a thread of its own, so the task still reads RUNNING for a moment. The outcome (what the person is
  *  told, and the done status of the run: a crash after Cancel is cancelled) must not be read before the task has said it ended. This waits for that condition, not for a
  *  time, for at most KILL_SETTLE_MS; a task that still reads unfinished then is said in the log (its status is then reported as it is). */
-void settleAfterKill(def task) {
-    long deadline = System.currentTimeMillis() + KILL_SETTLE_MS
-    while (!task.status.isFinished() && System.currentTimeMillis() < deadline) Thread.sleep(CANCEL_POLL_MS)
-    if (!task.status.isFinished()) lcLog("ERROR", "the task still reads " + task.status + " " + KILL_SETTLE_MS + " ms after its worker was killed: its end was never reported")
+void settleAfterKill(def task, CountDownLatch ended) {
+    if (!ended.await(KILL_SETTLE_MS, TimeUnit.MILLISECONDS)) lcLog("ERROR", "the task still reads " + task.status + " " + KILL_SETTLE_MS + " ms after its worker was killed: its end was never reported")
 }
 
 /** Close the worker and make sure it is gone: no worker is ever left behind. The worker is claimed from the registry first, so that exactly one caller closes it (the run, a
@@ -1448,11 +1471,13 @@ void closeWorker(Service service) {
 
 /** Close a worker this caller owns: ask it to exit, wait EXIT_WAIT_MS, kill it when it stays. */
 void closeLiveWorker(Service service) {
+    def started = lib("LCWorkers").descendantsOf(service)       // seen now: once the worker has exited, what it started is no longer findable
     try { service.close(); waitForExit(service, EXIT_WAIT_MS) }
     // groovylint-disable-next-line CatchThrowable
     catch (Throwable problem) {                          // cleanup: broad on purpose, whatever close() throws the worker must still be killed
-        lcLog("ERROR", "could not close the worker cleanly: " + problem, problem); service.kill()
+        lcLog("ERROR", "could not close the worker cleanly: " + problem, problem); lib("LCWorkers").killTree(service)
     }
+    lib("LCWorkers").reap(started)                       // a process the tool started and left running outlives the worker otherwise
 }
 
 /** Run one task through Appose; Esc (or the harness) requests cancel, a tool that ignores it is killed. */
@@ -1463,20 +1488,24 @@ Map runTool(Map app, Map tool, Map inputs) {
     lcLog("INFO", "starting worker for " + app.name + " python=" + app.python + " module=" + app.module + " tool=" + tool.id)
     def progress = []
     def task = service.task(TOOL_PREFIX + tool.id, inputs)
+    def ended = watchTaskEnd(task)
     listenForProgress(task, progress)
     def started = System.currentTimeMillis()
     Long cancelSent = null
     try {
         task.start()
-        cancelSent = waitForTask(service, task, started)
+        cancelSent = waitForTask(service, task, started, ended)
     } finally {                                              // also when interrupted or when anything above throws
         closeWorker(service)
     }
-    def complete = task.status == Service.TaskStatus.COMPLETE
+    def published = ended.count == 0                         // the client has finished with the outcome: the outputs are all there
+    def unpublished = task.status == Service.TaskStatus.COMPLETE && !published    // the status was set but the outputs never followed: not a success, said as a failure
+    def complete = task.status == Service.TaskStatus.COMPLETE && published
+    def error = unpublished ? "The tool finished, but its results did not arrive within " + (OUTPUTS_WAIT_MS / MS_PER_SECOND) + " s, so they are not shown. Run it again." : task.error
     if (complete) lcLog("INFO", "task COMPLETE tool=" + tool.id + " timings=" + task.outputs?.timings)
-    else lcLog("ERROR", "task " + task.status + " tool=" + tool.id + " error=" + (task.error ?: "") + (workerOutput ? "\n--- worker output ---\n" + workerOutput.takeRight(LOG_WORKER_LINES).join("\n") : ""))
-    return [status: task.status.toString(), complete: complete, error: task.error, workerOutput: workerOutput.takeRight(OUTCOME_WORKER_LINES),
-            outputs: task.outputs, progress: progress, workerAlive: service.isAlive(), cancelRequested: cancelSent != null,
+    else lcLog("ERROR", "task " + task.status + " tool=" + tool.id + " error=" + (error ?: "") + (workerOutput ? "\n--- worker output ---\n" + workerOutput.takeRight(LOG_WORKER_LINES).join("\n") : ""))
+    return [status: unpublished ? "FAILED" : task.status.toString(), complete: complete, error: error, workerOutput: workerOutput.takeRight(OUTCOME_WORKER_LINES),
+            outputs: published ? task.outputs : [:], progress: progress, workerAlive: service.isAlive(), cancelRequested: cancelSent != null,
             seconds: (System.currentTimeMillis() - started) / MS_PER_SECOND]
 }
 
@@ -1484,7 +1513,7 @@ Map runTool(Map app, Map tool, Map inputs) {
 void waitForExit(Service service, int timeoutMs) {
     def deadline = System.currentTimeMillis() + timeoutMs
     while (service.isAlive() && System.currentTimeMillis() < deadline) Thread.sleep(EXIT_POLL_MS)
-    if (service.isAlive()) service.kill()
+    if (service.isAlive()) lib("LCWorkers").killTree(service)
 }
 
 // ---- what became of a run: failure text, run record
