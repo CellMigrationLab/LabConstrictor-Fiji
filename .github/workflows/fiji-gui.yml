@@ -73,6 +73,10 @@ jobs:
           echo "$HOME/lcvenv/bin" >> "$GITHUB_PATH"
           "$HOME/lcvenv/bin/pip" install git+https://github.com/CellMigrationLab/LabConstrictor-Tools numpy pandas tifffile scipy scikit-image
           ls -ld "$HOME/lcvenv/bin" "$(readlink -f "$HOME/lcvenv/bin/python")"
+      - name: UI audit judges (tests/ui_audit_logic_check.py, no Fiji, a few seconds) pass on their fake reports and fail on the seeded ones
+        if: matrix.mode == 'script'
+        timeout-minutes: 5
+        run: $HOME/lcvenv/bin/python -u tests/ui_audit_logic_check.py
       - name: Sandbox listing driver (tests/sandbox_listing.py) passes and fails as its contract says
         if: matrix.mode == 'script'
         timeout-minutes: 20
