@@ -1,10 +1,14 @@
 // Helper of LabConstrictor_Tools.groovy (loaded by it, see loadLib there): the one place that knows which worker processes of this Fiji are alive (docs/SPEC_WRONG_SCIENCE.md
 // section 5.5 and 5.6: one owner for the workers; no worker outlives the close). Every worker the plugin starts, for a run or for lookups, is registered here and is
 // closed through here, exactly once: whoever claims a worker first closes it and nobody closes it again. A shutdown hook (Fiji quitting, a Ctrl-C of the launcher) claims
-// whatever is still alive and kills it, so that no worker is left behind when Fiji goes away. Every method is typed.
+// whatever is still alive and kills it, so that no worker is left behind when Fiji goes away. A kill takes the processes the worker started with it: Appose 0.12.0 (the
+// version Fiji declares) only destroys the worker's own process, so a tool's child (an external executable, a subprocess.Popen) would live on, and, holding the worker's
+// stdout/stderr, would keep the client from ever reporting the task as ended. Every method is typed.
 
 /** The registry of the live workers of this Fiji (see the comment at the top of this file). */
 class LCWorkers {
+    static final int REAP_WAIT_MS = 5000       // how long the processes a worker started get to die after destroyForcibly (a kill is not instant); then the ones left are said in the log
+    static final int REAP_POLL_MS = 25
     static final Object LOCK = new Object()
     static final Set<Object> LIVE = new LinkedHashSet<Object>()    // workers started and not yet claimed (an Appose Service, or a stand-in in a test)
     static boolean hookInstalled = false
@@ -50,7 +54,7 @@ class LCWorkers {
         int killed = 0
         mine.each { Object worker ->
             try {
-                worker.kill()
+                killTree(worker)
                 killed++
             // groovylint-disable-next-line CatchException
             } catch (Exception problem) {          // the next worker must still be killed
@@ -59,5 +63,57 @@ class LCWorkers {
         }
         if (killed > 0) hookLog('WARNING', killed + ' worker(s) were still alive at shutdown and were killed', null)
         return killed
+    }
+
+    /** The operating-system process of an Appose Service, or null for a stand-in that has none (a test double; a service that was never started). Appose 0.12.0 offers no accessor,
+     *  so the private field is read; if that is refused the log says so (the worker itself is still killed, only what it started cannot be found). */
+    static Process processOf(Object worker) {
+        for (Class<?> type = worker.getClass(); type != null; type = type.superclass) {
+            if (type.name != 'org.apposed.appose.Service') continue
+            try {
+                java.lang.reflect.Field field = type.getDeclaredField('process')
+                field.accessible = true
+                return (Process) field.get(worker)
+            // groovylint-disable-next-line CatchException
+            } catch (Exception problem) {          // a different Appose, or a security manager: said, not hidden
+                hookLog('ERROR', 'cannot read the worker process from ' + type.name + ', so what the worker started cannot be found: ' + problem, problem)
+                return null
+            }
+        }
+        return null
+    }
+
+    /** The processes the worker has started, directly or not, right now (ProcessHandle objects). Needs Java 9+: on Java 8 there is no way to list them, which is said in the log
+     *  and the list is empty. */
+    static List<Object> descendantsOf(Object worker) {
+        Process process = processOf(worker)
+        if (process == null || !process.isAlive()) return []
+        if (!process.metaClass.respondsTo(process, 'toHandle')) {
+            hookLog('WARNING', 'this Java (' + System.getProperty('java.version') + ') cannot list the processes a worker started: they are not stopped with it (Java 9 or later does)', null)
+            return []
+        }
+        List<Object> found = []
+        process.toHandle().descendants().forEach { Object handle -> found.add(handle) }
+        return found
+    }
+
+    /** Kill the worker and every process it started (listed before the kill: afterwards they would have been handed to init). */
+    static void killTree(Object worker) {
+        List<Object> started = descendantsOf(worker)
+        worker.kill()
+        reap(started)
+    }
+
+    /** Stop the processes of `handles` (ProcessHandle objects from `descendantsOf`) that are still alive, wait up to REAP_WAIT_MS for them to be gone and say in the log what was
+     *  found: a tool that left a process running when the worker ended, and any that would not die. */
+    static void reap(List<Object> handles) {
+        List<Object> alive = handles.findAll { Object handle -> handle.isAlive() }
+        if (alive.isEmpty()) return
+        hookLog('WARNING', alive.size() + ' process(es) started by the worker were still running and are stopped: ' + alive.collect { Object handle -> handle.pid() + ' ' + handle.info().command().orElse('?') }.join(', '), null)
+        alive.each { Object handle -> handle.destroyForcibly() }
+        long deadline = System.currentTimeMillis() + REAP_WAIT_MS
+        while (alive.any { Object handle -> handle.isAlive() } && System.currentTimeMillis() < deadline) Thread.sleep(REAP_POLL_MS)
+        List<Object> left = alive.findAll { Object handle -> handle.isAlive() }
+        if (!left.isEmpty()) hookLog('ERROR', left.size() + ' process(es) started by the worker are still running ' + REAP_WAIT_MS + ' ms after they were killed: ' + left.collect { Object handle -> handle.pid() }.join(', '), null)
     }
 }
