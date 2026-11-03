@@ -48,10 +48,15 @@ answer["record"] = runs.record_json(content)
 print(json.dumps(answer))
 '''
 
+    // SOURCE as the argument of `python -c`. Windows has no argument array: Java joins the arguments into one command line without escaping the double quotes inside
+    // one, and Python then drops them (`{"version": None}` arrives as `{version: None}`, a NameError, so every run was refused). The source travels as base64 in a
+    // line with no quote, space or backslash, which every platform passes through unchanged.
+    static final String ARGUMENT = "exec(__import__('base64').b64decode('" + SOURCE.getBytes('UTF-8').encodeBase64() + "'))"
+
     /** One request to the helper process of the app's interpreter; the answer is the JSON object it printed last. Throws IOException when there is none. */
     static Map<String, Object> call(Map app, Map<String, Object> request, String home, List<String> scrubbed) {
         Map<String, Object> full = [minimum: MINIMUM_TOOLS, helpers: HELPERS] + request
-        ProcessBuilder builder = LCRetention.pythonProcess([app.python as String, '-c', SOURCE], app, home, scrubbed)
+        ProcessBuilder builder = LCRetention.pythonProcess([app.python as String, '-c', ARGUMENT], app, home, scrubbed)
         builder.redirectErrorStream(true)
         Process process = builder.start()
         StringBuilder output = new StringBuilder()

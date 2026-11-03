@@ -157,6 +157,11 @@ import groovy.json.JsonSlurper
             try { lc.libSource("NoSuchHelper") } catch (IllegalStateException problem) { missing = problem.message }
             check("a helper that is nowhere is an error that says where it looked", missing != null && missing.contains("could not find its helper file NoSuchHelper.groovy") && missing.contains("looked in"), missing)
             check("the helpers compile and are typed classes", lc.lib("LCRetention").name == "LCRetention" && lc.lib("LCRunRecord").name == "LCRunRecord")
+            def record = lc.lib("LCRunRecord")
+            // Windows joins the arguments into one command line and drops unescaped double quotes: a `-c` argument must have none, nor spaces or backslashes
+            check("the helper's -c argument has no double quote, space or backslash", !(record.ARGUMENT =~ /["\s\\]/), record.ARGUMENT.take(80))
+            String decoded = new String((record.ARGUMENT =~ /b64decode\('([A-Za-z0-9+\/=]+)'\)/)[0][1].decodeBase64(), "UTF-8")
+            check("the -c argument carries the helper source unchanged", decoded == record.SOURCE)
             def theApp = app()
             check("the Tools of the case have what the run record needs", lc.runRecordProblem(theApp) == null, lc.runRecordProblem(theApp))
             def old = lc.lib("LCRunRecord").refusal([name: "demo"], [version: "0.2.0rc1", missing: [], old: true])
