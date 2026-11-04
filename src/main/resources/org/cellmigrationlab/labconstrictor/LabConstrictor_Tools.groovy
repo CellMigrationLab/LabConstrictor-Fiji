@@ -371,6 +371,7 @@ hooks = [
     preferred    : { String kind -> null },   // "app" / "tool" -> the entry a chooser starts on (null: the first)
     setup        : { },                       // called once when a run starts
     beforeDialog : { String title -> },       // called just before each dialog is shown
+    beforeMessage: { Map summary -> },        // called just before the message that ends a run (error, "nothing found"), after its run record is complete
     cancelAfterMs: { null },                  // ms after the start at which Cancel is sent on its own (null: never)
     maxShapes     : { null },                 // a smaller outline cap (null: MAX_SHAPES), so that a test needs no 50 000 outlines
     maxExportBytes: { null },                 // a smaller export limit (null: MAX_EXPORT_BYTES), so that a test needs no huge image
@@ -1611,22 +1612,29 @@ void startPrune(Map app, Map summary) {
     if (watcher != null && hooks.awaitPrune()) watcher.join()
 }
 
-/** Run the tool, then keep the command and show the outcome; the run's owned folders are completed whatever happens (see finishRetention). */
+/** Run the tool, then keep the command and show the outcome; the run's owned folders are completed whatever happens (see finishRetention).
+ *  The message that tells the person (an error, "nothing found") is shown after the folders are complete: a modal dialog waits for a click, and the run record
+ *  must not wait with it (issue #57: the folder held only `.lc-owner.json` while the dialog was open, and `finished_utc` was the time of the click). */
 void runAndShow(Map app, Map tool, Map inputs, Map run, Map summary) {
     Map outcome = null
+    Closure tell = null
     try {
         outcome = runTool(app, tool, inputs)
         summary << [request: inputs, status: outcome.status, error: outcome.error, progress_events: outcome.progress,
                     worker_alive_after: outcome.workerAlive, cancel_requested: outcome.cancelRequested]
         summary.timings.worker_run_s = outcome.seconds
         rememberCommand(app, tool, inputs, run.images, summary)
-        reportOutcome(app, outcome, run, summary)
+        tell = reportOutcome(app, outcome, run, summary)
     // groovylint-disable-next-line CatchThrowable
     } catch (Throwable problem) {                         // whatever stops the run: the record says so, then the problem goes on to the entry point
         outcome = outcome ?: hostFailureOutcome(problem)
         throw problem
     } finally {
         finishRetention(inputs, outcome ?: hostFailureOutcome(new IllegalStateException("the run did not report an outcome")), run, summary)
+    }
+    if (tell != null) {
+        hooks.beforeMessage(summary)
+        if (hooks.interactive) tell()
     }
 }
 
@@ -2124,24 +2132,26 @@ double relativeDifference(FloatProcessor a, FloatProcessor b) {
     return sumDiff / Math.max(sumRef, MIN_REFERENCE_SUM)
 }
 
-/** Say what became of a run: show the results of a complete one, a plain message for "nothing found", an error for a failure, a status line for the rest. */
-void reportOutcome(Map app, Map outcome, Map run, Map summary) {
+/** Say what became of a run: show the results of a complete one, a plain message for "nothing found", an error for a failure, a status line for the rest.
+ *  Returns the modal message to show the person, or null when there is none; the caller shows it once the run record is complete (see runAndShow). */
+Closure reportOutcome(Map app, Map outcome, Map run, Map summary) {
+    String title = "LabConstrictor: " + app.display_name
     if (outcome.complete) {
         summary.interpreter = outcome.outputs.diagnostics
         summary << showResults(app, outcome.outputs.results, run)
-        if (summary.display_errors && hooks.interactive)
-            IJ.error("LabConstrictor: " + app.display_name, "The tool finished, but not everything could be shown:\n" + summary.display_errors.join("\n"))
+        if (summary.display_errors) return { IJ.error(title, "The tool finished, but not everything could be shown:\n" + summary.display_errors.join("\n")) }
     } else if (outcome.status == "FAILED" && !outcome.cancelRequested && (outcome.error ?: "") =~ /^\[(no_match|no_result)\] /) {
         // an outcome ("nothing found"), not a fault: a plain message, not an error dialog
         summary.no_match_message = outcome.error.replaceFirst(/^\[[a-z_]+\] /, "")
-        if (hooks.interactive) IJ.showMessage("LabConstrictor: " + app.display_name, summary.no_match_message)
         IJ.showStatus("LabConstrictor: " + summary.no_match_message)
+        return { IJ.showMessage(title, summary.no_match_message) }
     } else if (outcome.status in ["FAILED", "CRASHED"] && !outcome.cancelRequested) {
         summary.failure_message = failureMessage(outcome, summary)
-        if (hooks.interactive) IJ.error("LabConstrictor: " + app.display_name, summary.failure_message)
+        return { IJ.error(title, summary.failure_message) }
     } else {
         reportEnd(outcome, summary)
     }
+    return null
 }
 
 /** A run that ended with no results and no fault (Cancel, or a status such as running): said in the status bar and the Log. After a Cancel that had

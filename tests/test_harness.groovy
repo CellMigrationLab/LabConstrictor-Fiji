@@ -227,6 +227,11 @@ return [
     preferred    : { String kind -> cfg[kind] },
     setup        : preload,
     beforeDialog : { String title -> startClicker(title) },
+    // what the folder of the run holds when the person is told (issue #57: run.json and .lc-done.json were written only after the dialog was closed)
+    beforeMessage: { Map summary ->
+        File record = summary.run_record ? new File(summary.run_record as String) : null
+        summary.record_when_told = [run_json: record != null && new File(record, "run.json").isFile(), done: record != null && new File(record, ".lc-done.json").isFile()]
+    },
     cancelAfterMs: { cfg.cancel_after_s ? (long) (cfg.cancel_after_s * 1000) : null },
     maxShapes     : { cfg.max_shapes ? (int) cfg.max_shapes : null },
     maxExportBytes: { cfg.max_export_bytes ? (long) cfg.max_export_bytes : null },       // a small limit instead of a 4 GB image
