@@ -34,6 +34,7 @@ import java.util.concurrent.TimeUnit
 
 // timeouts and polling
 @Field final String CANCELLED_AFTER_KILL = "cancelled (worker stopped)"   // the status after a Cancel the tool ignored (same words as the Napari form)
+@Field final String ESC_HINT = " (press Esc to cancel)"   // after every status line of a running tool: the dialog is gone, and Esc is the only way to stop it (issue #56)
 @Field final List<String> SCRUBBED_ENV = ["PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX", "QT_PLUGIN_PATH"]   // variables of the host's environment the worker must not inherit (PYTHONPATH is always set)
 @Field final int CANCEL_GRACE_MS = 3000          // how long a tool gets to honour Cancel before its worker is killed
 @Field final int EXIT_WAIT_MS = 10000            // how long a worker gets to exit after its input is closed, then it is killed: the 10 s the worker itself promises (conformance.json limits.worker_close_timeout_s; HOST_PARITY K03)
@@ -1404,7 +1405,7 @@ void listenForProgress(def task, List progress) {
     task.listen { event ->
         if (event.responseType == Service.ResponseType.UPDATE) {
             synchronized (progress) { progress << [event.message, event.current, event.maximum]; if (progress.size() > MAX_KEPT_LINES) progress.remove(0) }
-            IJ.showStatus("LabConstrictor: " + (event.message ?: ""))
+            IJ.showStatus("LabConstrictor: " + (event.message ?: "") + ESC_HINT)
             if (event.maximum > 0) IJ.showProgress(event.current / (double) event.maximum)
         }
     }
@@ -1492,8 +1493,10 @@ Map runTool(Map app, Map tool, Map inputs) {
     listenForProgress(task, progress)
     def started = System.currentTimeMillis()
     Long cancelSent = null
+    String running = "LabConstrictor: running " + (tool.label ?: tool.id) + ESC_HINT
     try {
         task.start()
+        IJ.showStatus(running)
         cancelSent = waitForTask(service, task, started, ended)
     } finally {                                              // also when interrupted or when anything above throws
         closeWorker(service)
@@ -1505,7 +1508,7 @@ Map runTool(Map app, Map tool, Map inputs) {
     if (complete) lcLog("INFO", "task COMPLETE tool=" + tool.id + " timings=" + task.outputs?.timings)
     else lcLog("ERROR", "task " + task.status + " tool=" + tool.id + " error=" + (error ?: "") + (workerOutput ? "\n--- worker output ---\n" + workerOutput.takeRight(LOG_WORKER_LINES).join("\n") : ""))
     return [status: unpublished ? "FAILED" : task.status.toString(), complete: complete, error: error, workerOutput: workerOutput.takeRight(OUTCOME_WORKER_LINES),
-            outputs: published ? task.outputs : [:], progress: progress, workerAlive: service.isAlive(), cancelRequested: cancelSent != null,
+            outputs: published ? task.outputs : [:], progress: progress, workerAlive: service.isAlive(), cancelRequested: cancelSent != null, runningStatus: running,
             seconds: (System.currentTimeMillis() - started) / MS_PER_SECOND]
 }
 
@@ -1617,7 +1620,7 @@ void runAndShow(Map app, Map tool, Map inputs, Map run, Map summary) {
     try {
         outcome = runTool(app, tool, inputs)
         summary << [request: inputs, status: outcome.status, error: outcome.error, progress_events: outcome.progress,
-                    worker_alive_after: outcome.workerAlive, cancel_requested: outcome.cancelRequested]
+                    worker_alive_after: outcome.workerAlive, cancel_requested: outcome.cancelRequested, running_status: outcome.runningStatus]
         summary.timings.worker_run_s = outcome.seconds
         rememberCommand(app, tool, inputs, run.images, summary)
         reportOutcome(app, outcome, run, summary)
