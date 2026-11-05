@@ -19,7 +19,9 @@
   "at": {
    "done_status": "failed",
    "retention.runs.fiji.0.status": "failed",
-   "retention.runs.fiji.0.run_json.status": "FAILED"
+   "retention.runs.fiji.0.run_json.status": "FAILED",
+   "record_when_told.run_json": true,
+   "record_when_told.done": true
   }
  }
 }
