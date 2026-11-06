@@ -18,7 +18,7 @@ import javax.swing.JSpinner
 import javax.swing.SwingUtilities
 
 def cfg = new JsonSlurper().parseText(new File(System.getenv("LC_FIJI_CASE")).text)
-def report = [dialogs: [:], combo_items: [:]]
+def report = [dialogs: [:], combo_items: [:], combo_selected: [:], tool_forms: [], runs: []]
 def conformance = System.getenv("LC_CONFORMANCE") ? new JsonSlurper().parseText(new File(System.getenv("LC_CONFORMANCE")).getText("UTF-8")) : null   // labconstrictor_tools/conformance.json (run_cases.py sets it)
 def shots = new File(cfg.shots as String)
 shots.mkdirs()
@@ -95,11 +95,28 @@ def runSteps = { Window dialog ->
     screenshot(dialog, "dialog_after_steps")
 }
 
+// What the tool's form shows when it opens, top to bottom: the text of each text field (numbered as in dialog_steps), the entry each dropdown is on, each check box (report.tool_forms, one per showing:
+// with "rounds" the form comes back after each run, issue #58)
+def formFields = { Window dialog ->
+    def top = { java.awt.Component c -> c.getLocationOnScreen().y }
+    [texts   : components(dialog, javax.swing.JTextField).sort(top).collect { it.getText() },
+     selected: components(dialog, JComboBox).sort(top).collect { it.getSelectedItem()?.toString() },
+     checks  : components(dialog, javax.swing.JCheckBox).sort(top).collect { it.isSelected() }]
+}
+
 def answerDialog = { Window dialog, String title ->
     Thread.sleep(700)
-    screenshot(dialog, "dialog_" + safe(title))
+    screenshot(dialog, "dialog_" + safe(title) + (title == cfg.tool && report.tool_forms ? "_" + report.tool_forms.size() : ""))
     report.dialogs[title] = components(dialog, JLabel).findAll { it.text }.collect { it.text }
     report.combo_items[title] = components(dialog, JComboBox).sort { it.getLocationOnScreen().y }.collect { box -> (0..<box.getItemCount()).collect { box.getItemAt(it).toString() } }
+    report.combo_selected[title] = components(dialog, JComboBox).sort { it.getLocationOnScreen().y }.collect { it.getSelectedItem()?.toString() }
+    if (title == cfg.tool && report.tool_forms) {   // the form came back after a run ("rounds"): OK until the runs asked for are done, then Cancel (the person is done)
+        report.tool_forms << formFields(dialog)
+        def button = components(dialog, JButton).find { it.text == (report.runs.size() < (cfg.rounds ?: 1) ? "OK" : "Cancel") }
+        if (button) SwingUtilities.invokeLater { button.doClick() }
+        return
+    }
+    if (title == cfg.tool) report.tool_forms << formFields(dialog)
     if (title == cfg.tool) {      // which open image each image chooser shows before anybody touches it (top to bottom)
         def open = (WindowManager.getImageTitles() as List)
         report.chooser_initial = components(dialog, JComboBox).sort { it.getLocationOnScreen().y }
@@ -197,6 +214,16 @@ def describeWindows = {
 
 def finish = { Map summary ->
     if (cfg.record) summary.recorded_options = ij.plugin.frame.Recorder.getCommandOptions()
+    if (cfg.rounds && !summary.closed && !summary.cancelled) {   // "rounds": a run of the form that comes back (issue #58); the report is written when the form is closed
+        report.runs << summary.subMap(["status", "error", "request", "values_values", "recorded_options", "calibration_states_initial", "calibration_states"])
+        cfg.overrides?.clear()       // a person types into the first form only: the form that comes back starts from what the host keeps, not from the case's values
+        return null
+    }
+    summary.runs = report.runs
+    summary.tool_forms = report.tool_forms
+    summary.combo_selected = report.combo_selected
+    def lastTool = new File(System.getenv("LC_HOME") ?: (System.getProperty("user.home") + "/.labconstrictor"), "state/last_tool.json")
+    summary.last_tool = lastTool.isFile() ? new JsonSlurper().parseText(lastTool.getText("UTF-8")) : null   // the app and tool the choosers start on next time
     summary.dialogs = report.dialogs
     summary.combo_items = report.combo_items
     summary.spinner_values_after_selection = report.spinner_values_after_selection
@@ -224,7 +251,7 @@ def finish = { Map summary ->
 return [
     interactive  : false,
     overrides    : cfg.overrides ?: [:],
-    preferred    : { String kind -> cfg[kind] },
+    preferred    : { String kind -> cfg.choose_remembered ? null : cfg[kind] },   // "choose_remembered": the choosers start where the host puts them (the app and tool picked last)
     setup        : preload,
     beforeDialog : { String title -> startClicker(title) },
     // what the folder of the run holds when the person is told (issue #57: run.json and .lc-done.json were written only after the dialog was closed)

@@ -1,0 +1,40 @@
+{
+ "app": "interactive",
+ "tool": "Answer",
+ "register": [
+  {
+   "name": "interactive",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/interactive_app"
+   ]
+  }
+ ],
+ "rounds": 2,
+ "overrides": {
+  "folder": "${FIXTURES}/options",
+  "set_guess": true,
+  "guess": "Treated"
+ },
+ "script_mode_only": true,
+ "expect": {
+  "at": {
+   "closed": true,
+   "runs.0.status": "COMPLETE",
+   "runs.0.values_values.guess": "Treated",
+   "runs.1.status": "COMPLETE",
+   "runs.1.values_values.guess": "",
+   "tool_forms.1.selected": [
+    ""
+   ],
+   "combo_items.Answer": [
+    [
+     "",
+     "Control",
+     "Treated"
+    ]
+   ]
+  }
+ }
+}
