@@ -212,13 +212,22 @@ def describeWindows = {
     }
 }
 
+def writeReport
 def finish = { Map summary ->
     if (cfg.record) summary.recorded_options = ij.plugin.frame.Recorder.getCommandOptions()
     if (cfg.rounds && !summary.closed && !summary.cancelled) {   // "rounds": a run of the form that comes back (issue #58); the report is written when the form is closed
         report.runs << summary.subMap(["status", "error", "request", "values_values", "recorded_options", "calibration_states_initial", "calibration_states"])
         cfg.overrides?.clear()       // a person types into the first form only: the form that comes back starts from what the host keeps, not from the case's values
+        int seen = report.runs.size()
+        Thread.start {               // nothing more for 60 s (no form came back: a macro call runs once): the report is written with the runs so far
+            Thread.sleep(60000)
+            if (report.runs.size() == seen) writeReport(summary)
+        }
         return null
     }
+    writeReport(summary)
+}
+writeReport = { Map summary ->
     summary.runs = report.runs
     summary.tool_forms = report.tool_forms
     summary.combo_selected = report.combo_selected

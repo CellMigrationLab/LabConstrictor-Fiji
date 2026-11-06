@@ -35,5 +35,6 @@
     "tool": "unicode_echo"
    }
   }
- }
+ },
+ "script_mode_only": true
 }

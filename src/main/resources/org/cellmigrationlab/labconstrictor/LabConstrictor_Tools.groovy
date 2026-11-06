@@ -2656,8 +2656,9 @@ def runRequest(Map app, Map tool, def module, Map summary) {
     hooks.finish(summary)
 }
 
-/** One run of the plugin: find the apps, take the request from the macro options or the dialogs, then run it. From the dialogs, the tool's form then comes back
- *  for the next run until the person presses Cancel (runAgain); a macro call runs once. */
+/** One run of the plugin: find the apps, take the request from the macro options or the dialogs, then run it. From the menu, the tool's form then comes back
+ *  for the next run until the person presses Cancel (runAgain). A call from a macro runs once, with or without options: SciJava shows no dialog to a macro
+ *  (it takes the starting values), so a form that came back would run again and again with nobody to press Cancel. */
 def labConstrictorRun() {
     hooks.setup()
     def started = System.nanoTime()
@@ -2671,7 +2672,7 @@ def labConstrictorRun() {
     def request = macro ? requestFromMacro(found, macro, summary) : requestFromDialog(found, summary)
     if (request.aborted) return request.result
     def result = runRequest(request.app, request.tool, request.module, summary)
-    return macro ? result : runAgain(request, summary, result)
+    return (macro || IJ.isMacro()) ? result : runAgain(request, summary, result)
 }
 
 /** Entry point: anything unexpected is logged with its stack trace and shown with the log's location. */
