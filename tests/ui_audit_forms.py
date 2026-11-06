@@ -20,8 +20,8 @@ CONTROL_TABLE = Path(__file__).resolve().parent / "ui_audit_controls.json"
 
 
 def norm(text: Any) -> str:
-    """A label as tests/ui_audit_tree.groovy normalises it: no markup, one space, lower case, no trailing colon."""
-    return re.sub(r":$", "", " ".join(re.sub(r"<[^>]*>", " ", str(text or "")).split()).lower()).strip()
+    """A label as tests/ui_audit_tree.groovy normalises it: no markup, one space, lower case, no trailing colon, no help marker (ⓘ, Tools #147)."""
+    return re.sub(r"\s*\u24d8$", "", re.sub(r":$", "", " ".join(re.sub(r"<[^>]*>", " ", str(text or "")).split()).lower()).strip())
 
 
 def control_table() -> dict[str, Any]:

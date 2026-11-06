@@ -59,7 +59,8 @@ collect = { Component c, List found ->
     if (!isInteractive(c) && c instanceof Container) c.components.each { collect(it, found) }       // the insides of a spinner or a combo box are not controls of the form
 }
 def hasInteractive = { Component c -> def all = []; collect(c, all); all.any { isInteractive(it) } }
-def normalise = { String text -> (text ?: "").replaceAll(/<[^>]*>/, " ").replaceAll(/\s+/, " ").trim().toLowerCase().replaceAll(/:$/, "").trim() }
+// the ⓘ after the label of an input with a description (Tools #147) is not part of the name the tables and the cases use
+def normalise = { String text -> (text ?: "").replaceAll(/<[^>]*>/, " ").replaceAll(/\s+/, " ").trim().toLowerCase().replaceAll(/:$/, "").trim().replaceAll(/\s*\u24D8$/, "") }
 
 // The label of the row a component sits in: the nearest JLabel before it (or before the widget panel that holds it) with nothing interactive in between.
 def rowLabel = { Component c ->
