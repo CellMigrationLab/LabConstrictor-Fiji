@@ -1,0 +1,26 @@
+{
+ "app": "synthetic",
+ "tool": "Scalar echo",
+ "rounds": 2,
+ "overrides": {
+  "a": 7.0
+ },
+ "expect": {
+  "at": {
+   "closed": true,
+   "runs.0.status": "COMPLETE",
+   "runs.0.request.a": 7.0,
+   "runs.0.values_values.sum": 9.0,
+   "runs.1.status": "COMPLETE",
+   "runs.1.request.a": 7.0,
+   "runs.1.request.b": 2.0,
+   "runs.1.values_values.sum": 9.0,
+   "runs.2": "$absent",
+   "last_tool": {
+    "app": "synthetic",
+    "tool": "scalar_echo"
+   }
+  }
+ },
+ "script_mode_only": true
+}

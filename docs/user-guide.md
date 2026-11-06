@@ -32,6 +32,14 @@ Testing the plugin and reporting back: the [human test protocol](https://github.
 
 Choose **Plugins > LabConstrictor > LabConstrictor Tools...** (without the dots if you installed the script). Pick an app and a tool, fill in the dialog, and press OK.
 
+When the run ends, the same tool's dialog opens again for the next run, with the values you used. Change what you need (the next guess, another parameter) and press OK again. Press **Cancel** when you are done.
+- An image's "(or file)" field starts empty again, so the next run uses the open image unless you choose a file again.
+- A field the tool marks "clear after run" (a guess, for example) goes back to its default after a run that worked.
+- Lists that come from another tool are asked again, so they are up to date.
+- While the dialog is open you cannot use other Fiji windows. To zoom or open another image, press Cancel, then start the tool from the menu again.
+
+The next time you open the menu, the app and tool choosers start on the app and tool you picked last.
+
 A first run needs an installed LabConstrictor app that declares tools. If none is registered, Fiji shows the message "No LabConstrictor apps are registered" and stops.
 
 - Each image input has a chooser for an open image and an "(or file)" field. A file wins.

@@ -1,0 +1,17 @@
+{
+ "unit_checks": [
+  "again_the_next_form_starts_from_the_values_of_the_run_before",
+  "again_clear_after_run_puts_the_field_back_after_a_run_that_succeeded",
+  "again_a_pixel_size_typed_by_the_person_is_kept_one_that_followed_the_image_follows_it_again",
+  "again_the_choosers_start_on_the_app_and_tool_picked_last"
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 20
+  }
+ }
+}

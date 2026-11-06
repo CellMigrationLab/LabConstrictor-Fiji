@@ -369,7 +369,7 @@ class LCModule extends DefaultMutableModule {
 hooks = [
     interactive  : true,          // false: never block on modal error dialogs
     overrides    : [:],           // parameter name -> value used as dialog default
-    preferred    : { String kind -> null },   // "app" / "tool" -> the entry a chooser starts on (null: the first)
+    preferred    : { String kind -> null },   // "app" / "tool" -> the entry a chooser starts on (null: the one picked last, else the first)
     setup        : { },                       // called once when a run starts
     beforeDialog : { String title -> },       // called just before each dialog is shown
     beforeMessage: { Map summary -> },        // called just before the message that ends a run (error, "nothing found"), after its run record is complete
@@ -798,12 +798,13 @@ Map pixelSizeLinks(Map tool) {
     return links
 }
 
-/** The window each image parameter starts on: the i-th image parameter defaults to the i-th open image (the last one repeats). */
-Map defaultImageTitles(Map tool, List<String> openImages) {
+/** The window each image parameter starts on: the window it had in the run before, when the form comes back after a run and that window is still open; else the
+ *  harness's; else the i-th image parameter defaults to the i-th open image (the last one repeats). */
+Map defaultImageTitles(Map tool, List<String> openImages, Map carried = [:]) {
     def titles = [:]
     tool.inputs.findAll { it.type in ["image", "labels"] }.eachWithIndex { p, i ->
-        def given = hooks.overrides[p.name]
-        titles[p.name] = given ? given as String : (openImages ? openImages[Math.min(i, openImages.size() - 1)] : null)
+        def given = hooks.overrides[p.name], before = carried[p.name]
+        titles[p.name] = before && before in openImages ? before as String : given ? given as String : (openImages ? openImages[Math.min(i, openImages.size() - 1)] : null)
     }
     return titles
 }
@@ -811,13 +812,15 @@ Map defaultImageTitles(Map tool, List<String> openImages) {
 /** The harness's value for a dialog key, or `fallback` when it did not set one. */
 def overrideOr(String key, def fallback) { return hooks.overrides.containsKey(key) ? hooks.overrides[key] : fallback }
 
-/** Build the tool dialog from the schema. Returns [info, links]. */
+/** Build the tool dialog from the schema. Returns [info, links, states]. `previous` is the run before ([values, states, status]) when the form comes back
+ *  after a run (issue #58): the form then starts from its values (carriedValues, startFromPrevious). */
 // groovylint-disable-next-line FactoryMethodName
-List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
+List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:], Map previous = null) {
     def info = newInfo(tool.label)
     def links = pixelSizeLinks(tool)                         // image param -> [pixel-size params]
+    def carried = previous ? carriedValues(tool, previous) : [:]
     def context = [openImages: openImages, choiceLists: choiceLists, linkedImages: links.keySet().toList(), linkedFields: links.values().flatten().toList(),
-                   defaultTitle: defaultImageTitles(tool, openImages), states: [:], tool: tool]
+                   defaultTitle: defaultImageTitles(tool, openImages, carried), states: [:], tool: tool, carried: carried]
     if (openImages && tool.inputs.any { it.type in ["image", "labels"] }) {
         // also keeps SciJava from replacing a one-image dialog by a bare file chooser (the open image is auto-resolved)
         addItem(info, "image_source_note", String, [label: "Image source", message: true, required: false,
@@ -830,7 +833,42 @@ List buildToolDialog(Map tool, List<String> openImages, Map choiceLists = [:]) {
         if (row.heading) addItem(info, "heading_" + (headings++), String, [label: row.heading, message: true, required: false, default: "— " + row.heading + " —"])
         else addParameterItems(info, row.parameter, context)
     }
+    if (previous) startFromPrevious(info, context.states, carried, previous.states ?: [:])
     return [info, links, context.states]
+}
+
+/** The dialog keys of one parameter: its field and the boxes that go with it. */
+List<String> fieldNames(Map p) { return [p.name, "set_" + p.name, "use_" + p.name, "selection_" + p.name, p.name + "_file", p.name + "_channel"] }
+
+/** The values of the run before that the form which comes back after a run starts from (issue #58): all of them except
+ *  - an image's "(or file)" field: it starts empty, so that the image follows the open windows again (a file left there would silently beat the open image);
+ *  - after a run that succeeded, the fields of a parameter declared `clear_after_run`: back to their default (PROTOCOL.md, for hosts that keep values between runs). */
+Map carriedValues(Map tool, Map previous) {
+    def dropped = [] as Set
+    tool.inputs.each { p ->
+        if (p.type in ["image", "labels"]) dropped << (p.name + "_file")
+        if (p.clear_after_run && previous.status == "COMPLETE") dropped.addAll(fieldNames(p))
+    }
+    return (previous.values ?: [:]).findAll { name, value -> !(name in dropped) }
+}
+
+/** Start each field of the form that comes back after a run from the value it was given (`carried`), where that value still fits the field:
+ *  - a dropdown whose list no longer holds it (an image window that was closed, a ChoicesFrom list asked again) keeps its own start;
+ *  - a pixel size linked to its image keeps a value the person typed (as a typed value always is); one that followed the image follows it again;
+ *  - notes and headings are not values. */
+void startFromPrevious(MutableModuleInfo info, Map states, Map carried, Map previousStates) {
+    info.inputs().each { item ->
+        String name = item.getName()
+        if (item.getVisibility() == org.scijava.ItemVisibility.MESSAGE || !carried.containsKey(name)) return
+        def value = carried[name]
+        if (states.containsKey(name)) {
+            if (previousStates[name]?.state == "user") { item.setDefaultValue(value); states[name] = new LinkedHashMap(previousStates[name] as Map) }
+            return
+        }
+        if (value != null && !item.getType().isInstance(value)) return      // not the field it was (the form is built again from what is open now)
+        if (item.getChoices() && !(value in item.getChoices())) return
+        item.setDefaultValue(value)
+    }
 }
 
 /** The dialog items of one parameter: an optional "Set" box for nullable ones, then the field(s) its type needs. */
@@ -984,7 +1022,9 @@ Map initialSource(Map p, Map context) {
     def fileOverride = hooks.overrides[imageName + "_file"]
     if (fileOverride) return [kind: "file", file: new File(fileOverride as String)]
     def parameter = context.tool.inputs.find { it.name == imageName }
-    if (parameter != null && !parameter.required && !hooks.overrides["use_" + imageName]) return null
+    def carried = context.carried ?: [:]                    // the form that comes back after a run: its "use" box starts as it was
+    def used = carried.containsKey("use_" + imageName) ? carried["use_" + imageName] : hooks.overrides["use_" + imageName]
+    if (parameter != null && !parameter.required && !used) return null
     def image = context.openImages && context.defaultTitle[imageName] ? WindowManager.getImage(context.defaultTitle[imageName] as String) : null
     return image == null ? null : [kind: "image", image: image]
 }
@@ -1150,27 +1190,114 @@ Map cancelled(Map summary) {
     return [aborted: true, result: hooks.finish(summary + [cancelled: true, status_line: "LabConstrictor: cancelled"])]
 }
 
-/** Interactive run: choose the app and tool, show the tool's dialog, record the run. Returns [app, tool, module], or [aborted: true, result: ...] when cancelled. */
+/** The way out of the form that came back after a run (issue #58): the person is done with the tool. Nothing is said: the status bar keeps what the last run said. */
+Map closed(Map summary, Map tool) {
+    lcLog("INFO", "the form of '" + tool.id + "' was closed after its runs: nothing more is run")
+    return [aborted: true, result: hooks.finish(summary + [closed: true])]
+}
+
+// ---- the app and tool picked last: the choosers start on them next time (issue #58)
+/** Where the app and tool picked last are kept (<home>/state/last_tool.json). */
+File lastToolFile() { return new File(new File(lcHome(), "state"), "last_tool.json") }
+
+/** The app and tool picked last ([app: name, tool: id]), or an empty map when there are none or the file cannot be read (logged). */
+Map readLastTool() {
+    try {
+        def file = lastToolFile()
+        def data = file.isFile() ? new JsonSlurper().parseText(file.getText("UTF-8")) : [:]
+        return data instanceof Map ? data : [:]
+    // groovylint-disable-next-line CatchException
+    } catch (Exception problem) {
+        // intended fallback: the choosers start on their first entry; broad because the file is whatever was left on disk
+        lcLog("WARNING", "could not read the app and tool picked last (the choosers start on the first entry): " + problem, problem)
+        return [:]
+    }
+}
+
+/** Keep the app and tool just picked, so that the choosers start on them next time. Never breaks a run. */
+void rememberLastTool(String appName, Map tool) {
+    try {
+        def file = lastToolFile()
+        file.parentFile.mkdirs()
+        file.setText(groovy.json.JsonOutput.toJson([app: appName, tool: tool.id]), "UTF-8")
+    // groovylint-disable-next-line CatchException
+    } catch (Exception problem) { lcLog("WARNING", "could not keep the app and tool picked (the choosers will not start on them next time): " + problem, problem) }
+}
+
+/** The chooser entry of the tool `id` (`choices` from toolChoices), or null when the app has no such tool (any more). */
+String toolChoiceOf(List choices, def id) { return id == null ? null : choices.find { it[1].id == id }?.getAt(0) as String }
+
+/** Interactive run: choose the app and tool (the choosers start on the ones picked last), show the tool's dialog, record the run.
+ *  Returns [app, tool, module], or [aborted: true, result: ...] when cancelled. */
 Map requestFromDialog(Map found, Map summary) {
-    def appName = pickOne("LabConstrictor", "Application", found.apps.keySet().toList().sort(), hooks.preferred("app"))
+    def last = readLastTool()
+    def appName = pickOne("LabConstrictor", "Application", found.apps.keySet().toList().sort(), hooks.preferred("app") ?: last.app as String)
     if (appName == null) return cancelled(summary)
     def app = found.apps[appName]
     def choices = toolChoices(app)
-    def toolName = pickOne("LabConstrictor: " + app.display_name, "Tool", choices.collect { it[0] as String }, hooks.preferred("tool"))
+    def lastTool = last.app == appName ? toolChoiceOf(choices, last.tool) : null
+    def toolName = pickOne("LabConstrictor: " + app.display_name, "Tool", choices.collect { it[0] as String }, hooks.preferred("tool") ?: lastTool)
     if (toolName == null) return cancelled(summary)
     def tool = choices.find { it[0] == toolName }[1] as Map
+    rememberLastTool(appName, tool)
+    return askTool(app, tool, summary)
+}
 
+/** Show the form of `tool` and record the run. `previous` is the run before ([values, states, status]) when the form comes back after a run (issue #58): it then
+ *  starts from that run's values, and its Cancel ends the round of runs (`closed`). Returns [app, tool, module], or [aborted: true, result: ...]. */
+Map askTool(Map app, Map tool, Map summary, Map previous = null) {
     summary.unit_catalog = useUnitCatalog(app)
     def openImages = WindowManager.getImageTitles() as List<String>
     def dialogStarted = System.nanoTime()
-    def (info, links, states) = buildToolDialog(tool, openImages, choiceListsFor(app, tool))
+    def (info, links, states) = buildToolDialog(tool, openImages, choiceListsFor(app, tool), previous)
     summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / NANOS_PER_SECOND
     describeDialog(summary, info)
     summary.calibration_states_initial = states
     def module = harvest(info, tool.label, links, tool, states)
+    if (previous != null && (module == null || module.canceled)) return closed(summary, tool)   // also a form SciJava closed by itself: never a loop of runs nobody asked for
     if (module == null) return cancelled(summary)
+    if (previous != null) newMacroLine()
     recordRun(app, tool, module)
     return [app: app, tool: tool, module: module]
+}
+
+/** The run that comes next is its own line of the Macro Recorder: the line of the run before is written first. Without a command being recorded the options
+ *  of the run before are dropped, so that two runs never mix in one line. */
+void newMacroLine() {
+    try {
+        if (!Recorder.record) return
+        def command = Recorder.getCommand()
+        if (command == null) { Recorder.resetCommandOptions(); return }
+        Recorder.saveCommand()
+        Recorder.setCommand(command)
+    // groovylint-disable-next-line CatchException
+    } catch (Exception problem) {            // broad on purpose: recording must never break a run, but the failure is not hidden
+        lcLog("WARNING", "could not start a new macro line for the next run: " + problem, problem)
+        IJ.log("LabConstrictor: the next run could not be recorded on its own macro line (" + problem + ")")
+    }
+}
+
+/** The summary of one run, filled as it goes (the harness reads it; it is the script's result). */
+Map newSummary() { return [timings: [:]] }
+
+/** After a run started from the menu, the same tool's form comes back with the values of that run until the person presses Cancel (issue #58): a tool used again and
+ *  again (a game round, another parameter, the next image) needs no menu and no choosers each time. Every run has its own summary, record and macro line. */
+def runAgain(Map request, Map summary, def result) {
+    def last = request, lastSummary = summary, lastResult = result
+    boolean going = true
+    while (going) {
+        def next = newSummary()
+        def again = askTool(last.app, last.tool, next, [values: new LinkedHashMap(last.module.getInputs()), states: last.module.states ?: [:], status: lastSummary.status])
+        if (again.aborted) {
+            going = false
+            lastResult = again.result
+        } else {
+            lastResult = runRequest(again.app, again.tool, again.module, next)
+            last = again
+            lastSummary = next
+        }
+    }
+    return lastResult
 }
 
 // ---- the request: harvested values -> files and values for the worker
@@ -2529,11 +2656,13 @@ def runRequest(Map app, Map tool, def module, Map summary) {
     hooks.finish(summary)
 }
 
-/** One run of the plugin: find the apps, take the request from the macro options or the dialogs, then run it. */
+/** One run of the plugin: find the apps, take the request from the macro options or the dialogs, then run it. From the menu, the tool's form then comes back
+ *  for the next run until the person presses Cancel (runAgain). A call from a macro runs once, with or without options: SciJava shows no dialog to a macro
+ *  (it takes the starting values), so a form that came back would run again and again with nobody to press Cancel. */
 def labConstrictorRun() {
     hooks.setup()
     def started = System.nanoTime()
-    def summary = [timings: [:]]
+    def summary = newSummary()
     def found = discoverApps()
     summary.timings.discovery_s = (System.nanoTime() - started) / NANOS_PER_SECOND
     if (!found.apps) return reportNoApps(found, summary)
@@ -2542,7 +2671,8 @@ def labConstrictorRun() {
     if (macro && macro =~ /(^|\s)copy_last(=|\s|$)/) return copyLastRun(macro, summary)   // menu entry "Copy last run as command": no dialog, nothing is run
     def request = macro ? requestFromMacro(found, macro, summary) : requestFromDialog(found, summary)
     if (request.aborted) return request.result
-    return runRequest(request.app, request.tool, request.module, summary)
+    def result = runRequest(request.app, request.tool, request.module, summary)
+    return (macro || IJ.isMacro()) ? result : runAgain(request, summary, result)
 }
 
 /** Entry point: anything unexpected is logged with its stack trace and shown with the log's location. */

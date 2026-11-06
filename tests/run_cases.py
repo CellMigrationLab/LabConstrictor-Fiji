@@ -8,8 +8,8 @@ in the Python running this script (it registers the example app in a private reg
 yours: set LC_HOME and $LC_REAL_FIXTURES to a folder with nucleisky/, celltracks/, vlab4mic/ data.
 LC_FIJI_MODE=jar builds the jar (mvn) and tests the menu command instead of the loose Groovy script.
 LC_FIJI_MACRO_PROPERTY=1 (script mode) also runs the cases that carry a macro call, through the property the menu command sets.
-Cases with "unit_checks" call functions of the script directly (tests/unit_checks.groovy); "script_macro", "cwd", "env", "log_prefill" and
-"runs_prefill" set up the situation a case needs (a macro call, Fiji's folder and environment, a log or a runs folder that already exists).
+Cases with "unit_checks" call functions of the script directly (tests/unit_checks.groovy); "script_macro", "cwd", "env", "log_prefill",
+"runs_prefill" and "last_tool" set up the situation a case needs (a macro call, Fiji's folder and environment, a log or a runs folder that already exists).
 """
 
 import json
@@ -303,8 +303,10 @@ def run_case(path):
     case = expand(json.loads(path.read_text()))
     case["expect"] = resolve_conformance(case.get("expect", {}))
     name = path.stem
-    if case.get("macro") is not None and os.environ.get("LC_FIJI_MODE", "script") != "jar" and os.environ.get("LC_FIJI_MACRO_PROPERTY") == "1":
-        case["script_macro"] = case.pop("macro")  # LC_FIJI_MACRO_PROPERTY=1: macro calls through the property the menu command sets, in script mode (no mvn build per case)
+    if case.get("macro") and os.environ.get("LC_FIJI_MODE", "script") != "jar" and os.environ.get("LC_FIJI_MACRO_PROPERTY") == "1":
+        # LC_FIJI_MACRO_PROPERTY=1: macro calls through the property the menu command sets, in script mode (no mvn build per case).
+        # A call without options ("macro": "") stays with the jar: the command never sets the property for it, so here it would be a menu click.
+        case["script_macro"] = case.pop("macro")
     probe = {}
     process_support.prepare(case, probe)  # a case that watches its worker process: the file the tool writes its pid to
     if case.get("make_files") == "calibration":
@@ -356,6 +358,10 @@ def run_case(path):
         (runs / "my_own_notes" / "keep.txt").write_text("keep")
     if case.get("retention_prefill"):  # owned, unfinished, older-version and a person's own folders under results/ and runs/ (tests/retention_support.py)
         retention_support.prefill(case["retention_prefill"], Path(env["LC_HOME"]))
+    if case.get("last_tool"):  # the app and tool picked last, as the script keeps them for its choosers (issue #58)
+        state = Path(env["LC_HOME"]) / "state"
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "last_tool.json").write_text(json.dumps(case["last_tool"]))
     if case.get("last_command"):  # a previous run's command text, as the script leaves it for the "Copy last run as command" entry
         state = Path(env["LC_HOME"]) / "state"
         state.mkdir(parents=True, exist_ok=True)

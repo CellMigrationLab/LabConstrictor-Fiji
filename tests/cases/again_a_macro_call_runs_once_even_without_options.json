@@ -1,0 +1,14 @@
+{
+ "app": "synthetic",
+ "tool": "Scalar echo",
+ "macro": "",
+ "rounds": 2,
+ "expect": {
+  "at": {
+   "runs.0.status": "COMPLETE",
+   "runs.1": "$absent",
+   "closed": "$absent",
+   "dialogs": {}
+  }
+ }
+}

@@ -1,0 +1,31 @@
+{
+ "app": "synthetic",
+ "tool": "Image stats",
+ "rounds": 2,
+ "preload": [
+  {
+   "path": "${FIXTURES}/blobs.tif",
+   "title": "open.tif"
+  }
+ ],
+ "overrides": {
+  "image": "open.tif",
+  "image_file": "${FIXTURES}/sample.tif"
+ },
+ "script_mode_only": true,
+ "expect": {
+  "at": {
+   "closed": true,
+   "runs.0.status": "COMPLETE",
+   "runs.0.values_values.mean": 597.271728515625,
+   "runs.1.status": "COMPLETE",
+   "runs.1.values_values.mean": 26.1375,
+   "tool_forms.1.selected": [
+    "open.tif"
+   ]
+  },
+  "match": {
+   "runs.0.request.image": "/fixtures/sample.tif"
+  }
+ }
+}

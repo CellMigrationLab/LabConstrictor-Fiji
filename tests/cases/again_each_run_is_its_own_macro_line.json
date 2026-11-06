@@ -1,0 +1,26 @@
+{
+ "app": "synthetic",
+ "tool": "Scalar echo",
+ "rounds": 2,
+ "record": true,
+ "overrides": {
+  "a": 7.0
+ },
+ "expect": {
+  "at": {
+   "runs.0.status": "COMPLETE",
+   "runs.1.status": "COMPLETE"
+  },
+  "match": {
+   "runs.0.recorded_options": "tool=[Scalar echo]",
+   "runs.1.recorded_options": "tool=[Scalar echo]"
+  },
+  "same_value": [
+   [
+    "runs.0.recorded_options",
+    "runs.1.recorded_options"
+   ]
+  ]
+ },
+ "script_mode_only": true
+}

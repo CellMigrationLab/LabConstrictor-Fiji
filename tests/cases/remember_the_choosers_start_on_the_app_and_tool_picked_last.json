@@ -1,0 +1,40 @@
+{
+ "app": "beta",
+ "tool": "Unicode echo",
+ "choose_remembered": true,
+ "register": [
+  {
+   "name": "alpha",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  },
+  {
+   "name": "beta",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "last_tool": {
+  "app": "beta",
+  "tool": "unicode_echo"
+ },
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "combo_selected.LabConstrictor": [
+    "beta"
+   ],
+   "combo_selected.LabConstrictor: beta": [
+    "Unicode echo"
+   ],
+   "values_values.length": 12,
+   "last_tool": {
+    "app": "beta",
+    "tool": "unicode_echo"
+   }
+  }
+ },
+ "script_mode_only": true
+}
