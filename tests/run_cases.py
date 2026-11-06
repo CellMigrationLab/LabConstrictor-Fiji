@@ -303,8 +303,10 @@ def run_case(path):
     case = expand(json.loads(path.read_text()))
     case["expect"] = resolve_conformance(case.get("expect", {}))
     name = path.stem
-    if case.get("macro") is not None and os.environ.get("LC_FIJI_MODE", "script") != "jar" and os.environ.get("LC_FIJI_MACRO_PROPERTY") == "1":
-        case["script_macro"] = case.pop("macro")  # LC_FIJI_MACRO_PROPERTY=1: macro calls through the property the menu command sets, in script mode (no mvn build per case)
+    if case.get("macro") and os.environ.get("LC_FIJI_MODE", "script") != "jar" and os.environ.get("LC_FIJI_MACRO_PROPERTY") == "1":
+        # LC_FIJI_MACRO_PROPERTY=1: macro calls through the property the menu command sets, in script mode (no mvn build per case).
+        # A call without options ("macro": "") stays with the jar: the command never sets the property for it, so here it would be a menu click.
+        case["script_macro"] = case.pop("macro")
     probe = {}
     process_support.prepare(case, probe)  # a case that watches its worker process: the file the tool writes its pid to
     if case.get("make_files") == "calibration":
