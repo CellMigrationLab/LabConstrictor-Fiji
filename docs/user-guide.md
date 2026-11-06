@@ -5,7 +5,7 @@ One Fiji (ImageJ) command runs the tools of every installed LabConstrictor app, 
 > [!WARNING]
 > **Under heavy construction.** This plugin is untested by people on real machines and unlikely to be stable. Expect bugs, missing features and changes without notice. Do not rely on it for work you cannot redo.
 >
-> The plugin is installed from a GitHub release (a jar, or a script with its helper files); there is no Fiji update site yet. The first release had not been created when this was written (14 Oct 2026): until it exists, the files below cannot be downloaded.
+> The plugin is installed from a GitHub release (a jar, or a script with its helper files); there is no Fiji update site yet. Releases are pre-releases (alpha): take the newest one on the Releases page.
 
 ## What you need
 
