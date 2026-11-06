@@ -34,6 +34,7 @@ import java.util.concurrent.TimeUnit
 
 // timeouts and polling
 @Field final String CANCELLED_AFTER_KILL = "cancelled (worker stopped)"   // the status after a Cancel the tool ignored (same words as the Napari form)
+@Field final String HELP_MARKER = "\u24D8"   // ⓘ after the label of an input with a description (Tools #147): SciJava shows the description on hover; its dialog allows no click or focus help
 @Field final String ESC_HINT = " (press Esc to cancel)"   // after every status line of a running tool: the dialog is gone, and Esc is the only way to stop it (issue #56)
 @Field final List<String> SCRUBBED_ENV = ["PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX", "QT_PLUGIN_PATH"]   // variables of the host's environment the worker must not inherit (PYTHONPATH is always set)
 @Field final int CANCEL_GRACE_MS = 3000          // how long a tool gets to honour Cancel before its worker is killed
@@ -871,9 +872,14 @@ void startFromPrevious(MutableModuleInfo info, Map states, Map carried, Map prev
     }
 }
 
+/** The label of an input's own row: with an ⓘ after it when the input has a description (one that is not only spaces), which SciJava shows on hover (Tools #147). */
+String helpLabel(String label, Object description) {
+    return description != null && description.toString().trim() ? label + " " + HELP_MARKER : label
+}
+
 /** The dialog items of one parameter: an optional "Set" box for nullable ones, then the field(s) its type needs. */
 void addParameterItems(MutableModuleInfo info, Map p, Map context) {
-    def base = [label: p.label + (p.unit ? " (" + p.unit + ")" : ""), description: p.description, required: p.required]
+    def base = [label: helpLabel(p.label + (p.unit ? " (" + p.unit + ")" : ""), p.description), description: p.description, required: p.required]
     if (p.nullable && !p.pixel_size_of && p.type in ["string", "integer", "float", "choice", "boolean"]) {   // optional with no default: "unset" must stay possible (a linked pixel size is unset when its image has none)
         addItem(info, "set_" + p.name, Boolean, [label: "Set " + p.label.toLowerCase(), required: false, default: overrideOr("set_" + p.name, false)])
     }

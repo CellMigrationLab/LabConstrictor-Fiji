@@ -1,0 +1,15 @@
+{
+ "unit_checks": [
+  "help_marker_after_the_label_of_each_described_input",
+  "help_marker_absent_without_a_description"
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 9
+  }
+ }
+}
