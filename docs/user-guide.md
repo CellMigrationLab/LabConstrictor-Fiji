@@ -38,6 +38,8 @@ When the run ends, the same tool's dialog opens again for the next run, with the
 - Lists that come from another tool are asked again, so they are up to date.
 - While the dialog is open you cannot use other Fiji windows. To zoom or open another image, press Cancel, then start the tool from the menu again.
 
+**< Back** (beside OK and Cancel) takes you one window back: from a tool's dialog to the list of tools, and from the list of tools to the list of apps. If you pick the same tool again, its dialog shows what you had typed. A list with only one entry is skipped, so Back goes past it.
+
 The next time you open the menu, the app and tool choosers start on the app and tool you picked last.
 
 A first run needs an installed LabConstrictor app that declares tools. If none is registered, Fiji shows the message "No LabConstrictor apps are registered" and stops.

@@ -1,0 +1,16 @@
+{
+ "unit_checks": [
+  "back_goes_one_window_back_and_skips_a_chooser_that_is_never_shown",
+  "back_the_button_sits_first_in_the_row_of_ok_and_cancel_and_closes_the_dialog_as_cancel",
+  "back_a_form_picked_again_after_back_starts_from_what_was_typed"
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 15
+  }
+ }
+}

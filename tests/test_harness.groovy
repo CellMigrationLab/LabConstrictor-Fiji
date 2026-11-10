@@ -18,7 +18,7 @@ import javax.swing.JSpinner
 import javax.swing.SwingUtilities
 
 def cfg = new JsonSlurper().parseText(new File(System.getenv("LC_FIJI_CASE")).text)
-def report = [dialogs: [:], combo_items: [:], combo_selected: [:], tool_forms: [], runs: []]
+def report = [dialogs: [:], combo_items: [:], combo_selected: [:], tool_forms: [], runs: [], shown: []]
 def conformance = System.getenv("LC_CONFORMANCE") ? new JsonSlurper().parseText(new File(System.getenv("LC_CONFORMANCE")).getText("UTF-8")) : null   // labconstrictor_tools/conformance.json (run_cases.py sets it)
 def shots = new File(cfg.shots as String)
 shots.mkdirs()
@@ -110,6 +110,18 @@ def answerDialog = { Window dialog, String title ->
     report.dialogs[title] = components(dialog, JLabel).findAll { it.text }.collect { it.text }
     report.combo_items[title] = components(dialog, JComboBox).sort { it.getLocationOnScreen().y }.collect { box -> (0..<box.getItemCount()).collect { box.getItemAt(it).toString() } }
     report.combo_selected[title] = components(dialog, JComboBox).sort { it.getLocationOnScreen().y }.collect { it.getSelectedItem()?.toString() }
+    def back = components(dialog, JButton).find { it.text == "< Back" }
+    report.shown << [title: title, back: back != null]       // every window in the order it was shown, and whether it had a Back button
+    int showing = report.shown.count { it.title == title }
+    if (cfg.back_on?.any { it[0] == title && it[1] == showing }) {   // "back_on": [[title, n]]: Back on the n-th showing of that window
+        if (title == cfg.tool) {
+            report.tool_forms << formFields(dialog)
+            cfg.overrides?.clear()   // a person types into the first form only: after Back, the form shows what the host kept
+        }
+        def press = back ?: components(dialog, JButton).find { it.text == "Cancel" }   // no Back button: Cancel, so that the case ends and its "shown" says why
+        if (press) SwingUtilities.invokeLater { press.doClick() }
+        return
+    }
     if (title == cfg.tool && report.tool_forms) {   // the form came back after a run ("rounds"): OK until the runs asked for are done, then Cancel (the person is done)
         report.tool_forms << formFields(dialog)
         def button = components(dialog, JButton).find { it.text == (report.runs.size() < (cfg.rounds ?: 1) ? "OK" : "Cancel") }
@@ -229,6 +241,7 @@ def finish = { Map summary ->
 }
 writeReport = { Map summary ->
     summary.runs = report.runs
+    summary.shown = report.shown
     summary.tool_forms = report.tool_forms
     summary.combo_selected = report.combo_selected
     def lastTool = new File(System.getenv("LC_HOME") ?: (System.getProperty("user.home") + "/.labconstrictor"), "state/last_tool.json")

@@ -1,0 +1,51 @@
+{
+ "app": "synthetic",
+ "tool": "Scalar echo",
+ "rounds": 2,
+ "overrides": {
+  "a": 7.0
+ },
+ "back_on": [
+  [
+   "Scalar echo",
+   2
+  ]
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "at": {
+   "closed": true,
+   "runs.0.status": "COMPLETE",
+   "runs.0.request.a": 7.0,
+   "runs.1.status": "COMPLETE",
+   "runs.1.request.a": 7.0,
+   "runs.2": "$absent",
+   "shown": [
+    {
+     "title": "LabConstrictor: synthetic",
+     "back": false
+    },
+    {
+     "title": "Scalar echo",
+     "back": true
+    },
+    {
+     "title": "Scalar echo",
+     "back": true
+    },
+    {
+     "title": "LabConstrictor: synthetic",
+     "back": false
+    },
+    {
+     "title": "Scalar echo",
+     "back": true
+    },
+    {
+     "title": "Scalar echo",
+     "back": true
+    }
+   ]
+  }
+ }
+}

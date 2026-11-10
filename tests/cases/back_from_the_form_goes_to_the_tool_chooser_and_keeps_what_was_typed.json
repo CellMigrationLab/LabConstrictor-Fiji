@@ -1,0 +1,39 @@
+{
+ "app": "synthetic",
+ "tool": "Scalar echo",
+ "overrides": {
+  "a": 7.0
+ },
+ "back_on": [
+  [
+   "Scalar echo",
+   1
+  ]
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "request.a": 7.0,
+   "values_values.sum": 9.0,
+   "shown": [
+    {
+     "title": "LabConstrictor: synthetic",
+     "back": false
+    },
+    {
+     "title": "Scalar echo",
+     "back": true
+    },
+    {
+     "title": "LabConstrictor: synthetic",
+     "back": false
+    },
+    {
+     "title": "Scalar echo",
+     "back": true
+    }
+   ]
+  }
+ }
+}
