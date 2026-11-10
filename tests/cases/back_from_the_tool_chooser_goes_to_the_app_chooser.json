@@ -1,0 +1,53 @@
+{
+ "app": "beta",
+ "tool": "Scalar echo",
+ "register": [
+  {
+   "name": "alpha",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  },
+  {
+   "name": "beta",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "back_on": [
+  [
+   "LabConstrictor: beta",
+   1
+  ]
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "status": "COMPLETE",
+  "at": {
+   "values_values.sum": 3.0,
+   "shown": [
+    {
+     "title": "LabConstrictor",
+     "back": false
+    },
+    {
+     "title": "LabConstrictor: beta",
+     "back": true
+    },
+    {
+     "title": "LabConstrictor",
+     "back": false
+    },
+    {
+     "title": "LabConstrictor: beta",
+     "back": true
+    },
+    {
+     "title": "Scalar echo",
+     "back": true
+    }
+   ]
+  }
+ }
+}

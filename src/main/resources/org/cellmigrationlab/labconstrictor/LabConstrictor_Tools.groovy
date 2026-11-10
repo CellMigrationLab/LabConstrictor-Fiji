@@ -35,7 +35,10 @@ import java.util.concurrent.TimeUnit
 // timeouts and polling
 @Field final String CANCELLED_AFTER_KILL = "cancelled (worker stopped)"   // the status after a Cancel the tool ignored (same words as the Napari form)
 @Field final String HELP_MARKER = "\u24D8"   // ⓘ after the label of an input with a description (Tools #147): SciJava shows the description on hover; its dialog allows no click or focus help
-@Field final String ESC_HINT = " (press Esc to cancel)"   // after every status line of a running tool: the dialog is gone, and Esc is the only way to stop it (issue #56)
+@Field final String BACK_TEXT = "< Back"         // the button beside OK and Cancel that goes one window back: the form -> the tool chooser -> the app chooser
+@Field final String BUTTON_ROW = "OptionPane.buttonArea"   // the name Swing gives the row of OK and Cancel of an option pane (BasicOptionPaneUI and the looks built on it)
+@Field final Object BACK = new Object()          // what a chooser returns after Back (never an entry of it)
+@Field final String ESC_HINT =" (press Esc to cancel)"   // after every status line of a running tool: the dialog is gone, and Esc is the only way to stop it (issue #56)
 @Field final List<String> SCRUBBED_ENV = ["PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX", "QT_PLUGIN_PATH"]   // variables of the host's environment the worker must not inherit (PYTHONPATH is always set)
 @Field final int CANCEL_GRACE_MS = 3000          // how long a tool gets to honour Cancel before its worker is killed
 @Field final int EXIT_WAIT_MS = 10000            // how long a worker gets to exit after its input is closed, then it is killed: the 10 s the worker itself promises (conformance.json limits.worker_close_timeout_s; HOST_PARITY K03)
@@ -284,6 +287,7 @@ class LCModule extends DefaultMutableModule {
     boolean canceled = false                   // SciJava's ModuleRunner returns the module even after Cancel and only calls cancel() on it: this is the one trace of the press
     @Override
     void cancel() { canceled = true }
+    volatile boolean back = false              // Back was pressed (set on the event thread before the dialog closes as a Cancel): the caller goes one window back
 
     static Closure logger = { String level, String message, Throwable problem -> }   // set below to lcLog (a class cannot call the script's methods)
     // SciJava resolves callbacks by method name, so each linked image parameter gets a fixed slot (max 8 per tool), and so does each pixel-size field (`edited`).
@@ -732,19 +736,87 @@ def addItem(MutableModuleInfo info, String name, Class type, Map o) {
     return item
 }
 
-/** Show Fiji's native input dialog for `info`; returns the harvested module, or null if cancelled. */
-def harvest(MutableModuleInfo info, String title, Map links = [:], Map tool = [:], Map states = [:]) {
+/** Show Fiji's native input dialog for `info`; returns the harvested module, or null if cancelled. `o`: the tool's `links`, `tool` and `states` (a tool form), and `back`:
+ *  the dialog has a Back button beside OK and Cancel; after Back the module comes back with `back` set (it is cancelled too: the caller goes one window back). */
+def harvest(MutableModuleInfo info, String title, Map o = [:]) {
     hooks.beforeDialog(title)
     def module = new LCModule(info)
-    module.links = links
-    module.tool = tool
-    module.states.putAll(states)              // what the fields start as: set by the dialog's own events from here on (2.2)
-    def harvested = moduleService.run(module, true).get()
+    module.links = (o.links ?: [:]) as Map
+    module.tool = (o.tool ?: [:]) as Map
+    module.states.putAll((o.states ?: [:]) as Map)     // what the fields start as: set by the dialog's own events from here on (2.2)
+    def tool = module.tool
+    def watch = o.back ? watchForBack(title, module) : null
+    def harvested
+    try {
+        harvested = moduleService.run(module, true).get()
+    } finally {
+        if (watch) java.awt.Toolkit.getDefaultToolkit().removeAWTEventListener(watch.listener as java.awt.event.AWTEventListener)
+    }
+    if (watch && !watch.seen[0] && !IJ.isMacro()) lcLog("INFO", "no dialog '" + title + "' was seen, so it got no Back button (SciJava may have asked another way)")
+    if (module.back) return module
     // Cancel: the module still comes back (ModuleRunner.call), so it is asked, not only null-checked. SciJava also cancels before any dialog when a required image has no open window
     // to take: that is no press, the run goes on and the tool refuses with a named reason (missing_parameter), as it always did. Any other Cancel (an empty required file included) is a press.
     boolean noImageToTake = (tool.inputs ?: []).any { it.required != false && it.type in ["image", "labels"] } && !WindowManager.getImageTitles()
     boolean pressed = harvested.canceled && !noImageToTake
     return pressed ? null : harvested
+}
+
+// ---- Back: one window back (the form -> the tool chooser -> the app chooser)
+/** Which window Back goes to from `step` ("form", "tool" or "app"), with `apps` apps and `tools` tools in the app picked: "tool", "app", or null when there is no window
+ *  before (a chooser with one entry is never shown, so Back skips it). */
+String windowBefore(String step, int apps, int tools) {
+    if (step == "form" && tools > 1) return "tool"
+    return step in ["form", "tool"] && apps > 1 ? "app" : null
+}
+
+/** The first component named `name` in `root` (itself included), or null. */
+java.awt.Component namedIn(java.awt.Component root, String name) {
+    if (root.getName() == name) return root
+    if (!(root instanceof java.awt.Container)) return null
+    return (root as java.awt.Container).getComponents().findResult { namedIn(it, name) }
+}
+
+/** Put a Back button first in the row of OK and Cancel of `pane`: pressing it calls `onBack`, then closes the dialog as Cancel does (SciJava's dialogs have no third button).
+ *  False when the pane has no such row (a look that builds its buttons another way). */
+boolean addBackButton(javax.swing.JOptionPane pane, Closure onBack) {
+    def row = namedIn(pane, BUTTON_ROW) as java.awt.Container
+    if (row == null) return false
+    def button = new javax.swing.JButton(BACK_TEXT)
+    button.setToolTipText("Go back to the window before")
+    button.addActionListener { onBack(); pane.setValue(javax.swing.JOptionPane.CANCEL_OPTION) }
+    row.add(button, 0)
+    return true
+}
+
+/** While the dialog `title` opens: give it a Back button that sets `module.back`. Returns [listener, seen] for harvest to remove the listener and to know the dialog was there.
+ *  The button is added on the event thread as the dialog opens, before anything can be pressed; the dialog widens if the row needs more room. */
+Map watchForBack(String title, LCModule module) {
+    boolean[] seen = [false]
+    def listener = { java.awt.AWTEvent event ->
+        def window = event.getSource()
+        if (event.getID() != java.awt.event.WindowEvent.WINDOW_OPENED || !(window instanceof javax.swing.JDialog) || window.getTitle() != title || seen[0]) return
+        seen[0] = true
+        def pane = findOptionPane(window)
+        if (pane && addBackButton(pane, { module.back = true })) {
+            window.validate()
+            def row = namedIn(pane, BUTTON_ROW)
+            int missing = row.getPreferredSize().width - row.getWidth()
+            if (missing > 0) window.setSize(window.getWidth() + missing, window.getHeight())
+            window.validate()
+            return
+        }
+        lcLog("WARNING", "the dialog '" + title + "' has no row of OK and Cancel to put Back into (look and feel: " + javax.swing.UIManager.getLookAndFeel()?.getName() + ")")
+        IJ.log("LabConstrictor: this window has no Back button; press Cancel and start again from the menu to go back")
+    } as java.awt.event.AWTEventListener
+    java.awt.Toolkit.getDefaultToolkit().addAWTEventListener(listener, java.awt.AWTEvent.WINDOW_EVENT_MASK)
+    return [listener: listener, seen: seen]
+}
+
+/** The option pane inside `root` (SciJava's dialog is one), or null. */
+javax.swing.JOptionPane findOptionPane(java.awt.Component root) {
+    if (root instanceof javax.swing.JOptionPane) return root as javax.swing.JOptionPane
+    if (!(root instanceof java.awt.Container)) return null
+    return (root as java.awt.Container).getComponents().findResult { findOptionPane(it) } as javax.swing.JOptionPane
 }
 
 /** [name shown in the chooser, tool] for each tool of the app: the label, or `label (id)` when two tools share a label (never pick the wrong one). */
@@ -753,12 +825,14 @@ List toolChoices(Map app) {
     return app.schema.tools.collect { t -> [labels.count(t.label) == 1 ? t.label : t.label + " (" + t.id + ")", t] }
 }
 
-/** Ask the user to pick one of `choices`; a single choice needs no dialog (and avoids SciJava's single-input prompt). */
-String pickOne(String title, String label, List<String> choices, String preferred) {
+/** Ask the user to pick one of `choices`; a single choice needs no dialog (and avoids SciJava's single-input prompt). Returns the entry, null after Cancel, or
+ *  BACK after Back (offered with `offerBack`). */
+def pickOne(String title, String label, List<String> choices, String preferred, boolean offerBack = false) {
     if (choices.size() == 1) return choices[0]
     def info = newInfo(title)
     addItem(info, "choice", String, [label: label, choices: choices, default: choices.find { it.equalsIgnoreCase(preferred ?: "") } ?: choices[0]])
-    return harvest(info, title)?.getInput("choice")
+    def module = harvest(info, title, [back: offerBack])
+    return module?.back ? BACK : module?.getInput("choice")
 }
 
 /** Inputs in the order the dialog shows them: the parameters of a `group` together (where the group first appears), `advanced` ones
@@ -1196,9 +1270,10 @@ Map cancelled(Map summary) {
     return [aborted: true, result: hooks.finish(summary + [cancelled: true, status_line: "LabConstrictor: cancelled"])]
 }
 
-/** The way out of the form that came back after a run (issue #58): the person is done with the tool. Nothing is said: the status bar keeps what the last run said. */
-Map closed(Map summary, Map tool) {
-    lcLog("INFO", "the form of '" + tool.id + "' was closed after its runs: nothing more is run")
+/** The way out of a window shown after a run (issue #58: the form that came back, or a chooser reached with Back): the person is done. Nothing is said: the status bar keeps
+ *  what the last run said. `what` names the window for the log. */
+Map closed(Map summary, String what) {
+    lcLog("INFO", what + " was closed after the runs: nothing more is run")
     return [aborted: true, result: hooks.finish(summary + [closed: true])]
 }
 
@@ -1233,36 +1308,79 @@ void rememberLastTool(String appName, Map tool) {
 /** The chooser entry of the tool `id` (`choices` from toolChoices), or null when the app has no such tool (any more). */
 String toolChoiceOf(List choices, def id) { return id == null ? null : choices.find { it[1].id == id }?.getAt(0) as String }
 
-/** Interactive run: choose the app and tool (the choosers start on the ones picked last), show the tool's dialog, record the run.
+/** The name `app` is registered under in `found`. */
+String appNameOf(Map found, Map app) { return found.apps.find { it.value.is(app) }?.key as String }
+
+/** Interactive run: the app chooser, the tool chooser and the tool's form, one after the other; the choosers start on the app and tool picked last (issue #58). Back goes one
+ *  window back (windowBefore). `from` starts at a later window after Back on the form that came back: [step: "tool" | "app", app: name, tool: id, typed, ran: true].
+ *  `typed` keeps, per app and tool, what a form held when Back was pressed: picking that tool again starts its form from it. After runs (`ran`) a Cancel ends them (`closed`).
  *  Returns [app, tool, module], or [aborted: true, result: ...] when cancelled. */
-Map requestFromDialog(Map found, Map summary) {
+Map requestFromDialog(Map found, Map summary, Map from = [:]) {
+    def appNames = found.apps.keySet().toList().sort()
+    def typed = from.typed ?: [:]
     def last = readLastTool()
-    def appName = pickOne("LabConstrictor", "Application", found.apps.keySet().toList().sort(), hooks.preferred("app") ?: last.app as String)
-    if (appName == null) return cancelled(summary)
-    def app = found.apps[appName]
-    def choices = toolChoices(app)
-    def lastTool = last.app == appName ? toolChoiceOf(choices, last.tool) : null
-    def toolName = pickOne("LabConstrictor: " + app.display_name, "Tool", choices.collect { it[0] as String }, hooks.preferred("tool") ?: lastTool)
-    if (toolName == null) return cancelled(summary)
-    def tool = choices.find { it[0] == toolName }[1] as Map
-    rememberLastTool(appName, tool)
-    return askTool(app, tool, summary)
+    String step = from.step ?: "app"
+    String appName = from.app ?: last.app as String
+    def toolId = from.tool ?: (last.app == appName ? last.tool : null)
+    Map request = null
+    while (request == null) {
+        if (step == "app") {
+            def picked = pickOne("LabConstrictor", "Application", appNames, hooks.preferred("app") ?: appName)
+            if (picked == null) return from.ran ? closed(summary, "the app chooser") : cancelled(summary)
+            if (picked != appName) {     // another app: its chooser starts on the tool picked last there (none: the first)
+                last = readLastTool()
+                toolId = last.app == picked ? last.tool : null
+            }
+            appName = picked
+            step = "tool"
+        }
+        def app = found.apps[appName]
+        def choices = toolChoices(app)
+        if (step == "tool") {
+            def picked = pickOne("LabConstrictor: " + app.display_name, "Tool", choices.collect { it[0] as String }, hooks.preferred("tool") ?: toolChoiceOf(choices, toolId),
+                                 windowBefore("tool", appNames.size(), choices.size()) != null)
+            if (picked == null) return from.ran ? closed(summary, "the tool chooser of " + appName) : cancelled(summary)
+            if (picked.is(BACK)) {
+                step = "app"
+            } else {
+                toolId = choices.find { it[0] == picked }[1].id
+                step = "form"
+            }
+        }
+        if (step == "form") {
+            def tool = choices.find { it[1].id == toolId }[1] as Map
+            rememberLastTool(appName, tool)
+            String key = appName + "/" + tool.id
+            def asked = askTool(app, tool, summary, [typed: typed[key], ran: from.ran, back: windowBefore("form", appNames.size(), choices.size()) != null])
+            if (asked.back) {
+                typed[key] = asked.typed
+                step = windowBefore("form", appNames.size(), choices.size())
+            } else {
+                request = asked
+            }
+        }
+    }
+    return request
 }
 
-/** Show the form of `tool` and record the run. `previous` is the run before ([values, states, status]) when the form comes back after a run (issue #58): it then
- *  starts from that run's values, and its Cancel ends the round of runs (`closed`). Returns [app, tool, module], or [aborted: true, result: ...]. */
-Map askTool(Map app, Map tool, Map summary, Map previous = null) {
+/** Show the form of `tool` and record the run. `o.previous` is the run before ([values, states, status]) when the form comes back after a run (issue #58): it then starts
+ *  from that run's values. `o.typed` is what this form held when Back was pressed on it ([values, states]): it then starts from that (nothing ran, so clear_after_run keeps
+ *  its value). After runs (`o.ran`, or a `previous`) Cancel ends them (`closed`). `o.back` offers Back. Returns [app, tool, module], [back: true, typed] after Back, or
+ *  [aborted: true, result: ...]. */
+Map askTool(Map app, Map tool, Map summary, Map o = [:]) {
+    boolean ran = o.ran || o.previous != null
     summary.unit_catalog = useUnitCatalog(app)
     def openImages = WindowManager.getImageTitles() as List<String>
     def dialogStarted = System.nanoTime()
-    def (info, links, states) = buildToolDialog(tool, openImages, choiceListsFor(app, tool), previous)
+    def (info, links, states) = buildToolDialog(tool, openImages, choiceListsFor(app, tool), (o.typed ?: o.previous) as Map)
     summary.timings.dialog_construction_s = (System.nanoTime() - dialogStarted) / NANOS_PER_SECOND
     describeDialog(summary, info)
     summary.calibration_states_initial = states
-    def module = harvest(info, tool.label, links, tool, states)
-    if (previous != null && (module == null || module.canceled)) return closed(summary, tool)   // also a form SciJava closed by itself: never a loop of runs nobody asked for
+    def module = harvest(info, tool.label, [links: links, tool: tool, states: states, back: o.back])
+    if (module?.back) return [back: true, typed: [values: new LinkedHashMap(module.getInputs()), states: module.states ?: [:], status: null]]
+    if (ran && (module == null || module.canceled)) return closed(summary, "the form of '" + tool.id + "'")   // also a form SciJava closed by itself: never a loop of runs nobody asked for
     if (module == null) return cancelled(summary)
-    if (previous != null) newMacroLine()
+    if (ran) newMacroLine()
     recordRun(app, tool, module)
     return [app: app, tool: tool, module: module]
 }
@@ -1287,13 +1405,22 @@ void newMacroLine() {
 Map newSummary() { return [timings: [:]] }
 
 /** After a run started from the menu, the same tool's form comes back with the values of that run until the person presses Cancel (issue #58): a tool used again and
- *  again (a game round, another parameter, the next image) needs no menu and no choosers each time. Every run has its own summary, record and macro line. */
-def runAgain(Map request, Map summary, def result) {
+ *  again (a game round, another parameter, the next image) needs no menu and no choosers each time. Every run has its own summary, record and macro line. Back on that
+ *  form goes to the tool chooser (or the app chooser): the tool picked there runs and its form comes back in turn. */
+def runAgain(Map found, Map request, Map summary, def result) {
     def last = request, lastSummary = summary, lastResult = result
+    def typed = [:]              // app/tool -> what its form held when Back was pressed (requestFromDialog)
     boolean going = true
     while (going) {
         def next = newSummary()
-        def again = askTool(last.app, last.tool, next, [values: new LinkedHashMap(last.module.getInputs()), states: last.module.states ?: [:], status: lastSummary.status])
+        int apps = found.apps.size(), tools = toolChoices(last.app).size()
+        def again = askTool(last.app, last.tool, next, [previous: [values: new LinkedHashMap(last.module.getInputs()), states: last.module.states ?: [:], status: lastSummary.status],
+                                                        back: windowBefore("form", apps, tools) != null])
+        if (again.back) {
+            String appName = appNameOf(found, last.app)
+            typed[appName + "/" + last.tool.id] = again.typed
+            again = requestFromDialog(found, next, [step: windowBefore("form", apps, tools), app: appName, tool: last.tool.id, typed: typed, ran: true])
+        }
         if (again.aborted) {
             going = false
             lastResult = again.result
@@ -2678,7 +2805,7 @@ def labConstrictorRun() {
     def request = macro ? requestFromMacro(found, macro, summary) : requestFromDialog(found, summary)
     if (request.aborted) return request.result
     def result = runRequest(request.app, request.tool, request.module, summary)
-    return (macro || IJ.isMacro()) ? result : runAgain(request, summary, result)
+    return (macro || IJ.isMacro()) ? result : runAgain(found, request, summary, result)
 }
 
 /** Entry point: anything unexpected is logged with its stack trace and shown with the log's location. */
