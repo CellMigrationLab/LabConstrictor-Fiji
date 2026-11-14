@@ -20,12 +20,12 @@ jobs:
   # Fiji folder (the jar cases unlink plugins/ jars and rmtree scripts/Plugins/LabConstrictor). Measured: the script cases alone
   # take 65-69 min (172 cases, run one after the other), the jar cases far less.
   # Time budget (minutes), job limit above the sum of its steps:
-  #   script: setup ~15 + sandbox driver <= 20 + cases <= 80 (78 enforced by `timeout`) + cleanup/logs ~5 = 120 -> job limit 130
+  #   script: setup ~15 + sandbox driver <= 20 + cases <= 97 (95 enforced by `timeout`; 243 cases took 70-78 min in Nov 2026) + cleanup/logs ~5 = 137 -> job limit 150
   #   jar:    setup ~15 + cases <= 45 (43 enforced by `timeout`) + cleanup/logs ~5 = 65 -> job limit 75
   cases:
     name: fiji-gui (${{ matrix.mode }})
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.mode == 'script' && 130 || 75 }}
+    timeout-minutes: ${{ matrix.mode == 'script' && 150 || 75 }}
     strategy:
       fail-fast: false
       matrix:
@@ -87,11 +87,11 @@ jobs:
       # below kills what escaped (cases run in their own process groups): nothing may outlive a step and touch the Fiji home.
       - name: Cases through the loose Groovy script (fast; includes the unit checks and the script-only cases)
         if: matrix.mode == 'script'
-        timeout-minutes: 80   # every case is also killed after FIJI_TIMEOUT seconds (whole process group), so one hung case costs 5 minutes
+        timeout-minutes: 97   # every case is also killed after FIJI_TIMEOUT seconds (whole process group), so one hung case costs 5 minutes
         env:
           FIJI_TIMEOUT: "300"
           LC_FIJI_MACRO_PROPERTY: "1"
-        run: setsid --wait timeout --kill-after=30 4680 $HOME/lcvenv/bin/python -u tests/run_cases.py
+        run: setsid --wait timeout --kill-after=30 5700 $HOME/lcvenv/bin/python -u tests/run_cases.py
       - name: Cases through the built jar (mvn package, installed into Fiji's plugins/, started by the menu command)
         if: matrix.mode == 'jar'
         timeout-minutes: 45
