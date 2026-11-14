@@ -1,0 +1,33 @@
+{
+ "app": "lookups",
+ "tool": "Reports progress",
+ "register": [
+  {
+   "name": "lookups",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/lookups_app"
+   ]
+  }
+ ],
+ "tamper": [
+  {
+   "app": "lookups",
+   "entry": {
+    "host_requirements": {"fiji": {"min_version": "0.1.0-alpha.7", "why": "a test of the warning"}}
+   }
+  }
+ ],
+ "script_mode_only": true,
+ "system_properties": {"lc.fiji.plugin_version": "0.1.0-alpha.6"},
+ "expect": {
+  "status": "COMPLETE",
+  "ij_log_contains": [
+   "LabConstrictor: lookups needs LabConstrictor-Fiji 0.1.0-alpha.7 or newer (a test of the warning); this is 0.1.0-alpha.6. Update the plugin: https://github.com/CellMigrationLab/LabConstrictor-Fiji/releases/latest"
+  ],
+  "log_contains": [
+   "lookups needs LabConstrictor-Fiji 0.1.0-alpha.7 or newer (a test of the warning); this is 0.1.0-alpha.6."
+  ]
+ }
+}

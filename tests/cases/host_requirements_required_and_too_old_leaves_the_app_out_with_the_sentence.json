@@ -1,0 +1,30 @@
+{
+ "app": "victim",
+ "tool": "Scalar echo",
+ "register": [
+  {
+   "name": "victim",
+   "prefix": "${PREFIX}",
+   "module": "labconstrictor_tools.examples.synthetic",
+   "pythonpath": []
+  }
+ ],
+ "tamper": [
+  {
+   "app": "victim",
+   "entry": {
+    "host_requirements": {"fiji": {"min_version": "99.0", "required": true}}
+   }
+  }
+ ],
+ "script_mode_only": true,
+ "system_properties": {"lc.fiji.plugin_version": "0.1.0-alpha.6"},
+ "expect": {
+  "equals": {
+   "error": "no apps registered"
+  },
+  "log_contains": [
+   "app skipped: victim needs LabConstrictor-Fiji 99.0 or newer; this is 0.1.0-alpha.6. Update the plugin: https://github.com/CellMigrationLab/LabConstrictor-Fiji/releases/latest"
+  ]
+ }
+}

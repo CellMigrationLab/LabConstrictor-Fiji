@@ -400,6 +400,18 @@ if (harnessPath) hooks += new GroovyShell(this.class.classLoader).evaluate(new F
 /** The LabConstrictor home folder: $LC_HOME, else ~/.labconstrictor (registry, state, runs and the log live under it). */
 String lcHome() { System.getenv("LC_HOME") ?: (System.getProperty("user.home") + "/.labconstrictor") }
 
+/** This plugin's version as an app's host_requirements is compared with (Tools #155): the jar manifest's Implementation-Version, which the release workflow sets from the tag;
+ *  null (unknown) for the loose script, which has no jar. The system property lc.fiji.plugin_version replaces it (tests, read at each use). */
+String pluginVersion() {
+    String forced = System.getProperty("lc.fiji.plugin_version")
+    if (forced != null) return forced ?: null
+    try {
+        return Thread.currentThread().contextClassLoader.loadClass("org.cellmigrationlab.labconstrictor.LabConstrictorCommand").getPackage()?.getImplementationVersion()
+    } catch (ClassNotFoundException ignored) {
+        return null
+    }
+}
+
 LCModule.logger = { String level, String message, Throwable problem -> lcLog(level, message, problem) }
 LCCalibration.logger = LCModule.logger
 LCCalibration.catalog = LCCalibration.catalogFrom(UNIT_CATALOG_FALLBACK)
@@ -685,6 +697,9 @@ Map discoverApps() {
                 def compat = lib("LCCompat").checkForHost(schema as Map, SUPPORTED_PROTOCOLS)         // docs/PROTOCOL.md: may this host use what this Tools wrote?
                 if (compat.status == "refuse") { problems << (name + ": ignored: " + compat.reason); skip << name; return }
                 if (compat.status == "warn") { lcLog("WARNING", name + ": " + compat.reason); IJ.log("LabConstrictor: " + name + ": " + compat.reason) }
+                def needs = lib("LCHostRequirements").checkInFiji(entry as Map, pluginVersion())   // docs/PROTOCOL.md "Host requirements": is this plugin new enough for the app?
+                if (needs.status == "refuse") { problems << needs.sentence; skip << name; return }   // required: true and too old: left out, the exact sentence says which plugin to get
+                if (needs.status == "warn") { lcLog("WARNING", needs.sentence); IJ.log("LabConstrictor: " + needs.sentence) }      // listed, and said in the Log window every time
                 def usable = usableTools(schema)
                 usable.skipped.each { problems << (name + ": " + it) }
                 if (!usable.tools) throw new IllegalStateException("no tool of the app can be shown")
