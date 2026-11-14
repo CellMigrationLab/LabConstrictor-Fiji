@@ -160,6 +160,7 @@ def same(found, wanted):
 
 
 KNOWN_EXPECT = {  # every kind of expectation `check` reads; anything else in a case would be silently ignored, so it is a failure of the case
+    "ij_log_contains", "ij_log_lacks",
     "at_set", "at", "status", "status_in", "min_progress_events", "approx", "equals", "log_contains", "match", "file_text_contains", "absent", "max", "min", "min_length",
     "contains", "not_contains", "absent_keys", "worker_alive_after",
 }
@@ -204,6 +205,12 @@ def check(expect, report):
     for text in expect.get("log_contains", []):
         if text not in report.get("log_text", ""):
             failed.append("log lacks %r" % text)
+    for text in expect.get("ij_log_contains", []):  # ImageJ's Log window (not labconstrictor.log)
+        if text not in report.get("ij_log", ""):
+            failed.append("the Log window lacks %r" % text)
+    for text in expect.get("ij_log_lacks", []):
+        if text in report.get("ij_log", ""):
+            failed.append("the Log window shows %r" % text)
     for dotted, text in expect.get("match", {}).items():
         found = walk(report, dotted)  # (a part that is a whole number indexes a list)
         if not isinstance(found, str) or text not in found:

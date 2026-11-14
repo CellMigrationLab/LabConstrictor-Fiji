@@ -58,6 +58,10 @@ import java.util.concurrent.TimeUnit
 @Field final long LOG_MAX_BYTES = 1_000_000L     // the log file is rotated (to .log.1) above this size
 @Field final int LOG_BACKUPS = 5                 // rotated copies kept (.log.1 newest ... .log.5 oldest), like labconstrictor_tools.log
 @Field final int MAX_KEPT_LINES = 500            // worker output and progress events kept per run (the log has the rest)
+// Progress in the Log window: the status bar is overwritten by other ImageJ messages and the dialog is gone, so a long run looked frozen (tester report).
+@Field final long PROGRESS_LOG_MS = 10000L   // a changed progress message goes to the Log window at most this often (system property lc.fiji.progress_log_ms, read at each use)
+@Field final long HEARTBEAT_MS = 60000L      // no progress message for this long: the Log window says the tool still runs (lc.fiji.heartbeat_ms; a CPU epoch can take minutes)
+@Field final Map progressLog = [lastLogged: 0L, lastMessage: null, lastNews: 0L, tool: ""]   // what the Log window was last told for the running tool (one run at a time)
 @Field final int LOG_WORKER_LINES = 40           // last worker lines copied into the log when a task does not complete
 @Field final int OUTCOME_WORKER_LINES = 60       // last worker lines kept in the outcome (and the run record)
 @Field final int DIALOG_WORKER_LINES = 8         // last worker lines shown in the error dialog
@@ -1668,7 +1672,32 @@ void listenForProgress(def task, List progress) {
             synchronized (progress) { progress << [event.message, event.current, event.maximum]; if (progress.size() > MAX_KEPT_LINES) progress.remove(0) }
             IJ.showStatus("LabConstrictor: " + (event.message ?: "") + ESC_HINT)
             if (event.maximum > 0) IJ.showProgress(event.current / (double) event.maximum)
+            logProgress(event.message as String)
         }
+    }
+}
+
+/** Put a progress message in the Log window when it changed and PROGRESS_LOG_MS have passed since the last one; every message counts as news for the heartbeat. */
+void logProgress(String message) {
+    long now = System.currentTimeMillis()
+    synchronized (progressLog) {
+        progressLog.lastNews = now
+        if (message && message != progressLog.lastMessage && now - (progressLog.lastLogged as long) >= Long.getLong("lc.fiji.progress_log_ms", PROGRESS_LOG_MS)) {
+            progressLog.lastLogged = now
+            progressLog.lastMessage = message
+            IJ.log("LabConstrictor: " + message)
+        }
+    }
+}
+
+/** With no progress message for HEARTBEAT_MS, say in the Log window that the tool still runs, for how long, and how to stop it. */
+void logHeartbeat(long started) {
+    long now = System.currentTimeMillis()
+    synchronized (progressLog) {
+        if (now - (progressLog.lastNews as long) < Long.getLong("lc.fiji.heartbeat_ms", HEARTBEAT_MS)) return
+        progressLog.lastNews = now
+        long seconds = (long) ((now - started) / 1000L)
+        IJ.log("LabConstrictor: " + progressLog.tool + " is still running (" + (seconds >= 60 ? (seconds / 60) + " min " + (seconds % 60) + " s" : seconds + " s") + " so far)" + ESC_HINT)
     }
 }
 
@@ -1695,6 +1724,7 @@ Long waitForTask(Service service, def task, long started, CountDownLatch ended) 
     def cancelAfter = hooks.cancelAfterMs()
     while (!ended.await(CANCEL_POLL_MS, TimeUnit.MILLISECONDS)) {
         hooks.whileWaiting(System.currentTimeMillis() - started)
+        logHeartbeat(started)
         if (task.status.isFinished()) {
             if (finishedSeen == null) finishedSeen = System.currentTimeMillis()
             if (System.currentTimeMillis() - finishedSeen > OUTPUTS_WAIT_MS) {
@@ -1755,9 +1785,11 @@ Map runTool(Map app, Map tool, Map inputs) {
     def started = System.currentTimeMillis()
     Long cancelSent = null
     String running = "LabConstrictor: running " + (tool.label ?: tool.id) + ESC_HINT
+    synchronized (progressLog) { progressLog.putAll([lastLogged: 0L, lastMessage: null, lastNews: started, tool: (tool.label ?: tool.id) as String]) }
     try {
         task.start()
         IJ.showStatus(running)
+        IJ.log(running + "; progress is written here")
         cancelSent = waitForTask(service, task, started, ended)
     } finally {                                              // also when interrupted or when anything above throws
         closeWorker(service)

@@ -1,0 +1,26 @@
+{
+ "app": "lookups",
+ "tool": "Reports progress",
+ "register": [
+  {
+   "name": "lookups",
+   "prefix": "${PREFIX}",
+   "module": "tools",
+   "pythonpath": [
+    "${V3}/tests/lookups_app"
+   ]
+  }
+ ],
+ "script_mode_only": true,
+ "system_properties": {"lc.fiji.progress_log_ms": "500", "lc.fiji.heartbeat_ms": "1000"},
+ "expect": {
+  "status": "COMPLETE",
+  "ij_log_contains": [
+   "LabConstrictor: running Reports progress (press Esc to cancel); progress is written here",
+   "LabConstrictor: first step",
+   "LabConstrictor: Reports progress is still running (",
+   "LabConstrictor: third step"
+  ],
+  "ij_log_lacks": ["LabConstrictor: second step"]
+ }
+}
