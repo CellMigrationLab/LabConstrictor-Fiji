@@ -5,7 +5,7 @@
 
 Needs: a Fiji installation in $LC_FIJI_HOME, xvfb-run (Linux), and `pip install labconstrictor-tools numpy pandas tifffile`
 in the Python running this script (it registers the example app in a private registry). With --real-apps the registry is
-yours: set LC_HOME and $LC_REAL_FIXTURES to a folder with nucleisky/, celltracks/, vlab4mic/ data.
+yours: set LC_HOME and $LC_REAL_FIXTURES to a folder with nucleisky/, celltracks/, vlab4mic/ data (stardist2d/: the lc_tests/fixtures folder of StarDist2D).
 LC_FIJI_MODE=jar builds the jar (mvn) and tests the menu command instead of the loose Groovy script.
 LC_FIJI_MACRO_PROPERTY=1 (script mode) also runs the cases that carry a macro call, through the property the menu command sets.
 Cases with "unit_checks" call functions of the script directly (tests/unit_checks.groovy); "script_macro", "cwd", "env", "log_prefill",
