@@ -1,0 +1,16 @@
+{
+ "unit_checks": [
+  "host_requirements_vectors",
+  "host_requirements_reference",
+  "host_requirements_missing_key_fails"
+ ],
+ "script_mode_only": true,
+ "expect": {
+  "equals": {
+   "failures": []
+  },
+  "min": {
+   "checked": 400
+  }
+ }
+}
