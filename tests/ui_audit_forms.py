@@ -12,8 +12,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Optional
 
-STRUCTURAL = ("form_ok", "form_cancel", "message_text", "scrollbar")
-BUTTON_IDS = ("form_ok", "form_cancel", "chooser_ok", "chooser_cancel")
+STRUCTURAL = ("form_ok", "form_cancel", "form_back", "message_text", "scrollbar")   # form_back: the "< Back" button beside OK and Cancel (since alpha.5)
+BUTTON_IDS = ("form_ok", "form_cancel", "form_back", "chooser_ok", "chooser_cancel", "chooser_back")
 CHECKBOXES = ["flag_checkbox", "use_image_checkbox", "set_checkbox", "use_selection_checkbox"]   # a yes/no parameter whose label starts with "Use " or "Set " is classified by that
 MIN_CONTROLS = 3                                                                              # OK, Cancel and at least one widget: a form that shows fewer was not found at all
 CONTROL_TABLE = Path(__file__).resolve().parent / "ui_audit_controls.json"
@@ -94,6 +94,8 @@ def form_problems(tool: dict[str, Any], found: list[dict[str, Any]], texts: list
     for button in ("form_ok", "form_cancel"):
         if ids[button] != 1:
             problems.append("%d %s control(s), expected exactly 1" % (ids[button], button))
+    if ids["form_back"] > 1:
+        problems.append("%d form_back control(s), expected at most 1" % ids["form_back"])
     free = [control for control in found if control["id"] not in STRUCTURAL]
     missing = []
     for want in expected_widgets(tool, has_images):
