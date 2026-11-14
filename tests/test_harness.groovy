@@ -163,6 +163,7 @@ def startClicker = { String title ->
 }
 
 def preload = {
+    cfg.system_properties?.each { k, v -> System.setProperty(k as String, v as String) }   // e.g. shorter progress-log intervals for a quick test
     if (cfg.script_macro) System.setProperty("lc.macro.options", cfg.script_macro as String)   // a macro call without the menu command (the script reads this property first)
     if (cfg.record) ij.plugin.frame.Recorder.record = true          // as if the Macro Recorder window were open
     cfg.preload_tables?.each { item ->                       // stands in for "a results window the person already has open"
@@ -255,6 +256,7 @@ writeReport = { Map summary ->
     summary.open_windows = WindowManager.getImageTitles() as List
     summary.windows = describeWindows()
     summary.open_tables = WindowManager.getNonImageTitles() as List
+    summary.ij_log = IJ.getLog() ?: ""                       // the text of ImageJ's Log window (progress lines, summaries)
     def overlay = summary.overlay_title ? WindowManager.getImage(summary.overlay_title as String) : null
     if (overlay) {
         IJ.saveAs(overlay, "PNG", new File(shots, "overlay.png").path)

@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Annotated
 
-from labconstrictor_tools import ChoicesFrom, Scalars, tool
+from labconstrictor_tools import ChoicesFrom, Scalars, progress, tool
 
 
 def _note_pid() -> None:
@@ -52,3 +52,16 @@ def blocks(seconds: float = 300.0) -> Scalars:
     _note_pid()
     time.sleep(seconds)
     return {"slept": seconds}
+
+
+@tool("Reports progress")
+def reports_progress() -> Scalars:
+    """Progress messages at known times, then a silence: the Log window shows the changed ones (throttled) and a heartbeat."""
+    progress(0.1, "first step")
+    time.sleep(0.1)
+    progress(0.2, "second step")  # within the throttle interval: not in the Log window
+    time.sleep(1.6)  # longer than the test heartbeat (1 s)
+    progress(0.9, "third step")
+    time.sleep(0.2)
+    return {"done": 1}
+
