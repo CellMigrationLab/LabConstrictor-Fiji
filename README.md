@@ -108,13 +108,13 @@ These are deliberate: the host does something simpler instead of failing, writes
 `tests/run_cases.py` drives desktop Fiji on a virtual screen (Linux: `xvfb-run`), answering the real SciJava dialogs with
 `tests/test_harness.groovy` (the only place with test hooks) and writing JSON reports and screenshots to `evidence/`.
 
-    pip install git+https://github.com/CellMigrationLab/LabConstrictor-Tools numpy pandas tifffile scipy scikit-image
+    pip install git+https://github.com/CellMigrationLab/LabConstrictor-Tools numpy pandas tifffile scipy scikit-image   # or the tag: git+https://github.com/CellMigrationLab/LabConstrictor-Tools@v0.3.0-alpha.2
     export LC_FIJI_HOME=/path/to/Fiji.app
     python tests/run_cases.py                      # the portable cases (example app and small test apps), loose script
     LC_FIJI_MODE=jar python tests/run_cases.py     # the same cases through the built jar (needs mvn); each case prints its duration
-    python tests/run_cases.py --real-apps          # developer cases for NucleiSky, CellTracksColab, VLab4Mic (CellTracksColab is a test fixture only: no host lists it): need them installed/registered
-                                                   # (LC_HOME) and LC_REAL_FIXTURES=<folder with nucleisky/ celltracks/ vlab4mic/ data>
-                                                   # (4 cases; the blur and VLab4Mic cases fail or time out when those apps are not installed)
+    python tests/run_cases.py --real-apps          # developer cases for Playground, NucleiSky, VLab4Mic and StarDist2D: need them installed/registered
+                                                   # (LC_HOME) and LC_REAL_FIXTURES=<folder with playground/ nucleisky/ vlab4mic/ stardist2d/ data>
+                                                   # (a case fails or times out when its app is not installed)
 
 CI (`fiji-gui` workflow) runs the loose-script and the jar cases as two parallel jobs on separate runners (`fiji-gui (script)`, `fiji-gui (jar)`); the `fiji-gui` check is green only when both are. Each case line carries its duration.
 
