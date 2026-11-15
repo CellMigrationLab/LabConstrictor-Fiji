@@ -26,7 +26,7 @@ No-jar alternative: the same release has `labconstrictor-fiji-script-<tag>.zip`.
 
 `SHA256SUMS` in the release lists the checksums of the jar and the zip. Every release jar is installed in Fiji and run on GUI cases before it is attached. The release gate is Linux; Windows and macOS (Apple silicon) get a best-effort check in the release run that can fail without blocking a release, and nobody has used the plugin on those systems by hand yet.
 
-Testing the plugin and reporting back: the [human test protocol](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md) and its [record sheet](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md#0-record-sheet-the-test-set-fill-in-before-you-start).
+Testing the plugin and reporting back: please open an [issue](https://github.com/CellMigrationLab/LabConstrictor-Fiji/issues) with what you ran and what you saw.
 
 ## Open it
 

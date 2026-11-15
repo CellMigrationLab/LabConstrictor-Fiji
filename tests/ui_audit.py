@@ -1,5 +1,5 @@
 """Fiji UI audit: drives the LabConstrictor plugin of an INSTALLED app through its real SciJava dialogs, presses every control, opens every tool's form, runs each tool with the inputs of
-the app's own lc_tests/cases.json and takes the screenshots (contract: LabConstrictor-Tools docs/TEST_STRATEGY.md section 3 and tests/release_sandbox/README.md).
+the app's own lc_tests/cases.json and takes the screenshots (audit tooling: LabConstrictor-Tools tests/audit/README.md and tests/release_sandbox/README.md).
 
     python tests/ui_audit.py        # under a display is NOT needed: every Fiji start is made under xvfb-run
 

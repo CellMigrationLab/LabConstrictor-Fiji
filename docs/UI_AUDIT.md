@@ -1,7 +1,7 @@
 # Fiji UI audit
 
 A driver that presses every control of the LabConstrictor Fiji plugin, opens the form of every tool of an INSTALLED app, runs each tool with the inputs of the app's own
-`lc_tests/cases.json` and takes the screenshots. Contract: LabConstrictor-Tools `docs/TEST_STRATEGY.md` section 3 and `tests/release_sandbox/README.md`. Linux, Xvfb.
+`lc_tests/cases.json` and takes the screenshots. Audit tooling: LabConstrictor-Tools `tests/audit/README.md` and `tests/release_sandbox/README.md`. Linux, Xvfb.
 
     LC_HOME=<registry with the app> LC_APP=<name> LC_APP_TESTS=<lc_tests folder> LC_SHOTS=<out> LC_FIJI_HOME=<Fiji folder, the one with jars/> \
     LC_EXPECT_FIJI=listed|not_listed python tests/ui_audit.py
