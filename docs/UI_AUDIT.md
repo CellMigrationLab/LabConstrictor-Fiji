@@ -23,14 +23,14 @@ copy-command entry. `tests/ui_audit_body.groovy` (the harness, selected through 
 never from the state of the dialog under test. Nothing stops at the first failure; what a killed start did not reach is `FAIL` (watchdog) or `NOT_RUN`.
 
 Output: one `CHECK <id> PASS|FAIL <detail>` line per assertion, `NOTE <id> not run: <reason>` for what a machine cannot do, and `<LC_SHOTS>/matrix_ui_fiji_<app>.json`
-(rewritten atomically after every row; schema of `tests/oneoff_2026-10/matrix.py` in LabConstrictor-Tools plus `host_version` and `parts`) with `<LC_SHOTS>/expected_fiji_<app>.json`
+(rewritten atomically after every row; schema of `tests/audit/matrix.py` in LabConstrictor-Tools plus `host_version` and `parts`) with `<LC_SHOTS>/expected_fiji_<app>.json`
 written first: every expected id without a row ends as `NOT_RUN`. Exit code 1 when anything is `FAIL` or `NOT_RUN`.
 
 | Id | Passes when |
 |---|---|
 | `ui_fiji_controls_all_known` | every interactive component of every dialog read is in the control table (`ui_audit_controls.json`), and at least one form was read |
 | `ui_fiji_panel_chooser_app/tool/ok/cancel`, `form_ok`, `form_cancel`, `menu`, `copy_empty/terminal/python`, `log` | the control did what the table says (Fiji has no Rescan, Restart worker, Details, Keep the worker running; finding one is a failure) |
-| `ui_fiji_form_<tool>_opens` | one widget per declared parameter, right kind, nothing else but OK and Cancel; the description is shown; the dialog is inside the screen and its buttons are on it; the open windows are exactly the expected ones |
+| `ui_fiji_form_<tool>_opens` | one widget per declared parameter, right kind, nothing else but OK, Cancel and < Back (control ids `form_back`, `chooser_back`); the description is shown; the dialog is inside the screen and its buttons are on it; the open windows are exactly the expected ones |
 | `ui_fiji_form_<tool>_controls` | every control was activated with real events (Robot clicks for buttons, check boxes, radio buttons) and read back |
 | `ui_fiji_run_<tool>` | the first case of the tool that expects COMPLETE ran through the form; completed; every declared result shown and not blank; the case's values; the values sent equal the case; results sit on the right image with the fixture's scale; one run record; the log exists |
 | `ui_fiji_screens_<tool>` | the form and after-run screenshots exist, are fresh, plausibly sized, not one colour (evidence for a person: `<LC_SHOTS>/fiji/<app>/<tool>_form.png`, `_after_run.png`, `_result_<n>.png`) |

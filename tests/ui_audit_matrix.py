@@ -2,7 +2,7 @@
 
     <LC_SHOTS>/expected_fiji_<app>.json     every id the audit intends to produce (written before anything runs)
     <LC_SHOTS>/matrix_ui_fiji_<app>.json    {host, app, family: "ui", host_version, started, finished|null, expected: <count>, parts, rows: [{id, family, host, app, tool, control, status, detail, seconds, screenshot, ts}]}
-(the same schema as tests/oneoff_2026-10/matrix.py of LabConstrictor-Tools, plus `parts`)
+(the same schema as tests/audit/matrix.py of LabConstrictor-Tools, plus `parts`)
 
 Statuses: PASS, FAIL, NOT_RUN (expected, but no row was produced: red), HUMAN (cannot be automated here, or does not apply in this state: listed for a person, never green).
 A row with `control` set belongs to a check (one control of a form, one fill): it is in the matrix only; a row without it is THE assertion and is also printed, one line:
