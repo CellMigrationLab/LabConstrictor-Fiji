@@ -1,0 +1,5 @@
+{"app": "StarDist2D", "tool": "StarDist 2D: Train a model",
+ "overrides": {"training_images": "${REAL_FIXTURES}/stardist2d/train/images", "training_masks": "${REAL_FIXTURES}/stardist2d/train/masks",
+               "model_folder": "${REAL_FIXTURES}/stardist2d/train/models", "model_name": "fiji_log_case", "number_of_epochs": 40, "overwrite": true},
+ "expect": {"status": "COMPLETE", "min_progress_events": 5,
+            "ij_log_contains": ["progress is written here", "LabConstrictor: epoch"]}}

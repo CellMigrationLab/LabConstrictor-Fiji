@@ -1,4 +1,4 @@
-# First run still pending. `build` builds the jar and `lint` lints the Groovy script (tests/lint_groovy.sh); the GUI cases need a Fiji installation and a display (see README).
+# `build` builds the jar and `lint` lints the Groovy script (tests/lint_groovy.sh); the GUI cases need a Fiji installation and a display (see README).
 name: ci
 on: [push, pull_request]
 jobs:

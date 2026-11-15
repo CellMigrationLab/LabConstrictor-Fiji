@@ -42,6 +42,17 @@
    "source": "SciJava input dialog; run_cases cancel cases"
   },
   {
+   "id": "chooser_back",
+   "scope": "chooser",
+   "kind": "JButton",
+   "text": [
+    "< Back"
+   ],
+   "activation": "press",
+   "effect": "goes one window back, the tool chooser to the app chooser; nothing is run",
+   "source": "BACK_TEXT in LabConstrictor_Tools.groovy (since v0.1.0-alpha.5); what it does is checked by the run cases (tests/test_harness.groovy)"
+  },
+  {
    "id": "form_ok",
    "scope": "form",
    "kind": "JButton",
@@ -62,6 +73,17 @@
    "activation": "press",
    "effect": "nothing is run: the plugin ends with cancelled, no worker and no run record",
    "source": "SciJava input dialog"
+  },
+  {
+   "id": "form_back",
+   "scope": "form",
+   "kind": "JButton",
+   "text": [
+    "< Back"
+   ],
+   "activation": "press",
+   "effect": "goes one window back, the form to the tool chooser; nothing is run",
+   "source": "BACK_TEXT in LabConstrictor_Tools.groovy (since v0.1.0-alpha.5); what it does is checked by the run cases (tests/test_harness.groovy)"
   },
   {
    "id": "file_browse",
