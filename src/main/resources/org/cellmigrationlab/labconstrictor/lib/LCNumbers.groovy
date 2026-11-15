@@ -30,7 +30,7 @@ class LCNumbers {
         return limitIsFloat ? (((limit as double) < 0 ? '-' : '') + FLOAT_LIMIT_TEXT) : limit.toString()
     }
 
-    /** `text` as the number parameter `p` takes it, or an IllegalArgumentException with the worker's sentence (HOST_PARITY I06) followed by `, got 'x'`: not a whole
+    /** `text` as the number parameter `p` takes it, or an IllegalArgumentException with the worker's sentence (Tools docs/PROTOCOL.md) followed by `, got 'x'`: not a whole
      *  number, not a number, not finite, too close to zero to be held exactly, or beyond a bound (declared, else the form's limit). A whole number is an Integer when it
      *  fits 32 bits, else a Long; a float is a Double (the one nearest the typed text). No blank is accepted: the dialog trims what was typed (see fromField). */
     static Number parse(Map p, String text) {

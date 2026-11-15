@@ -1,4 +1,4 @@
-"""Tools for the host-parity cases: each one makes a rule of docs/HOST_PARITY.md visible in the result."""
+"""Tools for the host-parity cases: each one makes a rule of LabConstrictor-Tools docs/PROTOCOL.md visible in the result."""
 
 from typing import Annotated, Literal
 

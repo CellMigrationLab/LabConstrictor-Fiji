@@ -41,7 +41,7 @@ import java.util.concurrent.TimeUnit
 @Field final String ESC_HINT =" (press Esc to cancel)"   // after every status line of a running tool: the dialog is gone, and Esc is the only way to stop it (issue #56)
 @Field final List<String> SCRUBBED_ENV = ["PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX", "QT_PLUGIN_PATH"]   // variables of the host's environment the worker must not inherit (PYTHONPATH is always set)
 @Field final int CANCEL_GRACE_MS = 3000          // how long a tool gets to honour Cancel before its worker is killed
-@Field final int EXIT_WAIT_MS = 10000            // how long a worker gets to exit after its input is closed, then it is killed: the 10 s the worker itself promises (conformance.json limits.worker_close_timeout_s; HOST_PARITY K03)
+@Field final int EXIT_WAIT_MS = 10000            // how long a worker gets to exit after its input is closed, then it is killed: the 10 s the worker itself promises (conformance.json limits.worker_close_timeout_s; Tools docs/PROTOCOL.md)
 @Field final int LOOKUP_TIMEOUT_MS = 60000       // a ChoicesFrom lookup that has not answered by then is cancelled and its worker is thrown away (conformance.json limits.lookup_timeout_s, a default not yet confirmed)
 @Field final int CANCEL_POLL_MS = 50             // while a task runs: how often Esc, the harness's cancel time and the task status are looked at
 @Field final int OUTPUTS_WAIT_MS = 10000         // after a task reads COMPLETE (or any end): how long the client gets to publish its outputs and say so (it sets the status first, then fills the outputs)
