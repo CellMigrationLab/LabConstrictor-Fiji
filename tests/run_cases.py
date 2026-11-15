@@ -14,6 +14,7 @@ Cases with "unit_checks" call functions of the script directly (tests/unit_check
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -439,6 +440,11 @@ def tamper(apps, op):
     if "schema_replace" in op:
         old, new = op["schema_replace"]
         text = schema_file.read_text()
+        if old not in text and old.startswith('"tools_version": '):
+            # the version the installed Tools writes changes with every Tools release: match whatever version is there
+            found = re.search(r'"tools_version": "[^"]*"', text)
+            assert found, old
+            old = found.group(0)
         assert old in text, old
         schema_file.write_text(text.replace(old, new, 1))
     if op.get("schema_move_to_other_folder"):
