@@ -11,7 +11,7 @@ One Fiji (ImageJ) command runs the tools of every installed LabConstrictor app, 
 
 - [Fiji](https://fiji.sc).
 - At least one LabConstrictor app installed on your computer. The app's installer registers it, which is how the plugin finds it. The app needs **labconstrictor-tools 0.3.0a1 or newer** (tag `v0.3.0-alpha.1`): an app with an older one is left out of the list, with a sentence in the Log window.
-- Apps declare which hosts list them (`hosts:` in their `labconstrictor-app.yaml`); the rule is a binding rule in Tools 0.3.0a1 (feature `app_hosts_v1`; PROTOCOL.md section App hosts); Napari, Fiji and QuPath all honour it (this host since PR #47). Apps without a declaration, i.e. installed with an installer from before template 0.1.18, are listed in every host and the Log says so ("declares no hosts"); installers pass the hosts from template 0.1.18 (merged; the five apps of the alpha.3 test set carry it). Intended for Fiji: Playground, NucleiSky, Guess the Condition and VLab4Mic. CellTracksColab is not listed in any host.
+- Apps declare which hosts list them (`hosts:` in their `labconstrictor-app.yaml`). Apps without a declaration (installed with an older installer) are listed in every host and the Log says so ("declares no hosts"). Intended for Fiji: Playground, NucleiSky, Guess the Condition, StarDist2D and VLab4Mic. CellTracksColab is notebook-only.
 - Nothing to build: no Java or Maven is needed to install.
 
 ## Install
@@ -26,7 +26,7 @@ No-jar alternative: the same release has `labconstrictor-fiji-script-<tag>.zip`.
 
 `SHA256SUMS` in the release lists the checksums of the jar and the zip. Every release jar is installed in Fiji and run on GUI cases before it is attached. The release gate is Linux; Windows and macOS (Apple silicon) get a best-effort check in the release run that can fail without blocking a release, and nobody has used the plugin on those systems by hand yet.
 
-Testing the plugin and reporting back: the [human test protocol](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md) and its [record sheet](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md#0-record-sheet-the-test-set-fill-in-before-you-start) (same PR).
+Testing the plugin and reporting back: the [human test protocol](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md) and its [record sheet](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/HUMAN_TEST_PROTOCOL.md#0-record-sheet-the-test-set-fill-in-before-you-start).
 
 ## Open it
 
@@ -46,7 +46,8 @@ A first run needs an installed LabConstrictor app that declares tools. If none i
 
 - Each image input has a chooser for an open image and an "(or file)" field. A file wins.
 - Results open as image windows, a Results table, ROIs or overlays on the image, or lines in the Log window.
-- Press Esc to cancel. A progress bar shows while a tool runs.
+- Press Esc to cancel. A progress bar shows while a tool runs; the tool's progress messages also go to the Log window (at most every 10 s), and after a minute without one the Log says the tool is still running.
+- An app can declare the oldest Fiji plugin it needs. If yours is older, the Log window says which version to get; if the app marks it as required, the app is left out of the list until you update the plugin.
 - After every run, the Log window shows the terminal line and the Python snippet that repeat it outside Fiji.
 
 ## If something does not work
