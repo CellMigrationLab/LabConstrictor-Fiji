@@ -6,32 +6,11 @@ Run the analysis tools of your LabConstrictor apps from inside [Fiji](https://fi
 
 *The StarDist2D app's "Segment nuclei" tool, run from Fiji on an open image: outlines on the image, a label image and a table.*
 
-> **Experimental.** This is an alpha pre-release (`v0.1.0-alpha.7`). It has been tested on Linux, Windows and macOS, but expect bugs and changes. Please [tell us](https://github.com/CellMigrationLab/LabConstrictor-Fiji/issues) what you find.
+> **Experimental.** This is an alpha pre-release. It has been tested on Linux, Windows and macOS, but expect bugs and changes. Please [tell us](https://github.com/CellMigrationLab/LabConstrictor-Fiji/issues) what you find.
 
 ## Install
 
-1. **Install a LabConstrictor app** from the [App Centre](https://cellmigrationlab.github.io/LabConstrictor-Site/apps/?host=fiji). Its installer registers the app on your computer, which is how the plugin finds it.
-2. **Download** [`labconstrictor-fiji-v0.1.0-alpha.7.jar`](https://github.com/CellMigrationLab/LabConstrictor-Fiji/releases/download/v0.1.0-alpha.7/labconstrictor-fiji-v0.1.0-alpha.7.jar) (newer versions appear on the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-Fiji/releases)).
-3. **Put the file into the `plugins` folder** of your Fiji (`Fiji.app/plugins/`, not a subfolder). Remove any older `labconstrictor-fiji-*.jar` from that folder.
-4. **Restart Fiji.**
-
-There is no Fiji update site yet, so updating means repeating steps 2 to 4.
-
-## First use
-
-<img src="docs/img/fiji-dialog.png" alt="The dialog Fiji shows for a tool: image, model and detection settings, with Back, OK and Cancel buttons" width="420" align="right">
-
-1. Open an image in Fiji.
-2. Choose **Plugins > LabConstrictor > LabConstrictor Tools...**
-3. Pick an app, then a tool.
-4. Fill in the dialog and press **OK**. Hover over a label with an **ⓘ** to read what the setting means.
-5. Look at the results. The same dialog then comes back so you can run again with other settings; press **Cancel** when you are done, or **< Back** to pick another tool.
-
-While a tool runs, Fiji shows a progress bar and the **Log window** shows the tool's progress messages. Press **Esc** to cancel a run.
-
-<br clear="right">
-
-The step-by-step guide, with troubleshooting, is on the website: [Install the Fiji plugin](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/fiji/).
+Download the jar from the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-Fiji/releases) into `Fiji.app/plugins` and restart Fiji. The steps, how to open it and what to do when something goes wrong are in the [Fiji guide](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/fiji/).
 
 ## Apps that work in Fiji
 
@@ -47,14 +26,13 @@ Any LabConstrictor app that declares Fiji as one of its hosts appears in the men
 
 ## Getting help
 
-- **No menu entry?** The jar is not directly in `Fiji.app/plugins/`, or Fiji was not restarted.
-- **A run failed?** The error dialog and the Log window say why.
-- **Guides:** the [LabConstrictor website](https://cellmigrationlab.github.io/LabConstrictor-Site/) and its [guides](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/).
+- **Something does not work?** See [If something does not work](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/fiji/#if-something-does-not-work) in the Fiji guide.
+- **Other guides:** the [LabConstrictor guides](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/).
 - **Bugs and questions:** the [issue tracker](https://github.com/CellMigrationLab/LabConstrictor-Fiji/issues).
 
 ## More detail
 
-- [Technical reference](docs/REFERENCE.md): every rule the plugin follows (channels, selections, pixel size, coordinates, number limits), running a tool from a macro, and the script-only install without the jar.
+- [Technical reference](docs/REFERENCE.md): every rule the plugin follows (channels, selections, pixel size, coordinates, number limits), running a tool from a macro, and how the release is built and checked.
 - The same apps also run in [napari](https://github.com/CellMigrationLab/LabConstrictor-napari) and [QuPath](https://github.com/CellMigrationLab/LabConstrictor-QuPath). To make your own app, start at the [LabConstrictor website](https://cellmigrationlab.github.io/LabConstrictor-Site/).
 
 ## For developers
