@@ -1,6 +1,9 @@
 name: release
 # Builds the plugin jar for a release tag, smoke-tests THAT jar in Fiji, and (only for a published release) attaches
-#   labconstrictor-fiji-<tag>.jar, labconstrictor-fiji-script-<tag>.zip (script + lib) and SHA256SUMS to the release.
+#   labconstrictor-fiji-<tag>.jar, labconstrictor-fiji-script-<tag>.zip (script + lib) and SHA256SUMS to the release, plus
+#   labconstrictor-fiji.jar: the same jar under a fixed name, so that
+#   https://github.com/CellMigrationLab/LabConstrictor-Fiji/releases/latest/download/labconstrictor-fiji.jar is always the newest release.
+#   SHA256SUMS lists only the versioned files; the fixed-name jar has the same checksum as labconstrictor-fiji-<tag>.jar.
 # The jar is built once (Linux, Java 8 bytecode). It is smoked on Linux (blocks the publish) and, best effort, on Windows and macOS arm64
 # (they report in the run summary and never block a release).
 # Dry run: Actions > release > Run workflow, with a tag (e.g. v0.2.0-dry), or a pull request that changes this file or pom.xml. It builds, smokes and uploads the same files as
@@ -62,6 +65,9 @@ jobs:
           (cd src/main/resources/org/cellmigrationlab/labconstrictor && zip -q -r "$GITHUB_WORKSPACE/release-files/labconstrictor-fiji-script-$TAG.zip" LabConstrictor_Tools.groovy lib)
           unzip -p "release-files/labconstrictor-fiji-$TAG.jar" META-INF/MANIFEST.MF | tr -d '\r' | grep -E '^Implementation-Version: '"$VERSION"'$'
           (cd release-files && sha256sum labconstrictor-fiji-"$TAG".jar labconstrictor-fiji-script-"$TAG".zip | tee SHA256SUMS)
+          # the same jar under a fixed name, for the releases/latest/download/labconstrictor-fiji.jar link (added after SHA256SUMS, which stays as it was)
+          cp "release-files/labconstrictor-fiji-$TAG.jar" release-files/labconstrictor-fiji.jar
+          cmp "release-files/labconstrictor-fiji-$TAG.jar" release-files/labconstrictor-fiji.jar
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-files
@@ -148,9 +154,10 @@ jobs:
           {
             echo
             echo "---"
-            echo "Tested on: $FIJI_TESTED. Windows and macOS are only smoke-checked (see the workflow run), not tested."
+            echo "Tested on: $FIJI_TESTED. Windows and macOS (arm64) get a shorter check in the same workflow run: the menu entry and the dialog."
             echo "The plugin needs labconstrictor-tools 0.3.0a1 or newer in the app."
-            echo "Install: put labconstrictor-fiji-$TAG.jar into Fiji.app/plugins/ (remove an older labconstrictor-fiji-*.jar) and restart Fiji."
+            echo "labconstrictor-fiji.jar is the same file as labconstrictor-fiji-$TAG.jar under a fixed name."
+            echo "Install: see the [Fiji guide](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/fiji/)."
           } > notes/NOTES_ADDENDUM.md
           cat notes/NOTES_ADDENDUM.md
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -263,7 +270,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.event.release.tag_name }}
         run: |
-          gh release upload "$TAG" "release-files/labconstrictor-fiji-$TAG.jar" "release-files/labconstrictor-fiji-script-$TAG.zip" release-files/SHA256SUMS --clobber
+          gh release upload "$TAG" "release-files/labconstrictor-fiji-$TAG.jar" "release-files/labconstrictor-fiji-script-$TAG.zip" release-files/SHA256SUMS release-files/labconstrictor-fiji.jar --clobber
           gh release view "$TAG" --json body --jq .body > body.md
           if grep -q '^Tested on: ' body.md; then cp body.md notes.md; else cat body.md notes/NOTES_ADDENDUM.md > notes.md; fi  # a re-run does not append twice
           gh release edit "$TAG" --notes-file notes.md
