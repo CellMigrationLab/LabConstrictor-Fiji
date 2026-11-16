@@ -1,60 +1,60 @@
 # Install the Fiji plugin
 
-One Fiji (ImageJ) command runs the tools of every installed LabConstrictor app, with a dialog generated from each tool's declaration.
+Run the tools of your LabConstrictor apps from Fiji (ImageJ): one menu entry lists every installed app, you pick a tool, fill in a normal Fiji dialog, and the results open as image windows, outlines, tables and Log lines.
 
 > [!WARNING]
-> **Under heavy construction.** This plugin is untested by people on real machines and unlikely to be stable. Expect bugs, missing features and changes without notice. Do not rely on it for work you cannot redo.
->
-> The plugin is installed from a GitHub release (a jar, or a script with its helper files); there is no Fiji update site yet. Releases are pre-releases (alpha): take the newest one on the Releases page.
+> **Experimental.** This plugin is an alpha pre-release. It has been tested on Linux, Windows and macOS, but expect bugs and changes, and do not rely on it for work you cannot redo.
+
+![Fiji after running the StarDist2D app: nuclei outlined on the open image, a label image and a table of the objects](https://raw.githubusercontent.com/CellMigrationLab/LabConstrictor-Fiji/main/docs/img/fiji-stardist.png)
 
 ## What you need
 
 - [Fiji](https://fiji.sc).
-- At least one LabConstrictor app installed on your computer. The app's installer registers it, which is how the plugin finds it. The app needs **labconstrictor-tools 0.3.0a1 or newer** (tag `v0.3.0-alpha.1`): an app with an older one is left out of the list, with a sentence in the Log window.
-- Apps declare which hosts list them (`hosts:` in their `labconstrictor-app.yaml`). Apps without a declaration (installed with an older installer) are listed in every host and the Log says so ("declares no hosts"). Intended for Fiji: Playground, NucleiSky, Guess the Condition, StarDist2D and VLab4Mic. CellTracksColab is notebook-only.
-- Nothing to build: no Java or Maven is needed to install.
+- At least one LabConstrictor app that works in Fiji. The [App Centre](https://cellmigrationlab.github.io/LabConstrictor-Site/apps/?host=fiji) lists them. Installing the app and installing this plugin are two separate steps: the app's installer registers the app on your computer, which is how the plugin finds it.
+- Nothing else: you do not need Java, Maven or Python of your own.
 
 ## Install
 
-The full install page for the apps and all three hosts is [Tools `docs/INSTALL.md`](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/INSTALL.md). For Fiji:
+1. Download `labconstrictor-fiji-<version>.jar` from the newest release on the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-Fiji/releases).
+2. Put it into the `plugins` folder of your Fiji (`Fiji.app/plugins/`, not a subfolder). Remove any older `labconstrictor-fiji-*.jar` from that folder.
+3. Restart Fiji.
 
-1. Download `labconstrictor-fiji-<tag>.jar` from the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-Fiji/releases) (`<tag>` is the release tag; take the latest release).
-2. Put it into `Fiji.app/plugins/` (not a subfolder; remove an older `labconstrictor-fiji-*.jar`) and restart Fiji.
-3. Run **Plugins > LabConstrictor > LabConstrictor Tools...**.
+There is no Fiji update site yet, so to update you repeat these steps with the newer file.
 
-No-jar alternative: the same release has `labconstrictor-fiji-script-<tag>.zip`. It holds the script `LabConstrictor_Tools.groovy` **and the `lib` folder it needs** (the script alone stops with a message). Unzip it so both sit in `Fiji.app/scripts/Plugins/LabConstrictor/`; the menu entry is then **Plugins > LabConstrictor > LabConstrictor Tools** (no dots). **Macro calls need the jar.** Install one of the two, not both (with both, the menu lists the tool twice).
-
-`SHA256SUMS` in the release lists the checksums of the jar and the zip. Every release jar is installed in Fiji and run on GUI cases before it is attached. The release gate is Linux; Windows and macOS (Apple silicon) get a best-effort check in the release run that can fail without blocking a release, and nobody has used the plugin on those systems by hand yet.
-
-Testing the plugin and reporting back: please open an [issue](https://github.com/CellMigrationLab/LabConstrictor-Fiji/issues) with what you ran and what you saw.
+Without the jar: the same release has `labconstrictor-fiji-script-<version>.zip`. Unzip it so that the script `LabConstrictor_Tools.groovy` and its `lib` folder both sit in `Fiji.app/scripts/Plugins/LabConstrictor/`. The menu entry is then **Plugins > LabConstrictor > LabConstrictor Tools** (no dots). Install the jar or the script, not both, or the menu lists the tool twice. Running a tool from a macro needs the jar.
 
 ## Open it
 
-Choose **Plugins > LabConstrictor > LabConstrictor Tools...** (without the dots if you installed the script). Pick an app and a tool, fill in the dialog, and press OK.
+1. Open an image in Fiji.
+2. Choose **Plugins > LabConstrictor > LabConstrictor Tools...**
+3. Pick an app, then a tool. A list with only one entry is skipped.
+4. Fill in the dialog and press **OK**. Hover over a label with an **ⓘ** to read what the setting means.
 
-When the run ends, the same tool's dialog opens again for the next run, with the values you used. Change what you need (the next guess, another parameter) and press OK again. Press **Cancel** when you are done.
-- An image's "(or file)" field starts empty again, so the next run uses the open image unless you choose a file again.
-- A field the tool marks "clear after run" (a guess, for example) goes back to its default after a run that worked.
-- Lists that come from another tool are asked again, so they are up to date.
-- While the dialog is open you cannot use other Fiji windows. To zoom or open another image, press Cancel, then start the tool from the menu again.
+![The dialog Fiji shows for a tool: image, model and detection settings, with Back, OK and Cancel buttons](https://raw.githubusercontent.com/CellMigrationLab/LabConstrictor-Fiji/main/docs/img/fiji-dialog.png)
 
-**< Back** (beside OK and Cancel) takes you one window back: from a tool's dialog to the list of tools, and from the list of tools to the list of apps. If you pick the same tool again, its dialog shows what you had typed. A list with only one entry is skipped, so Back goes past it.
+When the run ends, the same dialog opens again with the values you used, ready for the next run. Change what you need and press **OK** again, or press **Cancel** when you are done. **< Back** takes you one step back: from the dialog to the list of tools, and from there to the list of apps.
 
-The next time you open the menu, the app and tool choosers start on the app and tool you picked last.
+Good to know:
 
-A first run needs an installed LabConstrictor app that declares tools. If none is registered, Fiji shows the message "No LabConstrictor apps are registered" and stops.
+- Each image input has a chooser for an open image and an "(or file)" field. If you give both, the file is used. After a run the "(or file)" field is empty again, so the next run uses the open image.
+- Results open as image windows, a Results table, outlines or points on the image, or lines in the Log window.
+- A progress bar shows while a tool runs, and the Log window shows the tool's progress messages (at most one every 10 seconds). After a minute without news, the Log says the tool is still running. Press **Esc** to cancel.
+- After every run, the Log window shows a terminal command and a Python snippet that repeat the run outside Fiji.
+- While the dialog is open you cannot use other Fiji windows. To zoom or to open another image, press **Cancel**, then start the tool from the menu again. The menu remembers the app and tool you used last.
+- A pixel-size setting follows the image's calibration until you type a value.
 
-- Each image input has a chooser for an open image and an "(or file)" field. A file wins.
-- Results open as image windows, a Results table, ROIs or overlays on the image, or lines in the Log window.
-- Press Esc to cancel. A progress bar shows while a tool runs; the tool's progress messages also go to the Log window (at most every 10 s), and after a minute without one the Log says the tool is still running.
-- An app can declare the oldest Fiji plugin it needs. If yours is older, the Log window says which version to get; if the app marks it as required, the app is left out of the list until you update the plugin.
-- After every run, the Log window shows the terminal line and the Python snippet that repeat it outside Fiji.
+## Check that it worked
+
+Install the [Playground](https://cellmigrationlab.github.io/LabConstrictor-Site/apps/labconstrictor-playground/) app, choose it in the menu and run its **Feature tour** tool with every field left as it is: the tool makes its own small demo image. You should get a label image, tables, and the message "Found 16 blob(s)".
 
 ## If something does not work
 
-- A failure dialog shows the tool's error, the worker's last output and where the log is: `~/.labconstrictor/logs/labconstrictor.log`.
-- `labconstrictor-tools doctor` shows which apps are registered and why one might be skipped.
-- No menu entry: the jar is not directly in `Fiji.app/plugins/`, or Fiji was not restarted.
-- Pixel-size field: there is no "use the image's calibration" button; the field follows the image by itself until you type a value. Typing the value the box already shows cannot be detected in a Fiji dialog, so the field is cleared and the run is blocked with a message; a wrong value is never sent.
+- **No menu entry.** The jar is not directly in `Fiji.app/plugins/`, or Fiji was not restarted.
+- **"No LabConstrictor apps are registered".** No LabConstrictor app is installed yet. Install one, then start the tool again.
+- **An app is missing from the list.** The Log window says why: the app may not offer its tools in Fiji, it may have been installed with an old installer (install its newest version), or it may need a newer version of this plugin (the Log names the version to get).
+- **A run fails.** The error dialog shows the tool's error and where the log file is: `~/.labconstrictor/logs/labconstrictor.log`.
+- **The pixel-size field was cleared and the run was refused.** The image has no usable calibration, so nothing is assumed: type the pixel size. This also happens if you type exactly the value the field already showed; type it again.
+- **You want to know which apps are found.** `labconstrictor-tools doctor`, run in a terminal, shows which apps are registered and why one might be skipped.
+- **You want to report a bug.** Open an [issue](https://github.com/CellMigrationLab/LabConstrictor-Fiji/issues) with what you ran and what you saw.
 
-Source, macro replay (needs the jar) and issues: [LabConstrictor-Fiji](https://github.com/CellMigrationLab/LabConstrictor-Fiji).
+Every rule the plugin follows, and how to run a tool from a macro: [technical reference](https://github.com/CellMigrationLab/LabConstrictor-Fiji/blob/main/docs/REFERENCE.md). Source code and issues: [LabConstrictor-Fiji](https://github.com/CellMigrationLab/LabConstrictor-Fiji).
