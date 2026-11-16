@@ -1,6 +1,6 @@
 # Technical reference: the Fiji plugin
 
-Details for developers and curious users: every rule the plugin follows, macro replay, the intended fallbacks and the tests. To install and use the plugin, read the [README](../README.md) or the [user guide](user-guide.md).
+Details for developers and curious users: every rule the plugin follows, macro replay, the intended fallbacks and the tests. To install and use the plugin, read the [Fiji guide](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/fiji/) (its source is [user-guide.md](user-guide.md)).
 
 The dialog for each tool is generated from the tool's declared schema (see [LabConstrictor-Tools](https://github.com/CellMigrationLab/LabConstrictor-Tools)); the tool runs in the app's own Python
 environment through [Appose](https://github.com/apposed/appose), so Fiji never imports the app's packages.
@@ -45,24 +45,13 @@ environment through [Appose](https://github.com/apposed/appose), so Fiji never i
 * **Retention** (docs/SPEC_WRONG_SCIENCE.md section 3): **Fiji never deletes anything under `<LC_HOME>/results` or `<LC_HOME>/runs`.** For every run that starts a worker, Fiji makes `runs/<millisecond time>_<app>_<tool>/` and writes `.lc-owner.json` first (`lc_marker` 1, `kind` `run`, `name`, `host` `fiji`, `pid`, `created`, `token`); when the run is over it writes `run.json` and then, last and atomically, `.lc-done.json` (`ok`, `failed` or `cancelled`: COMPLETE is ok, CANCELED cancelled, FAILED failed, and CRASHED cancelled when the person had pressed Esc and failed otherwise). A results folder `results/<YYYYMMDDTHHMMSS>_<6 hex>_<app>_<tool>/` is made only when a file has to be kept (a file the tool wrote inside Fiji's temporary job folder, a result Fiji cannot show or place) and gets the same two markers; the Log says where the file is, and the run record lists it under `reported_paths`. Then Fiji starts `<the app's Python> -m labconstrictor_tools prune` in a subprocess (it does not wait, ignores the exit code and writes a failure to the shared log; the newest 20 results and 50 run records are kept, counted over finished folders that carry the markers, and a folder of yours or one from an older version without markers is never touched). The status of a finished run, and the content of `run.json`, are produced by the Tools of the app (`labconstrictor_tools.runs.done_status`, `build_record`, `record_json`), not by a copy of their rules here, so **Tools 0.3.0a1 or newer (tag `v0.3.0-alpha.1`) is required**: with an older one the run is refused with a sentence that says so, before anything starts. A Tools without the `retention_prune` feature gets no prune started (the Log says so) and Fiji does not delete the folders itself instead: they stay until Tools is updated. A run whose folders are left without a done marker (Fiji or the machine stopped during the run) is never removed.
 
 ## Install
-1. Install a LabConstrictor app (its installer registers it; `labconstrictor-tools list` / `labconstrictor-tools doctor` check it). The plugin needs **labconstrictor-tools 0.3.0a1 or newer** in the app (tag `v0.3.0-alpha.1`); an app with an older one is left out of the list with a sentence in the Log.
-2. Download `labconstrictor-fiji-<tag>.jar` from the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-Fiji/releases),
-   put it into `Fiji.app/plugins/` (remove an older `labconstrictor-fiji-*.jar`) and restart Fiji.
-3. Run **Plugins > LabConstrictor > LabConstrictor Tools...**.
+The install steps, the current version and the troubleshooting list are in the [Fiji guide](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/fiji/); this section adds only what developers need.
 
-The install page for the apps and all three hosts is [Tools `docs/INSTALL.md`](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/INSTALL.md). Which apps Fiji lists: apps declare the hosts that list them (`hosts:` in `labconstrictor-app.yaml`; Tools feature `app_hosts_v1`, PROTOCOL.md section App hosts). Apps without a declaration (installed with an older installer) are listed in every host and the Log says so ("declares no hosts"). Intended for Fiji: Playground, NucleiSky, Guess the Condition, StarDist2D and VLab4Mic; CellTracksColab is notebook-only.
+* The plugin needs **labconstrictor-tools 0.3.0a1 or newer** in the app; an app with an older one is left out of the list with a sentence in the Log (see **Tools compatibility** above). `labconstrictor-tools list` and `labconstrictor-tools doctor` show which apps are registered.
+* Installing an app is in the [Install an app](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/install/) guide. Which apps Fiji lists: apps declare the hosts that list them (`hosts:` in `labconstrictor-app.yaml`; Tools feature `app_hosts_v1`, PROTOCOL.md section App hosts). Apps without a declaration (installed with an older installer) are listed in every host and the Log says so ("declares no hosts"). Intended for Fiji: Playground, NucleiSky, Guess the Condition, StarDist2D and VLab4Mic; CellTracksColab is notebook-only.
+* Each release carries three files: `labconstrictor-fiji-<tag>.jar`, `labconstrictor-fiji-script-<tag>.zip` and `SHA256SUMS` (the checksums of the other two). The zip is the no-jar alternative: it holds the script `LabConstrictor_Tools.groovy` **and the `lib` folder it needs** (the script alone stops with a message saying where it looked for its helpers). Fiji also lists the helper files of `lib` in the menu, which is harmless. Macro calls (`run("LabConstrictor Tools...", ...)`) need the jar.
 
-The release also carries `labconstrictor-fiji-script-<tag>.zip`: the no-jar alternative. It holds the script `LabConstrictor_Tools.groovy` **and the `lib` folder it needs**
-(the script alone stops with a message saying where it looked for its helpers). Unzip it so that both sit in `Fiji.app/scripts/Plugins/LabConstrictor/` and use **Plugins > LabConstrictor > LabConstrictor Tools**
-(Fiji also lists the helper files of `lib` in the menu, which is harmless); macro calls (`run("LabConstrictor Tools...", ...)`) need the jar.
-`SHA256SUMS` lists the checksums of both files. Every release jar is installed in Fiji and run on a small GUI case before it is attached.
-
-**Support.** The release gate is Linux: the exact jar is installed in the Fiji build named in the release notes and run on GUI cases. Windows and macOS (arm64) get a best-effort check in the same release run (the menu entry exists and the dialog lists a registered app); its result is shown in that run's summary and it can fail without blocking a release. People have also tested the plugin on Windows and macOS.
-
-**If it does not work**
-* No menu entry: the jar is not in `Fiji.app/plugins/` (not in a subfolder), or Fiji was not restarted. With both the jar and the script installed the menu lists the tool twice, so keep one.
-* No application to choose: no LabConstrictor app is registered; run `labconstrictor-tools doctor`.
-* A run fails: the error dialog and `~/.labconstrictor/logs/labconstrictor.log` say why.
+**Support.** The plugin has been tested on Linux, Windows and macOS. Every release run also checks the exact jar it attaches. On Linux it is installed in the Fiji build named in the release notes and run on GUI cases; the files are attached only when these pass. On Windows and macOS (arm64) a shorter check confirms that the menu entry exists and that the dialog lists a registered app; its result is in the run's summary and does not hold up the release.
 
 **Known limits of the pixel-size field.** There is no "use the image's calibration" button: the field follows the image by itself, until you type a value.
 Typing the value the box already shows cannot be detected in a SciJava dialog, so that field is cleared and the run is blocked with a message; a wrong value is never sent.
@@ -110,7 +99,7 @@ These are deliberate: the host does something simpler instead of failing, writes
 `tests/run_cases.py` drives desktop Fiji on a virtual screen (Linux: `xvfb-run`), answering the real SciJava dialogs with
 `tests/test_harness.groovy` (the only place with test hooks) and writing JSON reports and screenshots to `evidence/`.
 
-    pip install git+https://github.com/CellMigrationLab/LabConstrictor-Tools numpy pandas tifffile scipy scikit-image   # or the tag: git+https://github.com/CellMigrationLab/LabConstrictor-Tools@v0.3.0-alpha.2
+    pip install git+https://github.com/CellMigrationLab/LabConstrictor-Tools numpy pandas tifffile scipy scikit-image
     export LC_FIJI_HOME=/path/to/Fiji.app
     python tests/run_cases.py                      # the portable cases (example app and small test apps), loose script
     LC_FIJI_MODE=jar python tests/run_cases.py     # the same cases through the built jar (needs mvn); each case prints its duration
@@ -135,6 +124,6 @@ for each source, and the `cal_*` cases do CAL-T1..CAL-T6 through the real dialog
 
 The retention cases (SPEC_WRONG_SCIENCE section 3, `conformance.json` `wrong_science.retention`) are `tests/cases/ret_*.json` and `unit_*retention*`/`unit_sixty_runs*`/`unit_the_host_never*` (groups of `tests/unit_groups_retention.groovy`): the real host with the `prune` subprocess replaced by a recorder (`tests/prune_recorder.py`: HRET-04, started after every done marker exists; a failing command does not fail the run), by the real Tools `prune` (what Fiji wrote is cleaned up, a person's own folders, folders without markers and unfinished ones are not), and by nothing (an old Tools: refused before anything starts; a Tools with no `prune`: nothing started, nothing deleted). `tests/retention_support.py` builds the folders before a run and judges them afterwards by the rules of SPEC 3.8 written out, not through the code that wrote them; `tests/fake_tools/` are two stand-ins for an old Tools. Every `fixtures_hosts` id of the conformance file is run by a case that names it (`"conformance": [...]`) or by a unit group, or the coverage check fails.
 
-Status: **testing phase**. The automated GUI tests run on Linux (Fiji with Java 21, Xvfb); people have also tested the plugin on Windows and macOS. Please report what you find in the
+Status: **testing phase**. The plugin has been tested on Linux, Windows and macOS; the automated GUI tests run on Linux (Fiji with Java 21, Xvfb). Please report what you find in the
 [issues](https://github.com/CellMigrationLab/LabConstrictor-Fiji/issues). SciJava Command generation
 (a menu command per tool, headless use) is not implemented. License: MIT.

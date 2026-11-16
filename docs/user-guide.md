@@ -15,13 +15,15 @@ Run the tools of your LabConstrictor apps from Fiji (ImageJ): one menu entry lis
 
 ## Install
 
-1. Download `labconstrictor-fiji-<version>.jar` from the newest release on the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-Fiji/releases).
+The current version is `v0.1.0-alpha.7`.
+
+1. Download [`labconstrictor-fiji-v0.1.0-alpha.7.jar`](https://github.com/CellMigrationLab/LabConstrictor-Fiji/releases/download/v0.1.0-alpha.7/labconstrictor-fiji-v0.1.0-alpha.7.jar). Newer versions, when there are any, are on the [Releases page](https://github.com/CellMigrationLab/LabConstrictor-Fiji/releases).
 2. Put it into the `plugins` folder of your Fiji (`Fiji.app/plugins/`, not a subfolder). Remove any older `labconstrictor-fiji-*.jar` from that folder.
 3. Restart Fiji.
 
 There is no Fiji update site yet, so to update you repeat these steps with the newer file.
 
-Without the jar: the same release has `labconstrictor-fiji-script-<version>.zip`. Unzip it so that the script `LabConstrictor_Tools.groovy` and its `lib` folder both sit in `Fiji.app/scripts/Plugins/LabConstrictor/`. The menu entry is then **Plugins > LabConstrictor > LabConstrictor Tools** (no dots). Install the jar or the script, not both, or the menu lists the tool twice. Running a tool from a macro needs the jar.
+Without the jar: the same release has `labconstrictor-fiji-script-v0.1.0-alpha.7.zip`. Unzip it so that the script `LabConstrictor_Tools.groovy` and its `lib` folder both sit in `Fiji.app/scripts/Plugins/LabConstrictor/`. The menu entry is then **Plugins > LabConstrictor > LabConstrictor Tools** (no dots). Install the jar or the script, not both, or the menu lists the tool twice. Running a tool from a macro needs the jar.
 
 ## Open it
 
