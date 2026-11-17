@@ -2173,7 +2173,8 @@ void showImage(Map app, Map r, Map run, Map summary, boolean replace = false) {
         summary["size_mismatch_" + r.name] = mismatch
     }
     imp.show()
-    summary["image_" + r.name] = [imp.getWidth(), imp.getHeight(), imp.getNSlices() * imp.getNFrames(), imp.getBitDepth()]
+    summary["image_" + r.name] = [imp.getWidth(), imp.getHeight(), imp.getStackSize(), imp.getBitDepth()]   // every plane, channels included
+    summary["dims_" + r.name] = [frames: imp.getNFrames(), slices: imp.getNSlices(), channels: imp.getNChannels()]   // as Fiji shows it: a hyperstack's T, Z, C
     summary["calibration_" + r.name] = [width: imp.getCalibration().pixelWidth, height: imp.getCalibration().pixelHeight, unit: imp.getCalibration().getUnit(),
                                         x_origin: imp.getCalibration().xOrigin, y_origin: imp.getCalibration().yOrigin]
 }

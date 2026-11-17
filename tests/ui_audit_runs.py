@@ -189,8 +189,13 @@ def compare_result(name: str, kind: str, wanted: dict[str, Any], summary: dict[s
             problems.append("%s: %r outlines, expected %r" % (name, (shown or {}).get("count"), wanted["features"]))
     elif kind in ("image", "labels") and isinstance(shown, list) and len(shown) == 4:
         width, height, planes, depth = shown
-        if "shape" in wanted and list(wanted["shape"]) != ([height, width] if planes == 1 else [planes, height, width]):
-            problems.append("%s: shape %s, expected %s" % (name, [height, width] if planes == 1 else [planes, height, width], wanted["shape"]))
+        dims = summary.get("dims_" + name)  # T, Z, C as Fiji shows them (a result written as an ImageJ hyperstack); absent in older plugins
+        if isinstance(dims, dict):
+            got = [dims[k] for k in ("frames", "slices", "channels") if dims.get(k, 1) > 1] + [height, width]
+        else:
+            got = [height, width] if planes == 1 else [planes, height, width]
+        if "shape" in wanted and list(wanted["shape"]) != got:
+            problems.append("%s: shape %s, expected %s" % (name, got, wanted["shape"]))
         if "dtype" in wanted and DTYPES.get(depth) != wanted["dtype"]:
             problems.append("%s: dtype %s (%d bit), expected %s" % (name, DTYPES.get(depth), depth, wanted["dtype"]))
         unchecked += ["%s %s" % (name, key) for key in ("mean", "max", "n_labels") if key in wanted]
