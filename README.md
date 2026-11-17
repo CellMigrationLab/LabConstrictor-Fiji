@@ -6,7 +6,7 @@ Run the analysis tools of your LabConstrictor apps from inside [Fiji](https://fi
 
 *The StarDist2D app's "Segment nuclei" tool, run from Fiji on an open image: outlines on the image, a label image and a table.*
 
-> **Experimental.** This is an alpha pre-release. It has been tested on Linux, Windows and macOS, but expect bugs and changes. Please [tell us](https://github.com/CellMigrationLab/LabConstrictor-Fiji/issues) what you find.
+It has been tested on Linux, Windows and macOS. Please [tell us](https://github.com/CellMigrationLab/LabConstrictor-Fiji/issues) what you find.
 
 ## Install
 
