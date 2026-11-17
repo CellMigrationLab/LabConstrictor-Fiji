@@ -121,6 +121,15 @@ def test_runs() -> None:
     blank = dict(summary, image_out=[0, 0, 1, 8], values_values={})
     problems = runs.run_problems(tool, case, inputs, preload, fin(blank), files)[0]
     check("seeded_blank_result_fails", any("blank" in p and "out" in p for p in problems) and any("empty" in p and "values" in p for p in problems), str(problems)[:200])
+    # A hyperstack result (Tools result_axes_v1): the shape comes from dims_<name> in T, Z, C order; without dims_ as before
+    hyper = {"image_out": [96, 80, 80, 32], "dims_out": {"frames": 4, "slices": 20, "channels": 1}}
+    check("hyperstack_shape_from_dims", runs.compare_result("out", "image", {"shape": [4, 20, 80, 96]}, hyper)[0] == [], str(runs.compare_result("out", "image", {"shape": [4, 20, 80, 96]}, hyper)[0]))
+    composite = {"image_out": [96, 80, 3, 32], "dims_out": {"frames": 1, "slices": 1, "channels": 3}}
+    check("composite_channels_counted", runs.compare_result("out", "image", {"shape": [3, 80, 96]}, composite)[0] == [], str(runs.compare_result("out", "image", {"shape": [3, 80, 96]}, composite)[0]))
+    swapped = runs.compare_result("out", "image", {"shape": [20, 4, 80, 96]}, hyper)[0]
+    check("seeded_wrong_hyperstack_order_fails", any("shape [4, 20, 80, 96], expected [20, 4, 80, 96]" in p for p in swapped), str(swapped))
+    old = runs.compare_result("out", "image", {"shape": [80, 80, 96]}, {"image_out": [96, 80, 80, 32]})[0]
+    check("without_dims_as_before", old == [], str(old))
     wrong = dict(summary, values_values={"mode": "a"})
     check("seeded_wrong_value_fails", any("mode is 'a'" in p for p in runs.run_problems(tool, case, inputs, preload, fin(wrong), files)[0]), "")
     missing = {k: v for k, v in summary.items() if k != "table_rows"}
