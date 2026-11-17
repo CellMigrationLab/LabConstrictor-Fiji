@@ -2,9 +2,6 @@
 
 Run the tools of your LabConstrictor apps from Fiji (ImageJ): one menu entry lists every installed app, you pick a tool, fill in a normal Fiji dialog, and the results open as image windows, outlines, tables and Log lines.
 
-> [!WARNING]
-> **Experimental.** This plugin is an alpha pre-release. It has been tested on Linux, Windows and macOS, but expect bugs and changes, and do not rely on it for work you cannot redo.
-
 ![Fiji after running the StarDist2D app: nuclei outlined on the open image, a label image and a table of the objects](https://raw.githubusercontent.com/CellMigrationLab/LabConstrictor-Fiji/main/docs/img/fiji-stardist.png)
 
 ## What you need

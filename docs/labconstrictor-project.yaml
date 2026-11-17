@@ -2,4 +2,4 @@
 # How this project is listed on the LabConstrictor website's Ecosystem page. Keep the status true.
 name: Fiji
 summary: One Fiji menu entry lists the tools of every installed LabConstrictor app and builds a dialog for each.
-status: Experimental
+status: Available
