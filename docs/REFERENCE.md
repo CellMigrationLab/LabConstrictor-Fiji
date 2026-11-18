@@ -1,6 +1,6 @@
 # Fiji plugin reference
 
-What the LabConstrictor Fiji plugin does, rule by rule, how it works inside, how to run a tool from a macro, and how to build and test it. To install and use the plugin, read the [Fiji guide](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/fiji/) (its source is [user-guide.md](user-guide.md)).
+What the LabConstrictor Fiji plugin does, rule by rule, how it works inside, how to run a tool from a macro, and how to build and test it. To install and use the plugin, read the [Fiji guide](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/fiji/).
 
 ## How it works
 

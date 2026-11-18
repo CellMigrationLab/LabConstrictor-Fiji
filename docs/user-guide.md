@@ -41,6 +41,7 @@ When the run ends, the same dialog opens again with the values you used, ready f
 >
 > - Each image input has a chooser for an open image and an "(or file)" field. If you give both, the file is used. After a run the "(or file)" field is empty again, so the next run uses the open image.
 > - Results open as image windows, a Results table, outlines or points on the image, or lines in the Log window.
+> - The files a tool writes go to a folder under `~/.labconstrictor/results`. Only the newest 20 result folders are kept, older ones are deleted automatically: save a result image from Fiji, or copy the folder, to keep it.
 > - A progress bar shows while a tool runs, and the Log window shows the tool's progress messages (at most one every 10 seconds). After a minute without news, the Log says the tool is still running. Press **Esc** to cancel the run.
 > - After every run, the Log window shows a terminal command and a Python snippet that repeat the run outside Fiji.
 > - While the dialog is open you cannot use other Fiji windows. To zoom or open another image, press **Cancel**, then start the tool from the menu again. The plugin remembers the app and tool you used last.
