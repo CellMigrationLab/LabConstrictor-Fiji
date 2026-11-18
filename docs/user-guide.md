@@ -61,7 +61,7 @@ You should get a label image, tables, and the message "Found 16 blob(s)".
 - **"No LabConstrictor apps are registered".** No LabConstrictor app is installed yet. Install one, then start the tool again.
 - **An app is missing from the list.** The Log window says why: the app may not offer its tools in Fiji, it may have been installed with an old installer (install its newest version), or it may need a newer version of this plugin (the Log names the version to get).
 - **A run fails.** The error dialog shows the tool's error and where the log file is: `~/.labconstrictor/logs/labconstrictor.log`.
-- **The pixel-size field was cleared and the run was refused.** The image has no usable calibration, and the plugin never guesses one: type the pixel size.
+- **The pixel-size field was cleared and the run was refused.** The image has no usable calibration, and the plugin never guesses one: type the pixel size. Choose the image first, then type the value. Typing exactly the number the field already shows does not count as your own value (Fiji does not report it as a change), so the field still follows the image you pick next.
 - **You want to know which apps are found.** The `doctor` command of an app's Python shows which apps are registered and why one might be skipped: see [Check an installed app](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/tools-install/#check-an-installed-app).
 - **You want to report a bug.** Open an [issue](https://github.com/CellMigrationLab/LabConstrictor-Fiji/issues) with what you ran and what you saw.
 
