@@ -1,129 +1,238 @@
-# Technical reference: the Fiji plugin
+# Fiji plugin reference
 
-Details for developers and curious users: every rule the plugin follows, macro replay, the intended fallbacks and the tests. To install and use the plugin, read the [Fiji guide](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/fiji/) (its source is [user-guide.md](user-guide.md)).
-
-The dialog for each tool is generated from the tool's declared schema (see [LabConstrictor-Tools](https://github.com/CellMigrationLab/LabConstrictor-Tools)); the tool runs in the app's own Python
-environment through [Appose](https://github.com/apposed/appose), so Fiji never imports the app's packages.
-
-## What the plugin does, rule by rule
-
-* Parameters become native SciJava dialog fields: numbers with ranges and units, as text fields (see **Number limits**; a required number without a default starts at the allowed value nearest to 0), choices, checkboxes, file and folder fields. A value that is optional and has no default (a seed, a time limit) has a **"Set <name>"** checkbox: unticked, the tool receives `None`.
-* **Input help (ⓘ)**: an input with a description has an ⓘ after its label; hover over the label or the field to read the description. SciJava's dialog shows the description only on hover: the click that keeps it open and the help on keyboard focus of the Napari and QuPath forms are not possible here. An input without a description has no ⓘ.
-* **Group headings and advanced settings**: parameters of a `group` are shown together under a "— Group —" heading and `advanced` ones last under "— Advanced settings —". `enabled_when` is not applied (SciJava dialogs cannot grey fields out dynamically): all parameters stay editable and the tool must accept them either way. The Napari widget implements all three.
-* **Interaction hints**: `choices_from` (a string parameter whose options another tool provides) becomes a dropdown. Fiji builds the dialog before anything is typed, so it asks the source tool with the values the app used in its previous run (kept in `<LC_HOME>/state/<app>.json`) and shows a plain text field until there are some. **Lookups are bounded** (docs/SPEC_WRONG_SCIENCE.md section 5): the questions of one dialog are asked one at a time, in the order of the form, by **one** worker process; each answer goes to its own dropdown; a question that has not answered within **60 s** (`limits.lookup_timeout_s`, a default not yet confirmed) is cancelled, its worker is killed and thrown away, the field stays a text field and the Log says so; Esc cancels the question in flight; the worker is closed as soon as the last question is answered. A dependency you edit in the dialog does not ask again (the dropdown is filled before the dialog opens), so a lookup can never answer for a form that is gone: ASY-01, 02, 03 and 06 do not apply to Fiji (the reasons are in `tests/unit_groups_async.groovy`). **No worker outlives Fiji**: every worker (a run or a lookup) is known to one registry that closes it once, and a shutdown hook kills whatever is still alive when Fiji quits. `replace` on an output closes the previous window of that result (images, tables, and the alignment overlay) before showing the new one. `clear_after_run` puts the parameter back to its default (its "Set" box unticked) in the form that comes back after a run that succeeded (see **Run again**); after a run that failed or was cancelled it keeps its value, so that it can be corrected. `group_collapsed` is shown as a normal heading: SciJava dialogs cannot fold sections.
-* **Message and points outputs**: a `message` result goes to the Log and, when a person runs the tool, into a dialog (markdown emphasis removed). `points` become a multi-point ROI on the image they belong to (the `apply_to` image, else the first image input of the tool: always that image by object, never the current image or the image an earlier output showed; see **Coordinates** below), are kept in the ROI Manager as `<app>:<name>` (replaced by the next run when the output declares `Replace()`), and their properties appear in a results table.
-* **Channel selector**: an image input declared with `PickChannel()` gets a "channel" number next to it (1 = first); the tool receives only that channel (at the current Z and T), from an open image or from a file. A channel the image does not have is refused with a clear message. In a macro: `image_channel=2`.
-* **Run on the selection** (`RegionOf`): a "Use the selection as ..." box next to the region input sends the ROIs selected in the ROI Manager (else the ROI of the image) as a label image the size of the image (several are labels 1, 2, 3...). Nothing selected, a selection outside the image, or a file chosen for the image are refused with a clear message. In a macro: `selection_region=true`.
-* **Coordinates** (docs/SPEC_WRONG_SCIENCE.md section 1): a tool works on the pixels of the image Fiji wrote for it and never sees calibrated coordinates. Fiji records a *frame* for each exported image at the click (the image itself, its width and height, the origin of the exported area (0), the exported channel, z and t, and the downsample (1)); a point or outline vertex `x`, `y` is drawn at the ImageJ coordinate `c = x0 + (x + 0.5) * downsample` (pixel `i` spans `[i, i+1)`, so `x = 3` is drawn at 3.5), `RegionOf` masks have exactly the size of the exported image, and the calibration of the image (pixel size, origin) is never applied to a ROI. ImageJ images have no transform, so the mapping back is the identity by construction. A result with no `t` / `z` on a stack lands on the plane that was exported (the window's plane at the click; the picked channel for a `PickChannel` input), never on plane 1, and the Log says so once. Points or outlines that name planes (a `t` or `z` column or property) are not placed on the planes of a stack yet: they are shown as a table or a file instead. An image or labels result whose output declares `ApplyTo` takes the pixel size, units and origin of its source when it has the same width and height; with another size it stays at the pixel origin without calibration and the Log says `'name' is W x H but 'source' was exported as W2 x H2; shown at the pixel origin, not aligned`. An image given as a file is opened in its own window (titled with the file name) and its results go there; if Fiji cannot open it, or the tool has no image input, points are shown as a table and outlines are listed as a file, and the Log says where the files are (an owned folder `<LC_HOME>/results/<time>_<6 hex>_<app>_<tool>/`; Fiji never removes it, the Tools prune does once it is past the newest 20). Several ROIs of a `RegionOf` selection that sit on different planes of a stack are refused (`selection_mixed_planes`).
-* **Outlines** (`ShapesOut`, GeoJSON): drawn as an overlay on the image the outlines belong to, with holes kept (composite ROIs); the first 1000 are also listed in the ROI Manager (it becomes very slow with more); up to 50 000 outlines (features: every polygon of a shown feature is drawn) are shown, and the Log says `showing the first 50000 of T outlines` beyond that. Replace() swaps the previous outlines of the same output.
-* **Copy as command**: after every run the Log window carries the terminal line and the Python snippet that repeat it outside Fiji (a selection or one chosen channel cannot be repeated by a command line: the command names `region.tif` for a selection and sends the whole file for a channel, each with a `# name: ...` note; the file behind each open image is used; an image that was never saved gets a placeholder and a note). Text values are written into the Python snippet escaped like Python's `repr` (newline, tab, other control characters, quotes, backslashes). **Plugins > LabConstrictor > Copy last run as command** puts the terminal line of the last run on the clipboard (macro: `run("Copy last run as command")`, or `run("Copy last run as command", "kind=python")` for the Python snippet).
-* **2D tools** (an image declared with `Axes("YX")`): a Z-stack, time series, multi-channel or RGB image is refused with the worker's own sentence, `[wrong_dimensions] 'L' must be a 2D image (YX) but got 3D with shape (3, 32, 32)`; Fiji never picks the plane on screen for you (declare `PickChannel()` to choose a channel, or duplicate the plane you want first).
-* **Choices that are numbers** (`Literal[1, 2, 3]`): the dropdown shows the numbers as text and the tool receives the declared number (a macro `count=2` as well; `count=7` is refused with the list of options).
-* **Paths**: a file, table or folder given as a relative path is resolved against the folder Fiji runs in (the folder the existence check uses) and sent to the worker as an absolute path; the same text could be another file, or none, in the worker's own folder.
-* **Image size limit**: an open image of more than 4 GB (all planes, channels and samples) is refused with `image 'T' is 5.0 GB; exporting more than 4 GB is not supported`, never cropped or sent in part (same limit and sentence as the Napari form). An image given as a file is read by the worker and is not checked here.
-* **Refusals before a run** use the worker's sentences with their code: `[missing_parameter] 'L' is required: ...`, `[file_not_found] image file not found: P`, `[folder_not_found] 'L': folder not found: P` (and `[wrong_dimensions]`, see above).
-* **Run again**: after a run started from the menu, the same tool's form comes back for the next run, until Cancel is pressed; a tool used again and again (a game round, another parameter) needs no menu and no choosers each time. Each run is a run of its own (its own run record and Log lines; recorded options never mix two runs). The form starts from the values of the run before, except an image's "(or file)" field, which starts empty so that the image follows the open window again (a file left there would silently beat the open image), and a `clear_after_run` parameter after a run that succeeded. A dropdown starts on its previous entry only when it still lists it (a closed image window, a `choices_from` list that is asked again), and a pixel size linked to its image keeps a value you typed but follows the image again otherwise. The form is modal, as every SciJava dialog: to zoom or open the next image, press Cancel and start the tool again from the menu. A call from a macro runs once, with or without options (SciJava shows a macro no dialog, so a form that came back would run again and again).
-* **Back**: a **< Back** button sits beside OK and Cancel and goes one window back: from the tool's form (the first one, or the one that came back after a run) to the tool chooser, from the tool chooser to the app chooser. A chooser with one entry is never shown, so Back skips it, and a window with nothing before it (the app chooser, or the only tool of the only app) has no Back. Picking the same tool again starts its form from what it held when Back was pressed (same rules as the form that comes back; a `clear_after_run` field keeps its value, since nothing ran). After runs, Cancel on a chooser reached with Back ends them, as Cancel on the form does. SciJava's dialog has OK and Cancel only: the button is added to the dialog's own button row (`OptionPane.buttonArea`) as it opens; if a look and feel has no such row, the Log says so and the window has no Back.
-* **Chooser and description**: the choosers start on the app and tool picked last (kept in `<LC_HOME>/state/last_tool.json`; the first entry when there is none, or the app no longer has that tool); applications are listed in sorted order, two tools with the same label are listed as `label (id)` (a macro accepts either), and the tool's description is shown at the top of its dialog.
-* **Number limits** (docs/SPEC_WRONG_SCIENCE.md section 6): a number is checked when OK is clicked (dialog) or when the macro is read, and **a value beyond a limit is refused, never clamped, rounded or shortened**: no run starts, nothing is sent, and the sentence names the field and the limit, `'L' must be <= 9007199254740991, got 9007199254740992` (`>= -9007199254740991` for the other side, and the declared bound when the tool declares one: `'M' must be <= 10, got 11`). A whole number with no declared `Min` / `Max` holds **+-(2**53 - 1) = +-9007199254740991**, the largest every double and every JSON number holds exactly (`limits.form_integer_max` of the conformance file), and a float **+-1e15** (`limits.unbounded_float`; the sentence prints it as Python does, `1000000000000000.0`); a declared bound beyond these is narrowed to them and the sentence names the limit that applies. **The dialog's number fields are text fields** (a SciJava spinner cannot refuse, only cut), so the value sent is exactly what is typed: the request carries the integer, or the double nearest the typed text. Blanks around the text are ignored in the dialog; a macro value is exact (no blanks). An empty required field is refused (`'L' is required: type a number`: nothing stands in for it), as is an optional one that was ticked "Set" and left empty (`'L' is empty: type a number`), text that is not a number (`'L' must be an integer, got '2.5'`, `'L' must be a number, got 'abc'`), `NaN` / `Infinity` / `1e999` (`'L' must be a finite number, got 'x'`) and a text so close to zero that it would silently become 0.0 (`'L' is too close to zero to be held exactly, got '1e-400'`, wording of this plugin: the spec has none). The description of each field says what it takes. Two kinds of field still use a number widget of the toolkit and can therefore still cut or revert a typed number to their own range: a `Widget("slider")` with both bounds (its range is its declared range), and the pixel size field linked to an image by `PixelSizeOf` (it keeps its spinner until the calibration fields are reworked).
-* **A tool with a parameter type Fiji does not know** is left out of the chooser (`tool 'id': this tool cannot be shown: parameter 'x' has the unknown type 't'` in the Log); the other tools of the app stay available.
-* **Alignments**: a singular matrix (it collapses the image onto a line or a point) is applied forwards and the Log warns about it (`the alignment matrix is singular (determinant d): ...`); a matrix with values that are not finite numbers is still refused.
-* **Windows command lines** quote an argument by the C-runtime rules (backslashes in front of a quote, or at the end of a quoted argument, are doubled), checked against the shared vectors in `tests/fixtures/quote_vectors.json`.
-* **Tools compatibility** (docs/PROTOCOL.md, "Compatibility rules for hosts"): when the registered apps are read, the schema each app's Tools wrote is checked with the same rules as `labconstrictor_tools.compat.check_schema` (written in Groovy in `lib/LCCompat.groovy`; the vectors of `conformance.json` and the reference function are the tests). An app whose `tools_version` is below **0.3.0a1**, or missing, or whose `features` lack `reserved_inputs_v1` (or list none), is **left out with a sentence** (`this app's labconstrictor-tools 0.2.0rc1 is older than the 0.3.0a1 this host needs: update it`) in the Log, and in the dialog when no app is usable; a version that cannot be read is a warning (the app stays). The check of the schema says what Tools wrote at registration; before a run Fiji also asks the interpreter itself (see Retention). The worker gets 10 s to exit after its input is closed, then it is killed (`limits.worker_close_timeout_s`).
-* **Host requirements** (docs/PROTOCOL.md, "Host requirements", feature `host_requirements_v1`; `lib/LCHostRequirements.groovy`): an app can declare the oldest Fiji plugin it needs; when this plugin is older the app stays listed and the Log window says which version to get, and when the app marks it `required: true` the app is left out with that sentence.
-* **Worker environment**: like the command line and Napari, the worker keeps Fiji's working directory, never inherits the host's Python or Qt variables and runs with `PYTHONSAFEPATH=1`.
-* **Images from an open window *or* a file**: each image parameter has the open-image chooser and an "(or file)" field (a file
-  wins). With no image open, the file field is the only input. TIFF always; other formats if the app has `imageio`.
-* **Pixel size** (docs/SPEC_WRONG_SCIENCE.md section 2): a field linked to an image with `PixelSizeOf` follows that image's calibration, from explicit metadata only: a length unit and a number. The unit text is read through the conformance catalog (`labconstrictor_tools/conformance.json`, asked of the app's own Tools with `python -m labconstrictor_tools.conformance --path`; apps whose Tools predate it use the copy built into the script, and the Log says so): symbols (`um`, `µm`, `μm`, `nm`, `mm`, `cm`, `m`, `Å`) are exact and case-sensitive, words (`micron`, `Micrometre`, ` MILLIMETER `, `angstroms`) are matched in any case after trimming, ImageJ's own `micron` is 1 µm. The number alone is never a calibration: a scale with the unit `pixel` (or no unit, or ImageJ's blank default) is unknown, and so is a unit that is not a length (`unit 's' is not a length`), a damaged micro sign (`unit text '\ufffdm' is damaged; enter the pixel size`) and pixels whose X and Y sizes differ by more than 0.1 % (`pixels are not square`); within 0.1 % the field takes the mean. For a TIFF file the ImageJ `unit=` line or the OME physical size and unit win over the resolution tags, which count only with the unit INCH or CENTIMETER and not when they look like a default (72 or 96 dpi, 28.35 or 37.80 per cm; 72 dpi is what ImageJ itself writes for a picture). An image's own calibration is read again at the click. **The file chosen for the image wins over the open image**, also for the starting value. **Unknown is a value**: the field is cleared (it shows 0, the log says `not calibrated: 'image' has no pixel size`), the declared default is never a stand-in, and a run that needs the field is refused (`'pixel_size' needs a value: 'image' has no pixel size. Enter it in um.`); an `Optional` pixel size is sent as nothing (the "Set" box of such a field is gone: calibrated sends the value, unknown sends nothing). **A value you type is yours** and survives a change of image, file or `use` box; typing 0 (the lowest the box shows) clears it so that it follows the image again. The dialog tells the host of an edit only when the value changes: typing the value the box already shows is not an event, so such a value is not marked as typed. The request carries the reserved input `_calibration` (per axis, in µm, with `source` image, file or user and the raw scale and unit text), which tools never see; it is also in the run record under `inputs`. In a macro a pixel size you give is yours; one you leave out follows the image (or file) the macro names.
-* Typed results: images/labels open as windows (`<app>:<result name>`), alignments as an overlay window, values in the Log window (`name=value`; a value that is not a finite number reads `(not a finite number)`), tables as a Results window named after the output (`name [1]`, `name [2]`... when a window of that name is open, unless the output declares `Replace()`), files by path in the Log.
-* **"No match" is a message, not an error**: a tool that fails with the code `no_match` / `no_result` opens a plain message window instead of the red error dialog.
-* Progress bar, Esc to cancel (tools that ignore cancel are killed after 3 s), no worker left behind. The tool's progress messages also go to the Log window (a changed message at most every 10 s), and after 60 s without one the Log says the tool is still running (feature `log_progress_v1`). A run stopped with Esc says `cancelled` in the status bar, or `cancelled (worker stopped)` when the tool ignored Cancel and its worker had to be killed (never `crashed`: the person asked for the stop).
-* **Worker cleanup and results**: Appose 0.12.0 (the version Fiji declares) only destroys the worker's own process on a kill, so Fiji lists the processes the worker started (a tool's `subprocess.Popen`, an external executable) before every kill or close and stops them too; they would otherwise outlive the worker and, holding its output pipes, keep the task from ever reporting its end. This needs Java 9 or later (Fiji's bundled Java is 21); on Java 8 Fiji logs a warning and cannot stop them. Appose 0.12.0 also sets a task's status to COMPLETE before it fills the outputs, so Fiji waits for the client's end event (sent after the outputs are in) and never reads the outputs from the status alone; if the outputs do not arrive within 10 s the run is reported as failed, not shown as a success.
-* Failures show the tool's error, the worker's last output and the log location (a worker that dies gets one line with the likely cause, like the Python hosts: out of memory, a native crash, a missing package, and **"the tool module failed to import" only when the worker's own last words on stderr say `cannot import tool module`**: exit code 3 alone is also what the Windows C runtime gives `abort()`, so it is not called an import failure); unexpected script errors are logged with their
-  stack trace. All front-ends share `~/.labconstrictor/logs/labconstrictor.log` (rotated at 1 MB with five numbered backups, `.log.1` to `.log.5`, and the level names of the Python tools; a rotation that fails, for instance on Windows because another program holds the file, is reported once on the console and the log keeps growing). Run records and results are kept and cleaned up as described under **Retention** below.
-
-* **Retention** (docs/SPEC_WRONG_SCIENCE.md section 3): **Fiji never deletes anything under `<LC_HOME>/results` or `<LC_HOME>/runs`.** For every run that starts a worker, Fiji makes `runs/<millisecond time>_<app>_<tool>/` and writes `.lc-owner.json` first (`lc_marker` 1, `kind` `run`, `name`, `host` `fiji`, `pid`, `created`, `token`); when the run is over it writes `run.json` and then, last and atomically, `.lc-done.json` (`ok`, `failed` or `cancelled`: COMPLETE is ok, CANCELED cancelled, FAILED failed, and CRASHED cancelled when the person had pressed Esc and failed otherwise). A results folder `results/<YYYYMMDDTHHMMSS>_<6 hex>_<app>_<tool>/` is made only when a file has to be kept (a file the tool wrote inside Fiji's temporary job folder, a result Fiji cannot show or place) and gets the same two markers; the Log says where the file is, and the run record lists it under `reported_paths`. Then Fiji starts `<the app's Python> -m labconstrictor_tools prune` in a subprocess (it does not wait, ignores the exit code and writes a failure to the shared log; the newest 20 results and 50 run records are kept, counted over finished folders that carry the markers, and a folder of yours or one from an older version without markers is never touched). The status of a finished run, and the content of `run.json`, are produced by the Tools of the app (`labconstrictor_tools.runs.done_status`, `build_record`, `record_json`), not by a copy of their rules here, so **Tools 0.3.0a1 or newer (tag `v0.3.0-alpha.1`) is required**: with an older one the run is refused with a sentence that says so, before anything starts. A Tools without the `retention_prune` feature gets no prune started (the Log says so) and Fiji does not delete the folders itself instead: they stay until Tools is updated. A run whose folders are left without a done marker (Fiji or the machine stopped during the run) is never removed.
-
-## Install
-The install steps, the current version and the troubleshooting list are in the [Fiji guide](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/fiji/); this section adds only what developers need.
-
-* The plugin needs **labconstrictor-tools 0.3.0a1 or newer** in the app; an app with an older one is left out of the list with a sentence in the Log (see **Tools compatibility** above). `labconstrictor-tools list` and `labconstrictor-tools doctor` show which apps are registered.
-* Installing an app is in the [Install an app](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/install/) guide. Which apps Fiji lists: apps declare the hosts that list them (`hosts:` in `labconstrictor-app.yaml`; Tools feature `app_hosts_v1`, PROTOCOL.md section App hosts). Apps without a declaration (installed with an older installer) are listed in every host and the Log says so ("declares no hosts"). Intended for Fiji: Playground, NucleiSky, Guess the Condition, StarDist2D and VLab4Mic; CellTracksColab is notebook-only.
-* Each release carries three files: `labconstrictor-fiji-<tag>.jar`, `labconstrictor-fiji-script-<tag>.zip` and `SHA256SUMS` (the checksums of the other two). The zip is the no-jar alternative: it holds the script `LabConstrictor_Tools.groovy` **and the `lib` folder it needs** (the script alone stops with a message saying where it looked for its helpers). Fiji also lists the helper files of `lib` in the menu, which is harmless. Macro calls (`run("LabConstrictor Tools...", ...)`) need the jar.
-
-**Support.** The plugin has been tested on Linux, Windows and macOS. Every release run also checks the exact jar it attaches. On Linux it is installed in the Fiji build named in the release notes and run on GUI cases; the files are attached only when these pass. On Windows and macOS (arm64) a shorter check confirms that the menu entry exists and that the dialog lists a registered app; its result is in the run's summary and does not hold up the release.
-
-**Known limits of the pixel-size field.** There is no "use the image's calibration" button: the field follows the image by itself, until you type a value.
-Typing the value the box already shows cannot be detected in a SciJava dialog, so that field is cleared and the run is blocked with a message; a wrong value is never sent.
-
-Developers: `mvn package` builds `target/labconstrictor-fiji-<version>.jar` (Java 8+ bytecode, needs Java and Maven; the version is the one in `pom.xml`).
-The release workflow (`.github/workflows/release.yml`) builds it as the release tag; "Run workflow" with a tag is a dry run that publishes nothing.
-
-Fiji update-site publication is not set up yet.
+What the LabConstrictor Fiji plugin does, rule by rule, how it works inside, how to run a tool from a macro, and how to build and test it. To install and use the plugin, read the [Fiji guide](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/fiji/) (its source is [user-guide.md](user-guide.md)).
 
 ## How it works
-`LabConstrictorCommand.java` (the menu entry, reports start-up failures) starts `LabConstrictor_Tools.groovy` (the new code lives in typed helper files of `lib/`, loaded on first use: `LCRetention` for the folders, markers and the prune, `LCRunRecord` for the run record), which reads the registry
-(`~/.labconstrictor/apps`, `LC_APPS_PATH`, system folder; entries are trust-checked), builds a SciJava `ModuleInfo` from the schema, lets
-Fiji's own input harvester show the dialog, exports images as TIFF (or passes file paths), and drives the worker with Appose's Java
-client using the restricted `lc:<tool>` protocol. The Groovy script is interpreted at run time; the jar is a packaging shell, not a port.
 
-## Macro replay (prototype; the Macro Recorder does not record this plugin yet)
-A macro line typed by hand, e.g.
+The menu entry **Plugins > LabConstrictor > LabConstrictor Tools...** is a small Java command (`LabConstrictorCommand.java`). It starts the Groovy script `LabConstrictor_Tools.groovy`, which is bundled in the jar and interpreted at run time; the jar is a packaging shell, not a port. Helpers in `lib/` are loaded on first use (`LCCompat` for the version checks, `LCHosts` and `LCHostRequirements` for which apps are listed, `LCNumbers` for number parsing, `LCLookups` for dropdowns filled by another tool, `LCWorkers` for worker processes, `LCRetention` and `LCRunRecord` for run folders).
+
+The script:
+
+1. reads the registry of installed apps (`<LC_HOME>/apps`, then the folders in `LC_APPS_PATH`, then the system folder) and checks that each entry can be trusted (owner and permissions);
+2. builds a SciJava `ModuleInfo` from the tool's schema and lets Fiji's own input harvester show the dialog;
+3. exports images as TIFF, or passes file paths;
+4. runs the tool in the app's own Python through [Appose](https://github.com/apposed/appose)'s Java client, using the `lc:<tool>` task names, so Fiji never imports the app's packages;
+5. shows each result by its type.
+
+`<LC_HOME>` is `$LC_HOME`, or `~/.labconstrictor` when it is not set. The tool schema and its markers are defined in [LabConstrictor-Tools](https://github.com/CellMigrationLab/LabConstrictor-Tools).
+
+## Install for developers
+
+The install steps for users, the current version and the troubleshooting list are in the [Fiji guide](https://cellmigrationlab.github.io/LabConstrictor-Site/guides/fiji/). What developers also need to know:
+
+- Fiji must ship Appose (current Fiji builds do; the plugin is tested with Appose 0.12.0).
+- An app needs **labconstrictor-tools 0.3.0a1 or newer** with the features `reserved_inputs_v1` and `app_hosts_v1`. See [Compatibility with an app](#compatibility-with-an-app).
+- `labconstrictor-tools list` and `labconstrictor-tools doctor` show which apps are registered and why one is skipped.
+- An app is listed in Fiji when its `labconstrictor-app.yaml` names `fiji` under `hosts:`. An app installed without that declaration (an older installer) is listed in every host, and the Log says `'<app>' declares no hosts, so it is listed in every host; ...`.
+- Each release has `labconstrictor-fiji-<tag>.jar`, `labconstrictor-fiji-script-<tag>.zip` and `SHA256SUMS` (the checksums of the other two). The zip holds the script and the `lib` folder it needs; the script alone stops with a message saying where it looked for its helpers. Fiji also lists the files of `lib` in its menu, which is harmless. Running a tool from a macro needs the jar.
+- There is no Fiji update site yet.
+
+## The dialog
+
+### Fields
+
+- Each parameter becomes a SciJava dialog field: a text field for numbers (see [Numbers](#numbers)), a dropdown for choices, a checkbox, or a file or folder field.
+- An optional value without a default (a seed, a time limit) gets a **Set &lt;name&gt;** checkbox. Unticked, the tool receives `None`.
+- Choices that are numbers (`Literal[1, 2, 3]`) are shown as text; the tool receives the declared number.
+- An input with a description has an ⓘ after its label. Hover over the label or the field to read the description. SciJava shows it only on hover, not on click or keyboard focus.
+- Parameters of a `group` are shown together under a "— Group —" heading, and `advanced` ones last under "— Advanced settings —". `group_collapsed` is shown as a normal heading, because SciJava dialogs cannot fold sections.
+- `enabled_when` is not applied: SciJava dialogs cannot grey fields out, so every field stays editable and the tool must accept any value.
+- A tool with a parameter type the plugin does not know is left out of the chooser, with `tool 'id': this tool cannot be shown: parameter 'x' has the unknown type 't'` in the Log. The other tools of the app stay available.
+- The tool's description is shown at the top of its dialog.
+
+### Images
+
+- Each image input has a chooser of open images and an "(or file)" field. If both are given, the file wins. With no image open, the file field is the only input. A file is read by the worker: TIFF always, other formats if the app has `imageio`.
+- An image file given as input is also opened in its own window (titled with the file name), and its results are drawn there.
+- **Channel** (`PickChannel()`): a "channel" number next to the image (1 = first). The tool receives only that channel, at the current Z and T, from an open image or a file. A channel the image does not have is refused.
+- **Selection** (`RegionOf`): a "Use the selection as ..." box next to the region input. It sends the ROIs selected in the ROI Manager (else the image's own ROI) as a label image the size of the image; several ROIs become labels 1, 2, 3... Nothing selected, a selection outside the image, a file chosen for the image, or ROIs on different planes of a stack (`selection_mixed_planes`) are refused.
+
+### Dropdowns filled by another tool (`choices_from`)
+
+Fiji builds the dialog before anything is typed. So it asks the source tool with the values the app used in its previous run (kept in `<LC_HOME>/state/<app>.json`), and shows a plain text field until there are such values.
+
+- All questions of one dialog are asked one at a time, in form order, by one worker process, which is closed after the last answer.
+- A question that has not answered within 60 s is cancelled and its worker killed; the field stays a text field and the Log says so. **Esc** cancels the question in flight.
+- Editing a value the lookup depends on does not ask again: the dropdown is filled before the dialog opens.
+
+### Choosers, Run again and Back
+
+- The app and tool choosers are skipped when they have one entry. They start on the app and tool picked last (`<LC_HOME>/state/last_tool.json`), or on the first entry. Apps are sorted; two tools with the same label are listed as `label (id)`.
+- **Run again.** After a run started from the menu, the same tool's form comes back until Cancel is pressed. Each run has its own run record and Log lines. The form starts from the previous values, except:
+  - an image's "(or file)" field starts empty, so the image follows the open window again;
+  - a `clear_after_run` parameter goes back to its default after a run that succeeded (it keeps its value after a failed or cancelled run, so it can be corrected);
+  - a dropdown keeps its previous entry only if it still lists it;
+  - a pixel size linked to an image keeps a value you typed, and otherwise follows the image again.
+- The form is modal, like every SciJava dialog. To zoom or open another image, press Cancel and start the tool again.
+- **< Back** sits beside OK and Cancel and goes one window back: from the form to the tool chooser, from the tool chooser to the app chooser. A skipped chooser is skipped by Back too, and a window with nothing before it has no Back. Going back and picking the same tool again restores what the form held. The button is added to SciJava's button row (`OptionPane.buttonArea`); if a look and feel has no such row, the Log says so and there is no Back.
+
+## Numbers
+
+A number is checked when OK is pressed, or when a macro is read. **A value beyond a limit is refused, never clamped, rounded or shortened**: no run starts and the message names the field and the limit.
+
+| Field | Limit when the tool declares no `Min` / `Max` |
+|---|---|
+| whole number | ±9007199254740991 (2^53 − 1, the largest integer every JSON number holds exactly) |
+| float | ±1e15 |
+
+A declared bound beyond these is narrowed to them. The number fields are text fields, so the value sent is exactly what was typed: the integer, or the double nearest to the text. Blanks around the text are ignored in the dialog.
+
+Messages:
+
+- `'L' must be <= 9007199254740991, got 9007199254740992` (and `>=` for the other side; with a declared bound: `'M' must be <= 10, got 11`);
+- `'L' is required: type a number` (empty required field), `'L' is empty: type a number` (an optional field ticked "Set" and left empty);
+- `'L' must be an integer, got '2.5'`, `'L' must be a number, got 'abc'`;
+- `'L' must be a finite number, got 'x'` (for `NaN`, `Infinity`, `1e999`);
+- `'L' is too close to zero to be held exactly, got '1e-400'`.
+
+Two kinds of field still use a toolkit number widget and can cut or revert a typed number to their own range: a `Widget("slider")` with both bounds, and a pixel size field linked to an image by `PixelSizeOf`.
+
+## Pixel size
+
+A field linked to an image with `PixelSizeOf` follows that image's calibration. Only explicit metadata counts: a length unit and a number.
+
+- Units are read through the unit catalog of the app's Tools (`python -m labconstrictor_tools.conformance --path`). If the app's Tools has none, the copy built into the plugin is used and the Log says so.
+- Symbols (`um`, `µm`, `μm`, `nm`, `mm`, `cm`, `m`, `Å`) are exact and case-sensitive. Words (`micron`, `micrometre`, `millimeter`, `angstroms`) match in any case after trimming. ImageJ's `micron` is 1 µm.
+- The calibration is unknown when the unit is `pixel`, empty or ImageJ's default; when the unit is not a length (`unit 's' is not a length`); when the micro sign is damaged (`unit text '�m' is damaged; enter the pixel size`); or when X and Y differ by more than 0.1 % (`pixels are not square`). Within 0.1 % the mean is used.
+- For a TIFF file, ImageJ's `unit=` line or the OME physical size wins over the resolution tags. The tags count only with the unit INCH or CENTIMETER, and not when they look like a default (72 or 96 dpi, 28.35 or 37.80 per cm).
+- A file chosen for the image wins over the open image. The calibration is read again when OK is pressed.
+- **Unknown is a value.** The field is cleared (it shows 0), the Log says `not calibrated: 'image' has no pixel size`, the declared default is never used instead, and a run that needs the field is refused: `'pixel_size' needs a value: 'image' has no pixel size. Enter it in um.` An optional pixel size is then sent as nothing.
+- **A value you type is yours** and survives a change of image, file or "use" box. Typing 0 makes the field follow the image again.
+- SciJava reports an edit only when the value changes. Typing the value the field already shows is therefore not seen as typed: on an uncalibrated image the field is cleared and the run is refused, so a wrong value is never sent.
+- The request carries the reserved input `_calibration` (per axis, in µm, with its source and the raw scale and unit), which tools never see. It is also stored in the run record.
+
+## Checks before a run
+
+These refusals use the worker's messages and codes:
+
+- `[missing_parameter] 'L' is required: ...`
+- `[file_not_found] image file not found: P`
+- `[folder_not_found] 'L': folder not found: P`
+- `[wrong_dimensions] 'L' must be a 2D image (YX) but got 3D with shape (3, 32, 32)`: a tool declaring `Axes("YX")` refuses a Z-stack, time series, multi-channel or RGB image. Fiji never picks the plane on screen for you; declare `PickChannel()`, or duplicate the plane first.
+
+Also:
+
+- An open image of more than 4 GB (all planes, channels and samples) is refused, never cropped: `image 'T' is 5.0 GB; exporting more than 4 GB is not supported`. Image files are not checked here.
+- A relative file, table or folder path is resolved against Fiji's working folder and sent to the worker as an absolute path.
+
+## Results
+
+| Output | Shown as |
+|---|---|
+| image, labels | an image window `<app>:<result name>` |
+| table | a Results window named after the output (`name [1]`, `name [2]`... when that name is taken) |
+| value | `name=value` in the Log (`(not a finite number)` for NaN or infinity) |
+| message | the Log and, when a person ran the tool, a dialog (markdown emphasis removed) |
+| file | its path in the Log |
+| points | a multi-point ROI on their image, kept in the ROI Manager as `<app>:<name>`, with their properties in a table |
+| outlines (`ShapesOut`) | an overlay on their image, holes kept; the first 1000 are also in the ROI Manager |
+| alignment | an overlay window |
+
+- `Replace()` on an output closes the previous window of that result (image, table, overlay, ROI Manager entries) before showing the new one.
+- Points and outlines go on the `apply_to` image, else on the first image input of the tool. It is always that image, never the current image.
+- Up to 50 000 outlines are drawn; beyond that the Log says `'name': showing the first 50000 of T outlines`.
+- If there is no image to draw on (the tool has no image input, or the file cannot be opened), points become a table and outlines a file, and the Log says where the file is.
+- A tool that fails with the code `no_match` or `no_result` gets a plain message window, not the error dialog.
+- A singular alignment matrix is applied and the Log warns: `the alignment matrix is singular (determinant d): ...`. A matrix with values that are not finite is refused.
+
+### Coordinates
+
+- A tool works on the pixels of the image Fiji wrote for it and never sees calibrated coordinates.
+- A point or outline vertex `x` is drawn at the ImageJ coordinate `x + 0.5` (pixel `i` spans `[i, i+1)`). The image calibration is never applied to a ROI.
+- `RegionOf` masks have exactly the size of the exported image.
+- On a stack, a result without `t` or `z` lands on the plane that was exported (the window's plane when OK was pressed, or the picked channel), and the Log says so once. Points or outlines that name planes (a `t` or `z` column or property) are not placed on the planes of a stack yet: they are shown as a table or a file.
+- An image or labels result with `ApplyTo` takes the pixel size, unit and origin of its source when it has the same width and height. Otherwise it stays uncalibrated at the pixel origin and the Log says `'name' is W x H but 'source' was exported as W2 x H2; shown at the pixel origin, not aligned`.
+
+### Files kept for you
+
+A result Fiji cannot show or place, or a file the tool wrote inside Fiji's temporary job folder, is kept in `<LC_HOME>/results/<YYYYMMDDTHHMMSS>_<6 hex>_<app>_<tool>/`. The Log says where. See [Run records and clean-up](#run-records-and-clean-up).
+
+## Running, cancelling and failures
+
+- A progress bar shows while a tool runs. The tool's progress messages also go to the Log (a changed message at most every 10 s), and after 60 s without one the Log says the tool is still running.
+- **Esc** cancels. A tool that ignores the request is killed after 3 s. The status bar then says `cancelled`, or `cancelled (worker stopped)` if the worker had to be killed.
+- A worker gets 10 s to exit after its input is closed, then it is killed.
+- Every worker (run or lookup) is tracked in one place and closed once; a shutdown hook kills any still alive when Fiji quits. Before a kill, Fiji also stops the processes the worker started (a tool's `subprocess.Popen`), which would otherwise keep the run from ending. This needs Java 9 or later (Fiji ships Java 21); on Java 8 the Log warns.
+- Fiji waits for the worker's outputs to arrive before showing a result. If they do not arrive within 10 s of the task ending, the run is reported as failed.
+- The worker keeps Fiji's working folder, runs with `PYTHONSAFEPATH=1`, and does not inherit Fiji's Python or Qt settings: `PYTHONHOME`, `VIRTUAL_ENV`, `CONDA_PREFIX` and `QT_PLUGIN_PATH` are set to empty.
+- A failure shows the tool's error, the worker's last output and the log location. A worker that dies gets one line with the likely cause (out of memory, a native crash, a missing package). It is called an import failure only when the worker's last words on stderr say `cannot import tool module`.
+- All LabConstrictor front-ends write to `<LC_HOME>/logs/labconstrictor.log`. It is rotated at 1 MB with five backups (`.log.1` to `.log.5`). If a rotation fails (on Windows, when another program holds the file), the console says so once and the log keeps growing.
+
+## Run records and clean-up
+
+**Fiji never deletes anything under `<LC_HOME>/results` or `<LC_HOME>/runs`.**
+
+- For every run that starts a worker, Fiji makes `runs/<millisecond time>_<app>_<tool>/` and writes the owner marker `.lc-owner.json` first. When the run ends it writes `run.json`, then, last and atomically, the done marker `.lc-done.json` with `ok`, `failed` or `cancelled`. A results folder gets the same two markers.
+- The run status and the content of `run.json` come from the app's Tools (`labconstrictor_tools.runs`). With a Tools older than 0.3.0a1 the run is refused before anything starts, with a message that says so.
+- After the run, Fiji starts `<app's Python> -m labconstrictor_tools prune` and does not wait for it. The prune keeps the newest 20 results and 50 run records, and only removes finished folders that carry the markers: your own folders, unmarked folders and unfinished runs are never touched.
+- A Tools without the `retention_prune` feature gets no prune; the Log says so, and the folders stay until Tools is updated.
+- If the run record cannot be written, the run goes on and the Log says `the run record could not be completed (...)`; the unfinished folder is never removed.
+
+## Compatibility with an app
+
+- When the registry is read, each app's schema is checked with the same rules as `labconstrictor_tools.compat.check_schema` (ported in `lib/LCCompat.groovy`). An app whose `tools_version` is missing or below 0.3.0a1, or whose `features` lack `reserved_inputs_v1` or `app_hosts_v1`, is left out. The Log says why, for example `this app's labconstrictor-tools 0.2.0rc1 is older than the 0.3.0a1 this host needs: update it`; the same text appears in a dialog when no app is usable. A version that cannot be read is only a warning.
+- Before a run, Fiji asks the app's interpreter itself which Tools it has (see [Run records and clean-up](#run-records-and-clean-up)).
+- **Host requirements** (`host_requirements_v1`, `lib/LCHostRequirements.groovy`): an app can declare the oldest Fiji plugin it needs. If this plugin is older, the app stays listed and the Log says which version to get; if the app marks the requirement `required: true`, the app is left out with that message.
+
+The protocol behind these rules is in LabConstrictor-Tools [`docs/PROTOCOL.md`](https://github.com/CellMigrationLab/LabConstrictor-Tools/blob/main/docs/PROTOCOL.md).
+
+## Running a tool from a macro
+
+With the jar installed, a macro line runs a tool without a dialog:
 
     run("LabConstrictor Tools...", "app=NucleiSky tool=[Relocalize 2D] reference=ref.tif query=crop.tif reference_pixel_size_um=0.65 query_pixel_size_um=0.325 segmentation=threshold");
 
-runs the tool without any dialog. Numbers follow the grammar shared by every host: an optional sign, digits with an optional fraction (or only a fraction) and an optional exponent, nothing else (no spaces, `1.5f`, `1_0` or hex floats; `NaN` and `Infinity` are refused as not finite); an integer without bounds must be within +-9007199254740991 and a float without bounds within +-1e15. Images are given by window title (`name=title`) or by file
-(`name_file=path`); tables, files and folders by path; an optional value that was not set is simply absent from the line (replay leaves it unset); unknown apps/tools/images are reported with the valid choices. Not yet: headless mode,
-keeping the worker alive between several calls in a loop, a menu entry per tool. Needs the jar (the menu command receives the options).
+- `app` and `tool` are required. Both are matched ignoring case; a tool can be named by its label, `label (id)` or its id.
+- Images are given by window title (`name=title`) or by file (`name_file=path`). A macro never guesses the current image. Tables, files and folders are given by path.
+- `name_channel=2` picks a channel of a `PickChannel` image; `selection_name=true` uses the selection for a `RegionOf` input.
+- An optional value that is not set is left out of the line.
+- Numbers follow the same limits as the dialog, with a strict grammar: an optional sign, digits with an optional fraction (or only a fraction) and an optional exponent. No blanks, `1.5f`, `1_0` or hex floats.
+- Number choices take the number (`count=2`); a value not in the list is refused with the list of options.
+- A pixel size you give is yours; one you leave out follows the image or file the macro names.
+- Unknown apps, tools and images are reported with the valid choices.
+- A macro call runs once; the form does not come back.
 
-## Fallbacks (intended)
-These are deliberate: the host does something simpler instead of failing, writes one line to the shared log
-(`<LC_HOME>/logs/labconstrictor.log`) when it happens, and never does it silently.
+The **Macro Recorder** records runs made through the dialog as such `run(...)` lines, one line per run, with unset optional values left out. When only one app is installed, its chooser is skipped and the line has no `app=`: add it before replaying the line.
 
-| Where | What happens | What the person sees |
-|---|---|---|
-| ChoicesFrom parameter whose source answers nothing yet (a depended-on value is empty, or no earlier run is remembered) | The parameter stays a plain text field | A text field instead of a drop-down |
-| ChoicesFrom source tool fails or is missing | The parameter stays a text field; the failure is logged with its stack trace | A text field, and a line in the Log window ("could not get the choices of ...") |
-| Remembered values (`state/`) cannot be read or written | The dialog starts without them | Empty fields where a previous value would have been offered |
-| Points result with no image to put them on (the tool has no image input, or the image is a file Fiji cannot open) | The points are shown as a table and the file is kept under `<LC_HOME>/results/` | The table and a line in the Log window with the reason and the path of the file |
-| Pixel size of a file or an image is unknown (no calibration, or one the rules do not accept) | The field is cleared, the run that needs it is refused with the shared sentence, an optional pixel size is sent as nothing | A line in the Log window ("not calibrated: 'image' has no pixel size", and why: "pixels are not square", "unit 'x' is not a length"); for a header that cannot be read: "could not read the pixel size from ...; enter it by hand" |
-| Tools of the app has no unit catalog (older Tools) | The catalog built into the script is used | A line in the Log window ("the Tools of <app> have no unit catalog ...; using the catalog built into this plugin") |
-| Points or outlines whose image was given as a file | The file is opened in its own window and they are drawn there; if it cannot be opened, points are a table and outlines a file in `<LC_HOME>/results/`; never put on another image | The window titled with the file name, or a line in the Log window with the reason and the path |
-| No clipboard (headless, or locked) for "copy last run" | The command is printed instead of copied | The command in the Log window with the reason |
-| Fiji was started from a conda or venv (`PYTHONHOME`, `VIRTUAL_ENV`, `CONDA_PREFIX`, `QT_PLUGIN_PATH` are set) | The worker gets those variables set to the empty string: Appose can add variables to a worker's environment but not remove them, and Python, conda and Qt read an empty value as unset | Nothing (one line per variable in the log) |
-| Tools of the app has no `retention_prune` feature (no `prune` command) | No prune is started and nothing is deleted by the host instead; the folders under `results/` and `runs/` accumulate until Tools is updated | A line in the Log window and in the log file ("the Tools of this app have no 'prune' command ...") |
-| The run record folder cannot be made, or `run.json` / the done marker cannot be written | The run goes on; the folder (if any) has no done marker and is therefore never removed | A line in the Log window ("the run record could not be completed ...") |
-| File system without POSIX permissions | The permission checks of the trust check cannot apply to that entry | Nothing (logged as a warning) |
+Not available: headless mode, keeping one worker alive across calls in a loop, and a separate menu entry per tool.
 
-## Tests
-`tests/run_cases.py` drives desktop Fiji on a virtual screen (Linux: `xvfb-run`), answering the real SciJava dialogs with
-`tests/test_harness.groovy` (the only place with test hooks) and writing JSON reports and screenshots to `evidence/`.
+## Copy as command
+
+After every run, the Log shows a terminal command and a Python snippet that repeat it outside Fiji. The file behind each open image is used; an image that was never saved gets a placeholder and a note. A selection or a picked channel cannot be repeated exactly: the command names `region.tif` for a selection and sends the whole file for a channel, each with a `# name: ...` note.
+
+**Plugins > LabConstrictor > Copy last run as command** puts the terminal command of the last run on the clipboard. From a macro: `run("Copy last run as command")`, or `run("Copy last run as command", "kind=python")` for the Python snippet. Without a clipboard (headless, or locked by another program), the command is printed in the Log instead.
+
+## When the plugin falls back
+
+In these cases the plugin does something simpler instead of failing, and writes a line to the shared log.
+
+| Situation | What happens |
+|---|---|
+| A `choices_from` source has nothing to answer with yet, fails or is missing | The parameter stays a text field; a failure is logged and the Log says `could not get the choices of ...` |
+| Remembered values (`state/`) cannot be read or written | The dialog starts without them |
+| The pixel size of a file cannot be read | The Log says `could not read the pixel size from ...; enter it by hand` |
+| The app's Tools has no unit catalog | The catalog built into the plugin is used, and the Log says so |
+| A file system without POSIX permissions | The permission part of the registry trust check is skipped for that entry (logged as a warning) |
+
+## Build and test
+
+`mvn package` builds `target/labconstrictor-fiji-<version>.jar` (Java 8 bytecode; needs Java and Maven; the version is the one in `pom.xml`).
+
+The tests drive desktop Fiji on a virtual screen (Linux, `xvfb-run`) and answer the real SciJava dialogs through `tests/test_harness.groovy`, the only place with test hooks. Reports and screenshots go to `evidence/`.
 
     pip install git+https://github.com/CellMigrationLab/LabConstrictor-Tools numpy pandas tifffile scipy scikit-image
     export LC_FIJI_HOME=/path/to/Fiji.app
-    python tests/run_cases.py                      # the portable cases (example app and small test apps), loose script
-    LC_FIJI_MODE=jar python tests/run_cases.py     # the same cases through the built jar (needs mvn); each case prints its duration
-    python tests/run_cases.py --real-apps          # developer cases for Playground, NucleiSky, VLab4Mic and StarDist2D: need them installed/registered
-                                                   # (LC_HOME) and LC_REAL_FIXTURES=<folder with playground/ nucleisky/ vlab4mic/ stardist2d/ data>
-                                                   # (a case fails or times out when its app is not installed)
+    python tests/run_cases.py                      # every case in tests/cases/, through the loose script
+    python tests/run_cases.py <case> ...           # some cases
+    LC_FIJI_MODE=jar python tests/run_cases.py     # the same cases through the built jar (runs mvn)
+    python tests/run_cases.py --real-apps          # tests/cases_real_apps/: needs the apps registered in LC_HOME
+                                                   # and LC_REAL_FIXTURES (see the docstring of run_cases.py)
+    tests/lint_groovy.sh                           # npm-groovy-lint on the script (needs Node and Java)
 
-CI (`fiji-gui` workflow) runs the loose-script and the jar cases as two parallel jobs on separate runners (`fiji-gui (script)`, `fiji-gui (jar)`); the `fiji-gui` check is green only when both are. Each case line carries its duration.
+A case is a JSON file in `tests/cases/`: the app and tool, images to preload, dialog values, optional cancel timing, and the expected outcome. The shared rules (coordinates, calibration, retention) are read from `labconstrictor_tools/conformance.json` of the Tools in the Python that runs the cases, and a coverage check fails when a shared fixture is neither run nor marked as not applicable to Fiji. A full run takes about an hour.
 
-UI audit (not part of `run_cases.py`, nor of the default CI jobs): `tests/ui_audit.py` presses every control and runs every tool of an installed app through the real dialogs; see [UI_AUDIT.md](UI_AUDIT.md) for how to start it. Its Python judges are checked without Fiji by `python tests/ui_audit_logic_check.py` (needs numpy and tifffile; runs in the `fiji-gui` script job), its seeded failures by `python tests/ui_audit_negative.py`.
+GitHub Actions run `mvn package` (`ci`), the lint (`lint`), and the cases through the script and through the jar as two parallel jobs (`fiji-gui`). The release workflow (`.github/workflows/release.yml`) builds the jar for a tag, runs GUI cases with it on Linux before attaching the files, and runs a shorter check (menu entry and dialog) on Windows and macOS arm64 that does not hold up the release. Running it by hand with a tag is a dry run that publishes nothing.
 
-Lint: `tests/lint_groovy.sh` runs `npm-groovy-lint` (pinned) on the script with `.groovylintrc.json` (needs node and Java); CI runs it as the `lint` job.
+The UI audit (`tests/ui_audit.py`) is separate: it presses every control and runs every tool of an installed app. See [UI_AUDIT.md](UI_AUDIT.md).
 
-Cases are JSON (`tests/cases/*.json`): the app and tool, images to preload, dialog overrides, optional cancel timing, expectations.
-The shared rules are read from `labconstrictor_tools/conformance.json` of the Tools installed in the Python that runs the cases (`run_cases.py` passes its path in `LC_CONFORMANCE`):
-the groups `conformance_frame` and `conformance_coverage` of `tests/unit_checks.groovy` run the coordinate-frame fixtures (CF-01..CF-14) against the script's own functions and fail when a
-case is neither run, checked nor named as not applicable to Fiji; the `frame_*` cases are real runs whose expectations come from the same fixtures (`"$CF:mask_seen"`, `"$CF:point_drawn"`,
-`"$CF:rect_drawn"` in `expect`) and look at every open window after the run (`windows.<title>.roi`, `.overlay`), so that a result drawn on the wrong image is a failure.
-The calibration fixtures (CAL-01..CAL-20, CAL-T1..CAL-T9) run the same way: `conformance_calibration` converts the units of every CAL case with an open image's Calibration and with TIFF files that
-`run_cases.py` writes with tifffile from the same cases (`"make_files": "calibration"`), `conformance_calibration_request` checks the request the host would send (the value and `_calibration`, or the refusal)
-for each source, and the `cal_*` cases do CAL-T1..CAL-T6 through the real dialog (`dialog_steps` of `tests/test_harness.groovy`: pick an image, type a value, type or clear the file) and a macro replay.
-
-The retention cases (SPEC_WRONG_SCIENCE section 3, `conformance.json` `wrong_science.retention`) are `tests/cases/ret_*.json` and `unit_*retention*`/`unit_sixty_runs*`/`unit_the_host_never*` (groups of `tests/unit_groups_retention.groovy`): the real host with the `prune` subprocess replaced by a recorder (`tests/prune_recorder.py`: HRET-04, started after every done marker exists; a failing command does not fail the run), by the real Tools `prune` (what Fiji wrote is cleaned up, a person's own folders, folders without markers and unfinished ones are not), and by nothing (an old Tools: refused before anything starts; a Tools with no `prune`: nothing started, nothing deleted). `tests/retention_support.py` builds the folders before a run and judges them afterwards by the rules of SPEC 3.8 written out, not through the code that wrote them; `tests/fake_tools/` are two stand-ins for an old Tools. Every `fixtures_hosts` id of the conformance file is run by a case that names it (`"conformance": [...]`) or by a unit group, or the coverage check fails.
-
-**Testing.** The plugin has been tested on Linux, Windows and macOS; the automated GUI tests run on Linux (Fiji with Java 21, Xvfb). Please report what you find in the
-[issues](https://github.com/CellMigrationLab/LabConstrictor-Fiji/issues). SciJava Command generation
-(a menu command per tool, headless use) is not implemented. License: MIT.
+License: MIT.
