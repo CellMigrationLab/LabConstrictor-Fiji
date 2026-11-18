@@ -192,7 +192,7 @@ With the jar installed, a macro line runs a tool without a dialog:
 - Unknown apps, tools and images are reported with the valid choices.
 - A macro call runs once; the form does not come back.
 
-The **Macro Recorder** records runs made through the dialog as such `run(...)` lines, one line per run, with unset optional values left out. When only one app is installed, its chooser is skipped and the line has no `app=`: add it before replaying the line.
+The **Macro Recorder** records runs made through the dialog as such `run(...)` lines, one line per run, with unset optional values left out. The line always names the app (`app=`), also when only one app is installed and its chooser was skipped.
 
 Not available: headless mode, keeping one worker alive across calls in a loop, and a separate menu entry per tool.
 
